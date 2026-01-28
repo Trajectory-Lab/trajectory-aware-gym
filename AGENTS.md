@@ -35,7 +35,7 @@ This is a Harvard Extension School capstone project comparing **token-space prom
   fix(fitness): correct per-turn reward accumulation
   refactor(config): consolidate AWS settings
   ```
-- Never mention "Claude/Codex/Cursor/etc" in commit messages unless directly relevant
+- Never mention "Generated with Claude/Codex/Cursor/etc" in commit/PR messages unless directly relevant
 
 ### Branching Strategy
 
