@@ -1,0 +1,17 @@
+name: Require PR for Protected Branches
+
+on:
+  push:
+    branches:
+      - main
+      - development
+
+jobs:
+  require-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require PR Action
+        uses: peterwoodworth/require-pr-action@v1
+        with:
+          # Branches to protect
+          protected-branches: 'main,development'
