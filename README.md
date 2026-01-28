@@ -58,6 +58,29 @@ src/trajectory_aware_gym/
 
 ## Development
 
+### Branching Strategy
+
+**Always branch off `development` (not `main`):**
+
+```bash
+# Start new feature
+git checkout development
+git pull origin development
+git checkout -b feat/your-feature-name
+
+# Make your changes and commit
+git add .
+git commit -m "feat(scope): description"
+
+# Push and create PR to development
+git push -u origin feat/your-feature-name
+# Create PR via GitHub UI targeting development branch
+```
+
+**Important:** Never merge directly to `main`. The `main` branch is production-equivalent and only updated at release milestones.
+
+### Commands
+
 ```bash
 # Run tests
 poe test

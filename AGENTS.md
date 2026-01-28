@@ -37,6 +37,34 @@ This is a Harvard Extension School capstone project comparing **token-space prom
   ```
 - Never mention "Claude/Codex/Cursor/etc" in commit messages unless directly relevant
 
+### Branching Strategy
+
+**Branch Structure:**
+- `main`: Production-equivalent branch for versioning. Represents stable releases.
+- `development`: Active development branch. All feature work merges here.
+- `feat/*`, `fix/*`, `refactor/*`: Feature branches for specific work.
+
+**Development Flow:**
+1. Create feature branches **off `development`** (not `main`):
+   ```bash
+   git checkout development
+   git pull origin development
+   git checkout -b feat/your-feature-name
+   ```
+
+2. Work on your feature with regular commits
+
+3. When done, create a PR to merge back to `development`:
+   ```bash
+   git push -u origin feat/your-feature-name
+   # Then create PR via GitHub UI targeting development branch
+   ```
+
+4. **Never merge directly to `main`**:
+   - `main` is cut from `development` at release milestones
+   - Only project maintainers merge `development` → `main` for versioned releases
+   - Direct commits to `main` are not allowed
+
 ## Architecture Overview
 
 ### Core Paradigm
