@@ -1,0 +1,177 @@
+[project]
+name = "trajectory-aware-gym"
+version = "0.1.0"
+description = "Trajectory-Aware Prompt Optimization for Agentic LLMs: Bridging GEM Environments with DSPy and GEPA"
+readme = "README.md"
+requires-python = ">=3.13"
+authors = [
+    {name = "Michael Culver", email = ""},
+    {name = "Jinyu Han", email = ""},
+    {name = "Jerry Kim", email = ""},
+    {name = "Matthew Michel", email = ""},
+    {name = "Kaylee Vo", email = ""}
+]
+license = {text = "MIT"}
+keywords = ["llm", "agents", "reinforcement-learning", "prompt-optimization", "dspy", "gepa", "gym"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    # Core dependencies
+    "dspy-ai>=2.5.0",
+    "litellm>=1.50.0",
+
+    # AWS dependencies
+    "boto3>=1.35.0",
+    "botocore>=1.35.0",
+
+    # GEM environment
+    "gem-llm>=0.1.0",
+
+    # Gym/RL dependencies
+    "gymnasium>=0.29.0",
+    "numpy>=1.26.0",
+
+    # Data handling and analysis
+    "pandas>=2.2.0",
+    "scipy>=1.12.0",
+
+    # Logging and configuration
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.1.0",
+
+    # Utilities
+    "tqdm>=4.66.0",
+    "rich>=13.7.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    # Testing
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+    "pytest-asyncio>=0.23.0",
+
+    # Linting and formatting
+    "ruff>=0.6.0",
+    "black>=24.0.0",
+    "mypy>=1.8.0",
+
+    # Type stubs
+    "types-requests>=2.31.0",
+    "pandas-stubs>=2.1.0",
+
+    # Documentation
+    "sphinx>=7.2.0",
+    "sphinx-rtd-theme>=2.0.0",
+
+    # Jupyter for analysis
+    "jupyter>=1.0.0",
+    "ipykernel>=6.29.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Trajectory-Lab/trajectory-aware-gym"
+Repository = "https://github.com/Trajectory-Lab/trajectory-aware-gym"
+Documentation = "https://github.com/Trajectory-Lab/trajectory-aware-gym/docs"
+"Bug Tracker" = "https://github.com/Trajectory-Lab/trajectory-aware-gym/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/trajectory_aware_gym"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "--verbose",
+    "--cov=src/trajectory_aware_gym",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "PT",  # flake8-pytest-style
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]  # unused imports
+"tests/**/*.py" = ["F401", "F811"]  # allow test fixtures
+
+[tool.black]
+line-length = 100
+target-version = ["py313"]
+include = '\.pyi?$'
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+reportMissingImports = true
+reportMissingTypeStubs = false
+exclude = ["**/node_modules", "**/__pycache__", ".venv", "build", "dist"]
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv", "build"]
+skips = ["B101", "B601"]
+
+[dependency-groups]
+dev = [
+    "bandit>=1.9.3",
+    "detect-secrets>=1.5.0",
+    "pre-commit>=4.5.1",
+    "pyright>=1.1.408",
+    "poethepoet>=0.31.0",
+]
+
+[tool.poe.tasks]
+setup = ["install-hooks", "verify"]
+install-hooks = "pre-commit install"
+verify = { cmd = "python -c 'import gem; import dspy; print(\"✓ Installation verified\")'" }
+
+[tool.poe.tasks.lint]
+cmd = "ruff check src tests"
+help = "Run ruff linter"
+
+[tool.poe.tasks.format]
+cmd = "ruff check --fix src tests && black src tests"
+help = "Format code with ruff and black"
+
+[tool.poe.tasks.typecheck]
+cmd = "pyright src"
+help = "Run type checking with pyright"
+
+[tool.poe.tasks.test]
+cmd = "pytest"
+help = "Run tests"
+
+[tool.poe.tasks.test-cov]
+cmd = "pytest --cov=src/trajectory_aware_gym --cov-report=html"
+help = "Run tests with coverage"
