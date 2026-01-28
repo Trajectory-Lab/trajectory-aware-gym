@@ -63,7 +63,8 @@ This is a Harvard Extension School capstone project comparing **token-space prom
 4. **Never merge directly to `main`**:
    - `main` is cut from `development` at release milestones
    - Only project maintainers merge `development` → `main` for versioned releases
-   - Direct commits to `main` are not allowed
+   - Direct commits to `main` and `development` are blocked by GitHub Actions
+   - All changes must go through pull requests
 
 ## Architecture Overview
 
