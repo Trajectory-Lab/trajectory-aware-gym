@@ -1,6 +1,17 @@
 # trajectory-aware-gym
 
-Trajectory-aware prompt optimization for agentic LLMs. Benchmarks GEPA against RL baselines on GEM environments.
+Trajectory-aware prompt optimization for agentic LLMs. Compares **token-space prompt optimization** (GEPA) against **weight-space reinforcement learning** (PPO, GRPO) on GEM environments.
+
+## Overview
+
+This Harvard Extension School capstone project evaluates whether evolutionary prompt optimization can match RL performance at a fraction of the computational cost. The core contribution is the **GEM-DSPy adapter**, which bridges OpenAI Gym-style environments with DSPy's prompt optimization framework.
+
+**Key Features:**
+- 🔄 **GEM-DSPy Adapter**: Seamless integration between GEM environments and DSPy modules
+- 📊 **Trajectory-Aware Fitness**: Per-turn reward signals for fine-grained credit assignment
+- 🧬 **GEPA Integration**: Evolutionary prompt optimization with Claude Sonnet 4.5 as reflection model
+- 💰 **Cost Tracking**: Built-in token and cost tracking for all LLM calls
+- 🎯 **Three Environments**: Math12K, CodeContest, HotpotQA from GEM benchmark
 
 ## Prerequisites
 
@@ -44,6 +55,28 @@ Or install via package managers:
    ```bash
    cp .env.example .env
    ```
+
+## Quickstart
+
+**Test your setup with the interactive notebook:**
+
+Open [test_bedrock.ipynb](scripts/notebooks/test_bedrock.ipynb) to verify your AWS Bedrock configuration and explore:
+- Basic LiteLLM calls with Bedrock models
+- Cost and token tracking
+- DSPy integration with LiteLLM
+- Temperature effects on model outputs
+- Multi-model comparisons
+
+The notebook includes examples of all three Llama models (1B, 3B, 8B) and demonstrates how to track costs for both direct LiteLLM calls and DSPy workflows.
+
+**Run the notebook:**
+```bash
+# Start Jupyter
+uv run jupyter lab
+
+# Or use VSCode's built-in notebook support
+# Just open scripts/notebooks/test_bedrock.ipynb in VSCode
+```
 
 ## Project Structure
 
@@ -97,6 +130,12 @@ poe lint
 # Type check
 poe typecheck
 ```
+
+## Documentation
+
+- **[AGENTS.md](AGENTS.md)**: Comprehensive guidelines for AI coding assistants working on this project
+- **[.env.example](.env.example)**: Example environment configuration with AWS Bedrock settings
+- **[test_bedrock.ipynb](scripts/notebooks/test_bedrock.ipynb)**: Interactive notebook for testing setup and exploring LLM integrations
 
 ## License
 

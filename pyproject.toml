@@ -25,30 +25,26 @@ dependencies = [
     # Core dependencies
     "dspy-ai>=2.5.0",
     "litellm>=1.50.0",
-
     # AWS dependencies
     "boto3>=1.35.0",
     "botocore>=1.35.0",
-
     # GEM environment
     "gem-llm>=0.1.0",
-
     # Gym/RL dependencies
     "gymnasium>=0.29.0",
     "numpy>=1.26.0",
-
     # Data handling and analysis
     "pandas>=2.2.0",
     "scipy>=1.12.0",
-
     # Logging and configuration
     "python-dotenv>=1.0.0",
     "pydantic>=2.5.0",
     "pydantic-settings>=2.1.0",
-
     # Utilities
     "tqdm>=4.66.0",
     "rich>=13.7.0",
+    "click>=8.3.1",
+    "requests>=2.32.5",
 ]
 
 [project.optional-dependencies]

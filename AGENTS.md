@@ -203,6 +203,65 @@ gepa = GEPAConfig()
 gem = GEMConfig()
 ```
 
+## Cost and Token Tracking
+
+**Always track and report cost and token usage when working with LLMs.** This is critical for:
+- Budget management and cost control
+- Comparing efficiency across approaches (key for H2 hypothesis)
+- Reproducing experiments with precise resource accounting
+- Identifying optimization opportunities
+
+### Implementation Guidelines
+
+**For Direct LiteLLM Calls:**
+```python
+from litellm import completion, completion_cost
+
+response = completion(
+    model="bedrock/model-id",
+    messages=[{"role": "user", "content": "..."}],
+    max_tokens=100
+)
+
+# Track immediately after call
+tokens = response.usage.total_tokens
+cost = completion_cost(completion_response=response)
+print(f"Tokens: {tokens}, Cost: ${cost:.6f}")
+```
+
+**For DSPy Calls:**
+```python
+import dspy
+from dspy import LM
+from litellm import completion_cost
+
+lm = LM(model="bedrock/model-id", temperature=0, max_tokens=100)
+dspy.configure(lm=lm)
+
+# Make DSPy call
+predictor = dspy.Predict(SomeSignature)
+result = predictor(input="...")
+
+# Access call history for cost tracking
+last_call = lm.history[-1]
+tokens = last_call['usage']['total_tokens']
+
+if 'response' in last_call:
+    cost = completion_cost(completion_response=last_call['response'])
+    print(f"Tokens: {tokens}, Cost: ${cost:.6f}")
+```
+
+**Best Practices:**
+- Track costs in notebooks, scripts, and experiments
+- Log token usage alongside performance metrics
+- Accumulate total costs for multi-step operations
+- Include cost reports in experiment outputs
+- Use cost tracking to validate budget estimates from methodology
+
+### Why This Matters
+
+Per H2, we hypothesize GEPA requires ≥1 order of magnitude fewer resources than RL. **Precise cost tracking is essential evidence for this claim.** Every LLM call should be accounted for.
+
 ## Experimental Design Notes
 
 ### Cost Estimation (from Methodology)
@@ -269,6 +328,7 @@ if is_admin(user):
 - Use type hints for function signatures
 - Follow Pydantic models for all configuration classes
 - Keep adapters simple: focus on observation/action translation, not business logic
+- **Always track and include cost/token usage** when making LLM calls (see "Cost and Token Tracking" section)
 
 ### Modern Python 3.13+ Syntax
 
@@ -296,4 +356,4 @@ if is_admin(user):
 - **Do NOT** train RL agents ourselves; compare against published GEM baselines
 - **Do NOT** use test set during optimization (strict held-out evaluation)
 - **Do** maintain identical evaluation protocols between paradigms for fair comparison
-- **Do** log all API calls with token counts for precise cost tracking
+- **Do** track and report cost/token usage for ALL LLM calls (critical for H2 hypothesis validation)
