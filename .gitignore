@@ -227,6 +227,8 @@ models/
 
 # Jupyter notebooks with outputs
 *.ipynb
+# Allow notebooks in scripts directory for testing/examples
+!scripts/**/*.ipynb
 
 # Temporary files
 tmp/
