@@ -127,6 +127,29 @@ uv run pytest tests/unit/test_fitness_functions.py -v
 uv run pytest tests/integration/ -v
 ```
 
+**Unit Test Guidelines:**
+- Use `pytest.mark.parametrize` for testing multiple inputs/scenarios
+- Parameters should be **comprehensive** and include edge cases (empty strings, zero, negative values, boundary conditions, None where applicable)
+- Prefer parametrized tests over repetitive test methods
+- Use fixtures for shared setup (e.g., `tmp_path`, `monkeypatch`)
+- For pydantic-settings configs, pass `_env_file=None` to avoid `.env` interference
+
+```python
+# Good: comprehensive parametrized test with edge cases
+@pytest.mark.parametrize(
+    ("input_val", "expected"),  # Use tuple, not comma-separated string
+    [
+        (0, 0),           # zero
+        (1, 1),           # minimum positive
+        (-1, 1),          # negative
+        (100, 100),       # typical value
+        (float("inf"), float("inf")),  # edge case
+    ],
+)
+def test_absolute_value(input_val, expected):
+    assert abs(input_val) == expected
+```
+
 ### Code Quality
 
 **Pre-commit hooks are configured and will run automatically on `git commit`**
