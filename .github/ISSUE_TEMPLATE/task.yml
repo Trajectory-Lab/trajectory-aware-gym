@@ -1,0 +1,87 @@
+name: Task
+description: A planned task from the project critical path
+title: "[TASK-ID] Task title"
+labels: ["task"]
+body:
+  - type: input
+    id: task-id
+    attributes:
+      label: Task ID
+      description: The task identifier from the project plan (e.g., C1, G2, K4)
+      placeholder: "C1"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: phase
+    attributes:
+      label: Phase
+      description: Which project phase does this task belong to?
+      options:
+        - "Phase 1: Environment Setup"
+        - "Phase 2: GEM-DSPy GEPA Integration"
+        - "Phase 3: Primary Experiments"
+        - "Phase 4: Generalization & Ablations"
+        - "Phase 5: Analysis & Writing"
+    validations:
+      required: true
+
+  - type: input
+    id: epic
+    attributes:
+      label: Parent Epic
+      description: The parent epic/activity (e.g., C, G, K)
+      placeholder: "C"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What needs to be done?
+      placeholder: Describe the task...
+    validations:
+      required: true
+
+  - type: textarea
+    id: deliverable
+    attributes:
+      label: Deliverable
+      description: What is the expected output/artifact?
+      placeholder: Describe the deliverable...
+    validations:
+      required: true
+
+  - type: input
+    id: duration
+    attributes:
+      label: Estimated Duration
+      description: How long should this task take?
+      placeholder: "0.5 weeks"
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: List any blocking tasks (use issue numbers if available)
+      placeholder: |
+        - Blocked by: #issue1, #issue2
+        - Blocks: #issue3
+
+  - type: checkboxes
+    id: critical-path
+    attributes:
+      label: Critical Path
+      description: Is this task on the critical path?
+      options:
+        - label: This task is on the critical path (zero slack)
+
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance Criteria
+      description: How do we know this task is complete?
+      placeholder: |
+        - [ ] Criterion 1
+        - [ ] Criterion 2
