@@ -20,7 +20,7 @@ jobs:
         run: uv python install 3.13
 
       - name: Install dependencies
-        run: uv sync --dev
+        run: uv sync --group dev
 
       - name: Run ruff linter
         run: uv run ruff check src tests
@@ -43,7 +43,7 @@ jobs:
         run: uv python install 3.13
 
       - name: Install dependencies
-        run: uv sync --dev
+        run: uv sync --group dev
 
       - name: Run pyright
         run: uv run pyright src
@@ -63,7 +63,7 @@ jobs:
         run: uv python install 3.13
 
       - name: Install dependencies
-        run: uv sync --dev
+        run: uv sync --group dev
 
       - name: Run tests
         run: uv run pytest --cov=src/trajectory_aware_gym --cov-report=xml -v
@@ -91,7 +91,7 @@ jobs:
         run: uv python install 3.13
 
       - name: Install dependencies
-        run: uv sync --dev
+        run: uv sync --group dev
 
       - name: Run bandit
         run: uv run bandit -r src -c pyproject.toml
