@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Project Documentation
+    url: https://github.com/your-org/trajectory-aware-gym/wiki
+    about: Check the wiki for documentation and guides

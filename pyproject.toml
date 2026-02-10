@@ -47,30 +47,6 @@ dependencies = [
     "requests>=2.32.5",
 ]
 
-[project.optional-dependencies]
-dev = [
-    # Testing
-    "pytest>=8.0.0",
-    "pytest-cov>=4.1.0",
-    "pytest-asyncio>=0.23.0",
-
-    # Linting and formatting
-    "ruff>=0.6.0",
-    "black>=24.0.0",
-    "mypy>=1.8.0",
-
-    # Type stubs
-    "types-requests>=2.31.0",
-    "pandas-stubs>=2.1.0",
-
-    # Documentation
-    "sphinx>=7.2.0",
-    "sphinx-rtd-theme>=2.0.0",
-
-    # Jupyter for analysis
-    "jupyter>=1.0.0",
-    "ipykernel>=6.29.0",
-]
 
 [project.urls]
 Homepage = "https://github.com/Trajectory-Lab/trajectory-aware-gym"
@@ -140,11 +116,30 @@ skips = ["B101", "B601"]
 
 [dependency-groups]
 dev = [
+    # Testing
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+    "pytest-asyncio>=0.23.0",
+    # Linting and formatting
+    "ruff>=0.6.0",
+    "black>=24.0.0",
+    "mypy>=1.8.0",
+    "pyright>=1.1.408",
+    # Security
     "bandit>=1.9.3",
     "detect-secrets>=1.5.0",
+    # Type stubs
+    "types-requests>=2.31.0",
+    "pandas-stubs>=2.1.0",
+    # Dev tools
     "pre-commit>=4.5.1",
-    "pyright>=1.1.408",
     "poethepoet>=0.31.0",
+    # Documentation
+    "sphinx>=7.2.0",
+    "sphinx-rtd-theme>=2.0.0",
+    # Jupyter for analysis
+    "jupyter>=1.0.0",
+    "ipykernel>=6.29.0",
 ]
 
 [tool.poe.tasks]
