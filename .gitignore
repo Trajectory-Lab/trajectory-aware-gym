@@ -237,3 +237,6 @@ temp/
 
 # uv lock file (uncomment if you want to track it)
 # uv.lock
+
+#Mac OS
+.DS_Store

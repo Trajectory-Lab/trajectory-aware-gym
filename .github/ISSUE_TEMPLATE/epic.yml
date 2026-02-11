@@ -1,0 +1,70 @@
+name: Epic
+description: A high-level activity grouping multiple tasks
+title: "[EPIC-ID] Epic title"
+labels: ["epic"]
+body:
+  - type: input
+    id: epic-id
+    attributes:
+      label: Epic ID
+      description: The epic identifier from the project plan (A-V)
+      placeholder: "C"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: phase
+    attributes:
+      label: Phase
+      description: Which project phase does this epic belong to?
+      options:
+        - "Phase 1: Environment Setup"
+        - "Phase 2: GEM-DSPy GEPA Integration"
+        - "Phase 3: Primary Experiments"
+        - "Phase 4: Generalization & Ablations"
+        - "Phase 5: Analysis & Writing"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What is this epic about?
+      placeholder: Describe the epic scope...
+    validations:
+      required: true
+
+  - type: textarea
+    id: tasks
+    attributes:
+      label: Sub-Tasks
+      description: List all tasks in this epic (will be linked as issues)
+      placeholder: |
+        - [ ] #issue1 - Task description
+        - [ ] #issue2 - Task description
+    validations:
+      required: true
+
+  - type: input
+    id: duration
+    attributes:
+      label: Total Duration
+      description: Combined duration of all tasks
+      placeholder: "2.0 weeks"
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Epic Dependencies
+      description: Other epics this depends on
+      placeholder: |
+        - Depends on: Epic B, Epic C
+
+  - type: checkboxes
+    id: critical-path
+    attributes:
+      label: Critical Path
+      description: Does this epic contain critical path items?
+      options:
+        - label: This epic contains critical path tasks
