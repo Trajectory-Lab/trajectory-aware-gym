@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import argparse
-
-import gem
-import gem.envs
+import importlib
 
 from trajectory_aware_gym.adapters import TrajectoryLogger
 from trajectory_aware_gym.config import GEMConfig
@@ -30,6 +28,8 @@ def choose_guess(observation: str, low: int, high: int) -> tuple[int, int, int]:
 def run_episode(environment_id: str, seed: int | None = None) -> tuple[float, int, str]:
     """Execute one episode and save a trajectory log to disk."""
     config = GEMConfig(_env_file=None)
+    gem = importlib.import_module("gem")
+    importlib.import_module("gem.envs")
     env = gem.make(environment_id)
 
     reset_kwargs = {"seed": seed} if seed is not None else {}
