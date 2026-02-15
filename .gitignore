@@ -217,7 +217,7 @@ data/checkpoints/
 # AWS credentials (redundant but explicit)
 .aws/
 credentials
-config
+/config
 
 # Model artifacts
 models/
