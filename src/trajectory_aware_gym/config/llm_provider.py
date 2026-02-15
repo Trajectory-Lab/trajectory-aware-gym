@@ -2,12 +2,12 @@
 
 from typing import Literal, TypeAlias
 
-import dspy
+import dspy  # type: ignore[import-untyped]
 
 from trajectory_aware_gym.config import AWSConfig, GEMConfig, GEPAConfig, OllamaConfig
 
 # All supported task models
-TaskModelName: TypeAlias = Literal[
+TaskModelName: TypeAlias = Literal[  # noqa: UP040
     "qwen3:1.7b",
     "qwen3:4b",
     "llama:1b",
@@ -32,9 +32,7 @@ def get_task_lm(
         mode: "train" (temp=1.0) or "eval" (temp=0.0) per GEM protocol.
     """
     gem = GEMConfig()
-    temperature = (
-        gem.gem_temperature_train if mode == "train" else gem.gem_temperature_eval
-    )
+    temperature = gem.gem_temperature_train if mode == "train" else gem.gem_temperature_eval
 
     match model:
         # Local models (Ollama)
