@@ -18,17 +18,21 @@ class AWSConfig(BaseSettings):
     aws_secret_access_key: str = Field(default="", description="AWS secret access key")
     aws_session_token: str = Field(default="", description="AWS session token (optional)")
 
-    bedrock_qwen3_1_7b: str = Field(
-        default="qwen3-1.7b",
-        description="Bedrock model ID for Qwen3 1.7B",
-    )
-    bedrock_qwen3_4b: str = Field(
-        default="qwen3-4b",
-        description="Bedrock model ID for Qwen3 4B",
-    )
     bedrock_claude_sonnet_4_5: str = Field(
         default="anthropic.claude-sonnet-4-5-v2:0",
         description="Bedrock model ID for Claude Sonnet 4.5",
+    )
+    bedrock_llama_1b: str = Field(
+        default="us.meta.llama3-2-1b-instruct-v1:0",
+        description="Bedrock model ID for Llama 3.2 1B",
+    )
+    bedrock_llama_3b: str = Field(
+        default="us.meta.llama3-2-3b-instruct-v1:0",
+        description="Bedrock model ID for Llama 3.2 3B",
+    )
+    bedrock_llama_8b: str = Field(
+        default="us.meta.llama3-1-8b-instruct-v1:0",
+        description="Bedrock model ID for Llama 3.1 8B",
     )
 
     s3_bucket: str = Field(
