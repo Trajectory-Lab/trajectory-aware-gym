@@ -83,8 +83,8 @@ uv run jupyter lab
 ```
 src/trajectory_aware_gym/
 ├── adapters/    # GEM-DSPy integration
-├── fitness/     # Trajectory-aware fitness functions
-├── optimizers/  # GEPA configuration
+├── fitness/     # Trajectory-aware fitness scoring
+├── optimizers/  # GEPA interfaces and optimizer loop
 ├── config/      # Settings and AWS configuration
 └── utils/       # Utilities
 ```
