@@ -7,10 +7,12 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from trajectory_aware_gym.adapters.trajectory_logger import TrajectoryLog, TrajectoryStep
-from trajectory_aware_gym.fitness.config import FitnessConfig
+from trajectory_aware_gym.config import FitnessConfig
 from trajectory_aware_gym.fitness.terms import (
+    ActionStabilityTerm,
     DiscountedReturnTerm,
     LoopDetectionPenaltyTerm,
+    NormalizedProgressTerm,
     StepEfficiencyBonusTerm,
 )
 
@@ -187,3 +189,104 @@ class TestStepEfficiencyBonusTerm:
         trajectory = make_trajectory(rewards=rewards)
         result = term.compute(trajectory)
         assert result == pytest.approx(expected, abs=1e-9)
+
+
+class TestNormalizedProgressTerm:
+    """Tests for the reward-trend progress term (from objective-profile design)."""
+
+    def test_empty_trajectory(self, make_trajectory):
+        trajectory = make_trajectory(rewards=[])
+        term = NormalizedProgressTerm()
+        assert term.compute(trajectory) == 0.0
+
+    def test_name(self):
+        term = NormalizedProgressTerm()
+        assert term.name == "normalized_progress"
+
+    @pytest.mark.parametrize(
+        ("rewards", "expected"),
+        [
+            # Single positive step -> 0.5
+            ([1.0], 0.5),
+            # Single zero step -> 0.0
+            ([0.0], 0.0),
+            # Single negative step -> 0.0
+            ([-1.0], 0.0),
+            # Strictly increasing: 2/2 = 1.0
+            ([0.0, 0.5, 1.0], 1.0),
+            # Strictly decreasing: 0/2 = 0.0
+            ([1.0, 0.5, 0.0], 0.0),
+            # Flat (non-decreasing): 2/2 = 1.0
+            ([0.5, 0.5, 0.5], 1.0),
+            # Mixed: [0.0, 0.5, 0.3, 0.8] -> up, down, up -> 2/3
+            ([0.0, 0.5, 0.3, 0.8], pytest.approx(2 / 3)),
+            # Two steps, increase: 1/1 = 1.0
+            ([0.0, 1.0], 1.0),
+            # Two steps, decrease: 0/1 = 0.0
+            ([1.0, 0.0], 0.0),
+        ],
+    )
+    def test_computation(self, make_trajectory, rewards, expected):
+        term = NormalizedProgressTerm()
+        trajectory = make_trajectory(rewards=rewards)
+        assert term.compute(trajectory) == pytest.approx(expected, abs=1e-9)
+
+    def test_conforms_to_fitness_term_protocol(self):
+        from trajectory_aware_gym.fitness.types import FitnessTerm
+
+        assert isinstance(NormalizedProgressTerm(), FitnessTerm)
+
+
+class TestActionStabilityTerm:
+    """Tests for the action stability term (from objective-profile design)."""
+
+    def test_empty_trajectory(self, make_trajectory):
+        trajectory = make_trajectory(rewards=[], actions=[])
+        term = ActionStabilityTerm()
+        assert term.compute(trajectory) == 1.0
+
+    def test_single_step(self, make_trajectory):
+        trajectory = make_trajectory(rewards=[1.0], actions=["a"])
+        term = ActionStabilityTerm()
+        assert term.compute(trajectory) == 1.0
+
+    def test_name(self):
+        term = ActionStabilityTerm()
+        assert term.name == "action_stability"
+
+    @pytest.mark.parametrize(
+        ("actions", "expected"),
+        [
+            # All unique: no repetition, no oscillation -> 1.0
+            (["a", "b", "c", "d"], 1.0),
+            # All identical: repeat_ratio=1.0, oscillation_ratio=0.0
+            # penalty = 0.7*1.0 + 0.3*0.0 = 0.7 -> stability = 0.3
+            (["a", "a", "a", "a"], 0.3),
+            # Pure oscillation: a,b,a,b
+            # repeat_ratio = 0/3 = 0.0
+            # oscillation: i=2 a==a!=b yes, i=3 b==b!=a yes -> 2/2 = 1.0
+            # penalty = 0.7*0 + 0.3*1.0 = 0.3 -> stability = 0.7
+            (["a", "b", "a", "b"], 0.7),
+            # Mixed: a,a,b,a
+            # repeat_ratio: 1 (a==a at i=1) / 3 = 1/3
+            # oscillation: i=2 b!=a (no), i=3 a==a!=b (yes) -> 1/2
+            # penalty = 0.7*(1/3) + 0.3*(1/2) = 0.2333 + 0.15 = 0.3833
+            # stability = 1 - 0.3833 = 0.6167
+            (["a", "a", "b", "a"], pytest.approx(1.0 - (0.7 * (1 / 3) + 0.3 * (1 / 2)))),
+            # Two unique steps: no repetition -> 1.0
+            (["a", "b"], 1.0),
+            # Two identical steps: repeat_ratio=1.0, no oscillation possible
+            # penalty = 0.7*1.0 = 0.7 -> stability = 0.3
+            (["a", "a"], 0.3),
+        ],
+    )
+    def test_computation(self, make_trajectory, actions, expected):
+        rewards = [0.0] * (len(actions) - 1) + [1.0] if actions else []
+        term = ActionStabilityTerm()
+        trajectory = make_trajectory(rewards=rewards, actions=actions)
+        assert term.compute(trajectory) == pytest.approx(expected, abs=1e-9)
+
+    def test_conforms_to_fitness_term_protocol(self):
+        from trajectory_aware_gym.fitness.types import FitnessTerm
+
+        assert isinstance(ActionStabilityTerm(), FitnessTerm)

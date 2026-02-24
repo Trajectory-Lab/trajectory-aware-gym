@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from trajectory_aware_gym.adapters.trajectory_logger import TrajectoryLog
-from trajectory_aware_gym.fitness.config import FitnessConfig
+from trajectory_aware_gym.config import FitnessConfig
 from trajectory_aware_gym.fitness.terms import (
     DiscountedReturnTerm,
     LoopDetectionPenaltyTerm,

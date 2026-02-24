@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from trajectory_aware_gym.adapters.trajectory_logger import TrajectoryLog
-from trajectory_aware_gym.fitness.config import FitnessConfig
+from trajectory_aware_gym.config import FitnessConfig
 
 
 class DiscountedReturnTerm:
@@ -105,3 +105,84 @@ class StepEfficiencyBonusTerm:
         efficiency = 1.0 - (actual_steps / max_steps)
 
         return max(0.0, efficiency)
+
+
+# ---------------------------------------------------------------------------
+# Experimental terms adapted from the objective-profile design (PR #118).
+# These are disabled by default and not included in CompositeFitness.
+# Enable by adding to the composite's term list with a non-zero weight
+# once validated in ablation experiments.
+# See also: docs/fitness_objective_profile.md
+# ---------------------------------------------------------------------------
+
+
+class NormalizedProgressTerm:
+    """Reward-trend quality measured as the fraction of non-decreasing steps.
+
+    Captures whether per-turn rewards are generally improving over the
+    trajectory. Returns a value in [0, 1] where 1.0 means every
+    consecutive reward was >= the previous one.
+
+    For single-step trajectories, returns 0.5 if the reward is positive,
+    0.0 otherwise. Empty trajectories return 0.0.
+
+    Adapted from PR #118's ``compute_progress_component``.
+    """
+
+    @property
+    def name(self) -> str:
+        return "normalized_progress"
+
+    def compute(self, trajectory: TrajectoryLog) -> float:
+        steps = trajectory.steps
+        if not steps:
+            return 0.0
+
+        rewards = [step.reward for step in steps]
+        if len(rewards) < 2:
+            return 0.5 if rewards[0] > 0 else 0.0
+
+        non_decreasing = sum(
+            1 for prev, curr in zip(rewards, rewards[1:], strict=False) if curr >= prev
+        )
+        return non_decreasing / (len(rewards) - 1)
+
+
+class ActionStabilityTerm:
+    """Penalty for repetitive and oscillating action patterns.
+
+    Combines two signals:
+    - Consecutive repetition: fraction of steps where action[i] == action[i-1]
+    - Oscillation: fraction of steps where action[i] == action[i-2] != action[i-1]
+
+    Returns a value in [0, 1] where 1.0 means perfectly stable (no
+    repetition or oscillation) and 0.0 means maximally unstable.
+
+    Adapted from PR #118's ``compute_stability_component``.
+    """
+
+    REPETITION_WEIGHT = 0.7
+    OSCILLATION_WEIGHT = 0.3
+
+    @property
+    def name(self) -> str:
+        return "action_stability"
+
+    def compute(self, trajectory: TrajectoryLog) -> float:
+        actions = [step.action for step in trajectory.steps]
+        if len(actions) < 2:
+            return 1.0
+
+        repeated = sum(1 for prev, curr in zip(actions, actions[1:], strict=False) if prev == curr)
+        repeat_ratio = repeated / (len(actions) - 1)
+
+        oscillations = 0
+        for i in range(2, len(actions)):
+            if actions[i] == actions[i - 2] and actions[i] != actions[i - 1]:
+                oscillations += 1
+        oscillation_ratio = oscillations / max(1, len(actions) - 2)
+
+        penalty = (
+            self.REPETITION_WEIGHT * repeat_ratio + self.OSCILLATION_WEIGHT * oscillation_ratio
+        )
+        return max(0.0, min(1.0, 1.0 - penalty))

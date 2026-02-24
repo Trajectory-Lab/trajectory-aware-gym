@@ -7,7 +7,7 @@ import os
 import pytest
 from pydantic import ValidationError
 
-from trajectory_aware_gym.fitness.config import FitnessConfig
+from trajectory_aware_gym.config import FitnessConfig
 
 
 @pytest.fixture(autouse=True)

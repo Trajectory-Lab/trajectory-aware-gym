@@ -7,8 +7,8 @@ from typing import Any
 import dspy  # type: ignore[import-untyped]
 
 from trajectory_aware_gym.adapters.trajectory_logger import TrajectoryLog
+from trajectory_aware_gym.config import FitnessConfig
 from trajectory_aware_gym.fitness.composite import CompositeFitness
-from trajectory_aware_gym.fitness.config import FitnessConfig
 from trajectory_aware_gym.fitness.types import FitnessResult
 
 

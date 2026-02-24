@@ -7,8 +7,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from trajectory_aware_gym.adapters.trajectory_logger import TrajectoryLog, TrajectoryStep
+from trajectory_aware_gym.config import FitnessConfig
 from trajectory_aware_gym.fitness.composite import CompositeFitness
-from trajectory_aware_gym.fitness.config import FitnessConfig
 from trajectory_aware_gym.fitness.types import FitnessFunction, FitnessTerm
 
 

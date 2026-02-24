@@ -1,10 +1,12 @@
 """Trajectory-aware fitness functions for GEPA prompt optimization."""
 
+from trajectory_aware_gym.config import FitnessConfig
 from trajectory_aware_gym.fitness.composite import CompositeFitness
-from trajectory_aware_gym.fitness.config import FitnessConfig
 from trajectory_aware_gym.fitness.terms import (
+    ActionStabilityTerm,
     DiscountedReturnTerm,
     LoopDetectionPenaltyTerm,
+    NormalizedProgressTerm,
     StepEfficiencyBonusTerm,
 )
 from trajectory_aware_gym.fitness.types import (
@@ -15,6 +17,7 @@ from trajectory_aware_gym.fitness.types import (
 )
 
 __all__ = [
+    "ActionStabilityTerm",
     "CompositeFitness",
     "DiscountedReturnTerm",
     "FitnessBreakdown",
@@ -23,5 +26,6 @@ __all__ = [
     "FitnessResult",
     "FitnessTerm",
     "LoopDetectionPenaltyTerm",
+    "NormalizedProgressTerm",
     "StepEfficiencyBonusTerm",
 ]

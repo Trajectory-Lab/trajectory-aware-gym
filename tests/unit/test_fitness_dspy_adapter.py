@@ -9,7 +9,7 @@ import pytest
 
 from trajectory_aware_gym.adapters.dspy_adapter import TrajectoryFitnessMetric
 from trajectory_aware_gym.adapters.trajectory_logger import TrajectoryLog, TrajectoryStep
-from trajectory_aware_gym.fitness.config import FitnessConfig
+from trajectory_aware_gym.config import FitnessConfig
 
 
 @pytest.fixture
