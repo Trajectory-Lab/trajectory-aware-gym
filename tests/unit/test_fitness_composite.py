@@ -44,6 +44,7 @@ def make_trajectory():
             initial_observation="start",
             steps=steps,
             total_reward=sum(rewards),
+            num_steps=n,
         )
 
     return _make

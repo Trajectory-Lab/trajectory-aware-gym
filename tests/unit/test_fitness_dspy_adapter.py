@@ -41,6 +41,7 @@ def sample_trajectory() -> TrajectoryLog:
             ),
         ],
         total_reward=1.0,
+        num_steps=2,
     )
 
 
