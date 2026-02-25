@@ -16,7 +16,7 @@ import yaml
 from pydantic import BaseModel, Field
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-_YAML_PATH = _PROJECT_ROOT / "trajectory-aware-gym.yaml"
+_YAML_PATH = Path(__file__).resolve().parent / "trajectory-aware-gym.yaml"
 _DOTENV_PATH = _PROJECT_ROOT / ".env"
 
 dotenv.load_dotenv(_DOTENV_PATH)

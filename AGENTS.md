@@ -101,7 +101,7 @@ The project evaluates two optimization paradigms:
 - All LLM calls route through **LiteLLM** for unified provider interface
 - Task models: Qwen3 (1.7B, 4B) via AWS Bedrock for fair comparison with GEM's RL baselines
 - Reflection model: Claude Sonnet 4.5 via Bedrock for GEPA mutations
-- Configuration via YAML (`trajectory-aware-gym.yaml`) with `.env` overrides (see Configuration Management)
+- Configuration via YAML (`src/trajectory_aware_gym/config/trajectory-aware-gym.yaml`) with `.env` overrides (see Configuration Management)
 
 ### Environments
 
@@ -133,7 +133,7 @@ uv run pytest tests/integration/ -v
 - Prefer parametrized tests over repetitive test methods
 - Use fixtures for shared setup (e.g., `tmp_path`, `monkeypatch`)
 - For config tests, use `Settings.reset()` in fixtures to clear singleton state between tests
-- Tests load from the production `trajectory-aware-gym.yaml`; use `monkeypatch.setenv()` for overrides
+- Tests load from the production `src/trajectory_aware_gym/config/trajectory-aware-gym.yaml`; use `monkeypatch.setenv()` for overrides
 
 ```python
 # Good: comprehensive parametrized test with edge cases
@@ -209,15 +209,15 @@ uv run python scripts/run_experiment.py \
 
 ## Configuration Management
 
-Configuration is centralized in `trajectory-aware-gym.yaml` with `.env` overrides.
+Configuration is centralized in `src/trajectory_aware_gym/config/trajectory-aware-gym.yaml` with `.env` overrides.
 
-**Priority (highest → lowest):** `.env` / env vars → `trajectory-aware-gym.yaml`
+**Priority (highest → lowest):** `.env` / env vars → `src/trajectory_aware_gym/config/trajectory-aware-gym.yaml`
 
 No defaults are hardcoded in Python — all values come from `.env` or YAML.
 
 ### Key Files
 
-- **`trajectory-aware-gym.yaml`**: Non-sensitive defaults (checked into git)
+- **`src/trajectory_aware_gym/config/trajectory-aware-gym.yaml`**: Non-sensitive defaults (checked into git)
 - **`.env`**: Secrets and per-developer overrides (git-ignored)
 - **`src/trajectory_aware_gym/config/core.py`**: Settings loader + sub-models
 

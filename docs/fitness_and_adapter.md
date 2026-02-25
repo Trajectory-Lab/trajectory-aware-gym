@@ -148,7 +148,7 @@ Set any weight to 0.0 to disable a term for ablation studies.
 ## Configuration
 
 `FitnessModel` lives in `trajectory_aware_gym.config.core` and is loaded
-from `trajectory-aware-gym.yaml` (section `fitness:`) with env var overrides
+from `config/trajectory-aware-gym.yaml` (section `fitness:`) with env var overrides
 using the `FITNESS_` prefix.
 
 | YAML Field | Env Override | Default | Constraints | Description |

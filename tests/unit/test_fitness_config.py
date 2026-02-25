@@ -27,7 +27,7 @@ class TestFitnessConfigReExport:
 
 
 class TestFitnessModelDefaults:
-    """FitnessModel loads defaults from trajectory-aware-gym.yaml via settings."""
+    """FitnessModel loads defaults from config/trajectory-aware-gym.yaml via settings."""
 
     @pytest.mark.parametrize(
         ("field", "expected"),

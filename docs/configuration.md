@@ -4,7 +4,7 @@ All configuration lives in two places:
 
 | Source | Purpose |
 |--------|---------|
-| `trajectory-aware-gym.yaml` | Non-sensitive defaults (checked into git) |
+| `config/trajectory-aware-gym.yaml` | Non-sensitive defaults (checked into git) |
 | `.env` | Secrets and per-developer overrides |
 
 **Priority:** `.env` / env vars override YAML values.
@@ -14,7 +14,7 @@ All configuration lives in two places:
 `Settings` is a plain Python class that loads once (singleton). On first access:
 
 1. `.env` is loaded into `os.environ` via `python-dotenv`
-2. `trajectory-aware-gym.yaml` is parsed via PyYAML
+2. `config/trajectory-aware-gym.yaml` is parsed via PyYAML
 3. For each config section, env vars override YAML values using `PREFIX_FIELD` naming
 
 ```
@@ -204,14 +204,14 @@ This pattern works for any sub-config model (e.g., `settings.gem.model_copy(upda
 
 ## Adding a New Model
 
-1. **YAML**: Add the model ID to the appropriate section in `trajectory-aware-gym.yaml`
+1. **YAML**: Add the model ID to the appropriate section in `config/trajectory-aware-gym.yaml`
 2. **Model class**: Add the field to the corresponding model in `config/core.py`
 3. **LLM provider**: Add the model name to `TaskModelName` and a `case` branch in `get_task_lm()` in `config/llm_provider.py`
 4. **Verify**: Run `poe test` to confirm config loads correctly
 
 ## Adding a New Config Section
 
-1. **YAML**: Add the section to `trajectory-aware-gym.yaml`
+1. **YAML**: Add the section to `config/trajectory-aware-gym.yaml`
 2. **Model**: Create a new `BaseModel` subclass in `config/core.py`
 3. **Section map**: Add a `(yaml_key, env_prefix, ModelClass)` tuple to `_SECTION_MAP`
 4. **Settings**: Add the typed class attribute and `@property` to `Settings`
