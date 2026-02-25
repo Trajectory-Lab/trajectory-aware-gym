@@ -16,7 +16,7 @@ def test_episode_trajectory_persists_to_logs(tmp_path):
     logger = TrajectoryLogger(environment_id="game:GuessTheNumber-v0-easy", seed=7)
     logger.set_initial_state("start", {"suffix": "next"})
     logger.add_step(
-        action="\\\\boxed{3}",
+        action="\\boxed{3}",
         observation="higher",
         reward=0.0,
         terminated=False,
@@ -24,7 +24,7 @@ def test_episode_trajectory_persists_to_logs(tmp_path):
         info={"suffix": "next"},
     )
     logger.add_step(
-        action="\\\\boxed{5}",
+        action="\\boxed{5}",
         observation="win",
         reward=1.0,
         terminated=True,
@@ -79,7 +79,54 @@ def fake_lm(monkeypatch):
     return calls
 
 
-def test_task_model_routing_and_temperature(monkeypatch, fake_lm):
+@pytest.mark.parametrize(
+    ("model", "mode", "expected_model", "expected_temp", "expected_api_base"),
+    [
+        pytest.param(
+            "qwen3:1.7b",
+            "train",
+            "ollama_chat/qwen3:1.7b",
+            0.9,
+            "http://fake-ollama",
+            id="ollama-1.7b-train",
+        ),
+        pytest.param(
+            "qwen3:4b",
+            "eval",
+            "ollama_chat/qwen3:4b",
+            0.1,
+            "http://fake-ollama",
+            id="ollama-4b-eval",
+        ),
+        pytest.param(
+            "llama:1b",
+            "train",
+            "bedrock/bedrock-llama-1b",
+            0.9,
+            None,
+            id="bedrock-llama-1b-train",
+        ),
+        pytest.param(
+            "llama:3b",
+            "eval",
+            "bedrock/bedrock-llama-3b",
+            0.1,
+            None,
+            id="bedrock-llama-3b-eval",
+        ),
+        pytest.param(
+            "llama:8b",
+            "train",
+            "bedrock/bedrock-llama-8b",
+            0.9,
+            None,
+            id="bedrock-llama-8b-train",
+        ),
+    ],
+)
+def test_task_model_routing_and_temperature(
+    monkeypatch, fake_lm, model, mode, expected_model, expected_temp, expected_api_base
+):
     """Task model factory routes model names and temperature correctly."""
     import trajectory_aware_gym.config.llm_provider as llm_provider
 
@@ -101,19 +148,31 @@ def test_task_model_routing_and_temperature(monkeypatch, fake_lm):
     monkeypatch.setattr(llm_provider, "OllamaConfig", FakeOllamaConfig)
     monkeypatch.setattr(llm_provider, "AWSConfig", FakeAWSConfig)
 
-    llm_provider.get_task_lm("qwen3:1.7b", mode="train")
-    llm_provider.get_task_lm("qwen3:4b", mode="eval")
-    llm_provider.get_task_lm("llama:1b", mode="train")
+    llm_provider.get_task_lm(model, mode=mode)
 
-    assert fake_lm[0]["model"] == "ollama_chat/qwen3:1.7b"
-    assert fake_lm[0]["api_base"] == "http://fake-ollama"
-    assert fake_lm[0]["temperature"] == pytest.approx(0.9)
+    assert fake_lm[0]["model"] == expected_model
+    assert fake_lm[0]["temperature"] == pytest.approx(expected_temp)
+    assert fake_lm[0]["max_tokens"] == 4096
+    if expected_api_base:
+        assert fake_lm[0]["api_base"] == expected_api_base
+    else:
+        assert "api_base" not in fake_lm[0]
 
-    assert fake_lm[1]["model"] == "ollama_chat/qwen3:4b"
-    assert fake_lm[1]["temperature"] == pytest.approx(0.1)
 
-    assert fake_lm[2]["model"] == "bedrock/bedrock-llama-1b"
-    assert fake_lm[2]["temperature"] == pytest.approx(0.9)
+def test_task_model_unrecognised_name_returns_none(monkeypatch, fake_lm):
+    """Unrecognised model name falls through match/case and returns None."""
+    import trajectory_aware_gym.config.llm_provider as llm_provider
+
+    class FakeGEMConfig:
+        gem_temperature_train = 1.0
+        gem_temperature_eval = 0.0
+
+    monkeypatch.setattr(llm_provider, "GEMConfig", FakeGEMConfig)
+
+    result = llm_provider.get_task_lm("nonexistent-model", mode="train")
+
+    assert result is None
+    assert len(fake_lm) == 0
 
 
 def test_reflection_model_routing(monkeypatch, fake_lm):
