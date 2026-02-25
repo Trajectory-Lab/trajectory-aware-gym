@@ -132,7 +132,8 @@ uv run pytest tests/integration/ -v
 - Parameters should be **comprehensive** and include edge cases (empty strings, zero, negative values, boundary conditions, None where applicable)
 - Prefer parametrized tests over repetitive test methods
 - Use fixtures for shared setup (e.g., `tmp_path`, `monkeypatch`)
-- For config tests, use `Settings.reset()` before loading with a test YAML to isolate from real config
+- For config tests, use `Settings.reset()` in fixtures to clear singleton state between tests
+- Tests load from the production `trajectory-aware-gym.yaml`; use `monkeypatch.setenv()` for overrides
 
 ```python
 # Good: comprehensive parametrized test with edge cases
@@ -398,3 +399,14 @@ if is_admin(user):
 - **Do NOT** use test set during optimization (strict held-out evaluation)
 - **Do** maintain identical evaluation protocols between paradigms for fair comparison
 - **Do** track and report cost/token usage for ALL LLM calls (critical for H2 hypothesis validation)
+
+## Documentation Maintenance
+
+When adding new features or deprecating existing ones, update the relevant documentation:
+
+- **[README.md](README.md)**: Project overview, setup instructions, project structure
+- **[docs/configuration.md](docs/configuration.md)**: Configuration schema, env var conventions, adding models/sections
+- **[AGENTS.md](AGENTS.md)**: This file — agent guidelines, architecture, development commands
+- **[.env.example](.env.example)**: Keep in sync with any new secret/override env vars
+
+Do not let documentation drift from the code. If you change a config field, model name, or access pattern, update the corresponding docs in the same PR.
