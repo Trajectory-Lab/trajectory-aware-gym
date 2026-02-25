@@ -13,7 +13,7 @@ from typing import Any, Literal, get_origin
 
 import dotenv
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _YAML_PATH = _PROJECT_ROOT / "trajectory-aware-gym.yaml"
@@ -102,6 +102,19 @@ class CostTrackingModel(BaseModel):
     alert_threshold: float
 
 
+class FitnessModel(BaseModel):
+    """Hyperparameters for trajectory-aware fitness computation."""
+
+    model_config = {"populate_by_name": True}
+
+    gamma: float = Field(ge=0.0, le=1.0)
+    lambda_: float = Field(alias="lambda", ge=0.0)
+    loop_penalty_weight: float = Field(ge=0.0)
+    step_efficiency_weight: float = Field(ge=0.0)
+    max_steps: int = Field(ge=1)
+    loop_window: int = Field(ge=1)
+
+
 # ── Settings ─────────────────────────────────────────────────────
 
 _SECTION_MAP: list[tuple[str, str, type[BaseModel]]] = [
@@ -112,6 +125,7 @@ _SECTION_MAP: list[tuple[str, str, type[BaseModel]]] = [
     ("experiment", "EXPERIMENT", ExperimentModel),
     ("logging", "LOG", LoggingModel),
     ("cost_tracking", "COST_TRACKING", CostTrackingModel),
+    ("fitness", "FITNESS", FitnessModel),
 ]
 
 
@@ -132,6 +146,7 @@ class Settings:
     _experiment: ExperimentModel
     _logging: LoggingModel
     _cost_tracking: CostTrackingModel
+    _fitness: FitnessModel
 
     def __init__(self, yaml_path: Path | None = None) -> None:
         if not Settings._loaded:
@@ -200,6 +215,10 @@ class Settings:
     def cost_tracking(self) -> CostTrackingModel:
         return self._cost_tracking
 
+    @property
+    def fitness(self) -> FitnessModel:
+        return self._fitness
+
 
 # ── Helpers ──────────────────────────────────────────────────────
 
@@ -217,10 +236,14 @@ def _with_env_overrides(
     """
     result = dict(yaml_section)
     for field_name, field_info in model_cls.model_fields.items():
-        env_key = f"{prefix}_{field_name}".upper()
+        # Use alias for env var lookup if set (e.g. lambda_ -> FITNESS_LAMBDA)
+        lookup_name = field_info.alias or field_name
+        env_key = f"{prefix}_{lookup_name}".upper()
         env_val = os.getenv(env_key)
         if env_val is not None:
-            result[field_name] = _coerce(env_val, field_info.annotation)
+            # Use alias as dict key when alias exists (matches YAML key)
+            dict_key = field_info.alias or field_name
+            result[dict_key] = _coerce(env_val, field_info.annotation)
     return result
 
 

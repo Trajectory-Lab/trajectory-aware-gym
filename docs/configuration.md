@@ -36,6 +36,8 @@ settings.ollama.api_base         # "http://localhost:11434"
 settings.experiment.random_seed  # 42
 settings.logging.level           # "INFO"
 settings.cost_tracking.enabled   # True
+settings.fitness.gamma           # 0.99
+settings.fitness.lambda_         # 0.1
 ```
 
 ## LLM Provider Factory
@@ -85,6 +87,7 @@ Every YAML field can be overridden via an env var named `PREFIX_FIELD`:
 | `experiment` | `EXPERIMENT_` | `EXPERIMENT_RANDOM_SEED=123` |
 | `logging` | `LOG_` | `LOG_LEVEL=DEBUG` |
 | `cost_tracking` | `COST_TRACKING_` | `COST_TRACKING_ENABLED=false` |
+| `fitness` | `FITNESS_` | `FITNESS_GAMMA=0.95` |
 
 Type coercion is automatic: `"42"` → `int`, `"3.14"` → `float`, `"true"` → `bool`.
 
@@ -151,6 +154,53 @@ Type coercion is automatic: `"42"` → `int`, `"3.14"` → `float`, `"true"` →
 |-------|------|-------------|
 | `enabled` | `bool` | Enable cost tracking |
 | `alert_threshold` | `float` | Cost alert threshold ($) |
+
+### `fitness` — Trajectory-Aware Fitness
+
+| Field | Type | Constraints | Description |
+|-------|------|-------------|-------------|
+| `gamma` | `float` | [0.0, 1.0] | Reverse-time discount factor |
+| `lambda` | `float` | >= 0.0 | Auxiliary per-turn reward scaling |
+| `loop_penalty_weight` | `float` | >= 0.0 | Loop detection penalty weight |
+| `step_efficiency_weight` | `float` | >= 0.0 | Step efficiency bonus weight |
+| `max_steps` | `int` | >= 1 | Max steps for efficiency normalization |
+| `loop_window` | `int` | >= 1 | Sliding window for loop detection |
+
+Note: The YAML field is `lambda` but the Python attribute is `lambda_` (Python keyword).
+Env var override: `FITNESS_LAMBDA`.
+
+## Using Config in Production and Experiment Code
+
+Sub-config models are Pydantic `BaseModel` instances. Use `model_copy(update={...})`
+to derive variants from the YAML defaults without mutating the singleton:
+
+```python
+from trajectory_aware_gym.config import settings
+from trajectory_aware_gym.fitness import CompositeFitness
+
+# Production: use YAML defaults directly
+fitness = CompositeFitness()  # internally uses settings.fitness
+
+# Explicit: pass config from singleton
+fitness = CompositeFitness(settings.fitness)
+
+# Experiment override: tweak specific hyperparameters
+custom = settings.fitness.model_copy(update={"gamma": 0.95, "lambda_": 0.2})
+fitness = CompositeFitness(custom)
+
+# Ablation: disable a term by zeroing its weight
+no_loop = settings.fitness.model_copy(update={"loop_penalty_weight": 0.0})
+fitness = CompositeFitness(no_loop)
+
+# Ablation: only discounted return (disable all auxiliary terms)
+dr_only = settings.fitness.model_copy(update={
+    "loop_penalty_weight": 0.0,
+    "step_efficiency_weight": 0.0,
+})
+fitness = CompositeFitness(dr_only)
+```
+
+This pattern works for any sub-config model (e.g., `settings.gem.model_copy(update={...})`).
 
 ## Adding a New Model
 

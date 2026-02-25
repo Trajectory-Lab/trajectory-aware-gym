@@ -17,6 +17,14 @@ gem:
   temperature_train: 1.0
   temperature_eval: 0.0
 
+fitness:
+  gamma: 0.99
+  lambda: 0.1
+  loop_penalty_weight: 1.0
+  step_efficiency_weight: 1.0
+  max_steps: 50
+  loop_window: 3
+
 gepa:
   budget: medium
   population_size: 6

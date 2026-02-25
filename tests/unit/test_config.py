@@ -74,6 +74,15 @@ class TestSettingsLoad:
         assert s.cost_tracking.enabled is True
         assert s.cost_tracking.alert_threshold == 100.0
 
+    def test_loads_fitness_section(self):
+        s = _load_settings()
+        assert s.fitness.gamma == 0.99
+        assert s.fitness.lambda_ == 0.1
+        assert s.fitness.loop_penalty_weight == 1.0
+        assert s.fitness.step_efficiency_weight == 1.0
+        assert s.fitness.max_steps == 50
+        assert s.fitness.loop_window == 3
+
     def test_missing_yaml_raises_on_required_fields(self, tmp_path):
         empty_yaml = tmp_path / "empty.yaml"
         empty_yaml.write_text("")

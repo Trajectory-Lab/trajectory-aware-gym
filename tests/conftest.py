@@ -14,6 +14,7 @@ _CONFIG_ENV_PREFIXES = (
     "GEM_",
     "GEPA_",
     "EXPERIMENT_",
+    "FITNESS_",
     "LOG_",
     "COST_TRACKING_",
 )
