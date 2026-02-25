@@ -101,7 +101,7 @@ The project evaluates two optimization paradigms:
 - All LLM calls route through **LiteLLM** for unified provider interface
 - Task models: Qwen3 (1.7B, 4B) via AWS Bedrock for fair comparison with GEM's RL baselines
 - Reflection model: Claude Sonnet 4.5 via Bedrock for GEPA mutations
-- Configuration via Pydantic Settings with `.env` file
+- Configuration via YAML (`trajectory-aware-gym.yaml`) with `.env` overrides (see Configuration Management)
 
 ### Environments
 
@@ -132,7 +132,7 @@ uv run pytest tests/integration/ -v
 - Parameters should be **comprehensive** and include edge cases (empty strings, zero, negative values, boundary conditions, None where applicable)
 - Prefer parametrized tests over repetitive test methods
 - Use fixtures for shared setup (e.g., `tmp_path`, `monkeypatch`)
-- For pydantic-settings configs, pass `_env_file=None` to avoid `.env` interference
+- For config tests, use `Settings.reset()` before loading with a test YAML to isolate from real config
 
 ```python
 # Good: comprehensive parametrized test with edge cases
@@ -208,22 +208,40 @@ uv run python scripts/run_experiment.py \
 
 ## Configuration Management
 
+Configuration is centralized in `trajectory-aware-gym.yaml` with `.env` overrides.
+
+**Priority (highest → lowest):** `.env` / env vars → `trajectory-aware-gym.yaml`
+
+No defaults are hardcoded in Python — all values come from `.env` or YAML.
+
+### Key Files
+
+- **`trajectory-aware-gym.yaml`**: Non-sensitive defaults (checked into git)
+- **`.env`**: Secrets and per-developer overrides (git-ignored)
+- **`src/trajectory_aware_gym/config/core.py`**: Settings loader + sub-models
+
 ### Environment Variables (.env)
 
-Critical settings:
-- **AWS_REGION**, **AWS_ACCESS_KEY_ID**, **AWS_SECRET_ACCESS_KEY**: Bedrock access
-- **BEDROCK_QWEN3_1_7B**, **BEDROCK_CLAUDE_SONNET_4_5**: Model IDs
+Env vars use `PREFIX_FIELD` naming (e.g., `AWS_REGION`, `GEM_MAX_STEPS`):
+- **AWS_ACCESS_KEY_ID**, **AWS_SECRET_ACCESS_KEY**: Bedrock credentials
+- **AWS_REGION**: AWS region override
 - **GEPA_BUDGET**: light/medium/heavy (controls iterations and population)
+- **GEM_MAX_STEPS**: Max steps per episode
 - **GEM_TEMPERATURE_TRAIN**: 1.0 for exploration, **GEM_TEMPERATURE_EVAL**: 0.0 for determinism
+
+Any YAML value can be overridden via env var using its section prefix:
+`{SECTION_PREFIX}_{FIELD_NAME}` (e.g., `OLLAMA_API_BASE`, `LOG_LEVEL`)
 
 ### Programmatic Access
 
 ```python
-from trajectory_aware_gym.config import AWSConfig, GEPAConfig, GEMConfig
+from trajectory_aware_gym.config import settings
 
-aws = AWSConfig()  # Auto-loads from .env
-gepa = GEPAConfig()
-gem = GEMConfig()
+# Access sub-configs via properties
+settings.aws.region
+settings.gem.max_steps
+settings.gepa.budget
+settings.ollama.api_base
 ```
 
 ## Cost and Token Tracking

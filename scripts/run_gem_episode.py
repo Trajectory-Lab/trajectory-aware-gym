@@ -13,7 +13,7 @@ import importlib
 import json
 
 from trajectory_aware_gym.adapters import TrajectoryLogger
-from trajectory_aware_gym.config import GEMConfig
+from trajectory_aware_gym.config import settings
 
 
 def choose_guess(observation: str, low: int, high: int) -> tuple[int, int, int]:
@@ -38,7 +38,6 @@ def run_episode(
     system_prompt: str | None = None,
 ) -> tuple[float, int, str]:
     """Execute one episode and save a trajectory log to disk."""
-    config = GEMConfig(_env_file=None)
     gem = importlib.import_module("gem")
     importlib.import_module("gem.envs")
     env = gem.make(environment_id)
@@ -54,7 +53,7 @@ def run_episode(
     total_reward = 0.0
     low, high = 1, 10
 
-    for _ in range(config.gem_max_steps):
+    for _ in range(settings.gem.max_steps):
         guess, low, high = choose_guess(observation, low, high)
         action = f"\\\\boxed{{{guess}}}"
 
