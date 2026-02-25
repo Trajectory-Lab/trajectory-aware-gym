@@ -12,8 +12,10 @@ This document captures the testing handoff artifacts for Phase 2 integration wor
 
 - Trajectory capture and persistence from episode-style transitions
 - Schema round-trip validation for persisted trajectories
-- Task/reflection model routing behavior without external provider calls
-- AWS client configuration branch handling for optional credentials/session
+- Task model routing across all 5 variants (Ollama and Bedrock) with train/eval temperature
+- Unrecognised model name handling (silent `None` return)
+- Reflection model routing via Bedrock
+- AWS client config credential inclusion/exclusion (empty, full, and partial credentials)
 
 ## CI/Local Commands
 
