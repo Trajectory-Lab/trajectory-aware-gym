@@ -5,6 +5,7 @@ from trajectory_aware_gym.config.ollama_config import OllamaConfig
 from trajectory_aware_gym.config.settings import (
     CostTrackingConfig,
     ExperimentConfig,
+    FitnessConfig,
     GEMConfig,
     GEPAConfig,
     LoggingConfig,
@@ -13,11 +14,12 @@ from trajectory_aware_gym.config.settings import (
 
 __all__ = [
     "AWSConfig",
-    "OllamaConfig",
-    "ExperimentConfig",
-    "GEPAConfig",
-    "GEMConfig",
-    "LoggingConfig",
     "CostTrackingConfig",
+    "ExperimentConfig",
+    "FitnessConfig",
+    "GEMConfig",
+    "GEPAConfig",
+    "LoggingConfig",
+    "OllamaConfig",
     "ProjectPaths",
 ]
