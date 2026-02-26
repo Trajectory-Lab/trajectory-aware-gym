@@ -9,7 +9,12 @@ import pytest
 
 from trajectory_aware_gym.adapters.dspy_adapter import TrajectoryFitnessMetric
 from trajectory_aware_gym.adapters.trajectory_logger import TrajectoryLog, TrajectoryStep
-from trajectory_aware_gym.config import FitnessConfig
+from trajectory_aware_gym.config import FitnessModel, settings
+
+
+def _cfg(**overrides: object) -> FitnessModel:
+    """Build a FitnessModel from YAML defaults with specific overrides."""
+    return settings.fitness.model_copy(update=overrides)
 
 
 @pytest.fixture
@@ -46,12 +51,18 @@ def sample_trajectory() -> TrajectoryLog:
 
 
 @pytest.fixture
-def config() -> FitnessConfig:
-    return FitnessConfig(fitness_gamma=0.5, fitness_lambda=0.1, _env_file=None)
+def config() -> FitnessModel:
+    return _cfg(gamma=0.5, lambda_=0.1)
 
 
 class TestTrajectoryFitnessMetric:
     """Tests for the DSPy metric bridge."""
+
+    def test_default_config_uses_settings(self, sample_trajectory):
+        metric = TrajectoryFitnessMetric(return_feedback=False)
+        example = dspy.Example(question="test")
+        prediction = dspy.Prediction(answer="correct", trajectory=sample_trajectory)
+        assert metric(example, prediction) > 0
 
     def test_with_trajectory_returns_prediction(self, sample_trajectory, config):
         metric = TrajectoryFitnessMetric(config=config, return_feedback=True)

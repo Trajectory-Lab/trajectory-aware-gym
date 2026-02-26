@@ -7,7 +7,7 @@ from typing import Any
 import dspy  # type: ignore[import-untyped]
 
 from trajectory_aware_gym.adapters.trajectory_logger import TrajectoryLog
-from trajectory_aware_gym.config import FitnessConfig
+from trajectory_aware_gym.config.core import FitnessModel
 from trajectory_aware_gym.fitness.composite import CompositeFitness
 from trajectory_aware_gym.fitness.types import FitnessResult
 
@@ -26,12 +26,16 @@ class TrajectoryFitnessMetric:
 
     def __init__(
         self,
-        config: FitnessConfig | None = None,
+        config: FitnessModel | None = None,
         fitness: CompositeFitness | None = None,
         *,
         return_feedback: bool = True,
     ) -> None:
-        self._config = config or FitnessConfig()
+        if config is None:
+            from trajectory_aware_gym.config import settings
+
+            config = settings.fitness
+        self._config = config
         self._fitness = fitness or CompositeFitness(self._config)
         self._return_feedback = return_feedback
 

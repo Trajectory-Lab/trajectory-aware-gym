@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from trajectory_aware_gym.adapters.trajectory_logger import TrajectoryLog, TrajectoryStep
-from trajectory_aware_gym.config import FitnessConfig
+from trajectory_aware_gym.config import FitnessModel, settings
 from trajectory_aware_gym.fitness.terms import (
     ActionStabilityTerm,
     DiscountedReturnTerm,
@@ -15,6 +15,11 @@ from trajectory_aware_gym.fitness.terms import (
     NormalizedProgressTerm,
     StepEfficiencyBonusTerm,
 )
+
+
+def _cfg(**overrides: object) -> FitnessModel:
+    """Build a FitnessModel from YAML defaults with specific overrides."""
+    return settings.fitness.model_copy(update=overrides)
 
 
 @pytest.fixture
@@ -55,17 +60,36 @@ def make_trajectory():
     return _make
 
 
+class TestDefaultConfigFallback:
+    """Terms use settings.fitness when no config is passed."""
+
+    def test_discounted_return_default(self, make_trajectory):
+        term = DiscountedReturnTerm()
+        trajectory = make_trajectory(rewards=[0.0, 1.0])
+        assert term.compute(trajectory) > 0
+
+    def test_loop_detection_default(self, make_trajectory):
+        term = LoopDetectionPenaltyTerm()
+        trajectory = make_trajectory(rewards=[0.0, 1.0], actions=["a", "a"])
+        assert term.compute(trajectory) < 0
+
+    def test_step_efficiency_default(self, make_trajectory):
+        term = StepEfficiencyBonusTerm()
+        trajectory = make_trajectory(rewards=[0.0, 1.0])
+        assert term.compute(trajectory) > 0
+
+
 class TestDiscountedReturnTerm:
     """Tests for the reverse-time discounted return (Eq. 3.1)."""
 
     def test_empty_trajectory(self, make_trajectory):
         trajectory = make_trajectory(rewards=[])
-        config = FitnessConfig(fitness_gamma=0.99, fitness_lambda=0.1, _env_file=None)
+        config = _cfg(gamma=0.99, lambda_=0.1)
         term = DiscountedReturnTerm(config)
         assert term.compute(trajectory) == 0.0
 
     def test_name(self):
-        term = DiscountedReturnTerm(FitnessConfig(_env_file=None))
+        term = DiscountedReturnTerm(settings.fitness)
         assert term.name == "discounted_return"
 
     @pytest.mark.parametrize(
@@ -95,7 +119,7 @@ class TestDiscountedReturnTerm:
         ],
     )
     def test_computation(self, make_trajectory, rewards, gamma, lam, expected):
-        config = FitnessConfig(fitness_gamma=gamma, fitness_lambda=lam, _env_file=None)
+        config = _cfg(gamma=gamma, lambda_=lam)
         term = DiscountedReturnTerm(config)
         trajectory = make_trajectory(rewards=rewards)
         result = term.compute(trajectory)
@@ -107,16 +131,16 @@ class TestLoopDetectionPenaltyTerm:
 
     def test_empty_trajectory(self, make_trajectory):
         trajectory = make_trajectory(rewards=[], actions=[])
-        term = LoopDetectionPenaltyTerm(FitnessConfig(_env_file=None))
+        term = LoopDetectionPenaltyTerm(settings.fitness)
         assert term.compute(trajectory) == 0.0
 
     def test_single_step(self, make_trajectory):
         trajectory = make_trajectory(rewards=[1.0], actions=["a"])
-        term = LoopDetectionPenaltyTerm(FitnessConfig(_env_file=None))
+        term = LoopDetectionPenaltyTerm(settings.fitness)
         assert term.compute(trajectory) == 0.0
 
     def test_name(self):
-        term = LoopDetectionPenaltyTerm(FitnessConfig(_env_file=None))
+        term = LoopDetectionPenaltyTerm(settings.fitness)
         assert term.name == "loop_detection_penalty"
 
     @pytest.mark.parametrize(
@@ -145,7 +169,7 @@ class TestLoopDetectionPenaltyTerm:
     )
     def test_computation(self, make_trajectory, actions, window, expected):
         rewards = [0.0] * (len(actions) - 1) + [1.0] if actions else []
-        config = FitnessConfig(fitness_loop_window=window, _env_file=None)
+        config = _cfg(loop_window=window)
         term = LoopDetectionPenaltyTerm(config)
         trajectory = make_trajectory(rewards=rewards, actions=actions)
         result = term.compute(trajectory)
@@ -157,11 +181,11 @@ class TestStepEfficiencyBonusTerm:
 
     def test_empty_trajectory(self, make_trajectory):
         trajectory = make_trajectory(rewards=[])
-        term = StepEfficiencyBonusTerm(FitnessConfig(_env_file=None))
+        term = StepEfficiencyBonusTerm(settings.fitness)
         assert term.compute(trajectory) == 0.0
 
     def test_name(self):
-        term = StepEfficiencyBonusTerm(FitnessConfig(_env_file=None))
+        term = StepEfficiencyBonusTerm(settings.fitness)
         assert term.name == "step_efficiency_bonus"
 
     @pytest.mark.parametrize(
@@ -185,7 +209,7 @@ class TestStepEfficiencyBonusTerm:
     )
     def test_computation(self, make_trajectory, num_steps, max_steps, final_reward, expected):
         rewards = [0.0] * (num_steps - 1) + [final_reward] if num_steps > 0 else []
-        config = FitnessConfig(fitness_max_steps=max_steps, _env_file=None)
+        config = _cfg(max_steps=max_steps)
         term = StepEfficiencyBonusTerm(config)
         trajectory = make_trajectory(rewards=rewards)
         result = term.compute(trajectory)

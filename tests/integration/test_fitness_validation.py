@@ -12,8 +12,13 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from trajectory_aware_gym.adapters.trajectory_logger import TrajectoryLog, TrajectoryStep
-from trajectory_aware_gym.config import FitnessConfig
+from trajectory_aware_gym.config import FitnessModel, settings
 from trajectory_aware_gym.fitness.composite import CompositeFitness
+
+
+def _cfg(**overrides: object) -> FitnessModel:
+    """Build a FitnessModel from YAML defaults with specific overrides."""
+    return settings.fitness.model_copy(update=overrides)
 
 
 @pytest.fixture
@@ -63,12 +68,11 @@ class TestBehavioralOrdering:
         Uses γ=0 so the discounted return is length-independent (only the
         final step receives credit), letting the efficiency bonus dominate.
         """
-        config = FitnessConfig(
-            fitness_gamma=0.0,
-            fitness_lambda=0.0,
-            fitness_step_efficiency_weight=1.0,
-            fitness_max_steps=50,
-            _env_file=None,
+        config = _cfg(
+            gamma=0.0,
+            lambda_=0.0,
+            step_efficiency_weight=1.0,
+            max_steps=50,
         )
         fitness = CompositeFitness(config)
 
@@ -79,11 +83,10 @@ class TestBehavioralOrdering:
 
     def test_no_loops_scores_higher_than_loopy_trajectory(self, make_trajectory):
         """Loop penalty: repeated actions reduce fitness."""
-        config = FitnessConfig(
-            fitness_gamma=0.99,
-            fitness_lambda=0.0,
-            fitness_loop_penalty_weight=1.0,
-            _env_file=None,
+        config = _cfg(
+            gamma=0.99,
+            lambda_=0.0,
+            loop_penalty_weight=1.0,
         )
         fitness = CompositeFitness(config)
 
@@ -100,10 +103,9 @@ class TestBehavioralOrdering:
 
     def test_success_always_beats_failure(self, make_trajectory):
         """Successful trajectory always scores higher than failed one."""
-        config = FitnessConfig(
-            fitness_gamma=0.99,
-            fitness_lambda=0.1,
-            _env_file=None,
+        config = _cfg(
+            gamma=0.99,
+            lambda_=0.1,
         )
         fitness = CompositeFitness(config)
 
@@ -114,11 +116,10 @@ class TestBehavioralOrdering:
 
     def test_success_beats_failure_regardless_of_length(self, make_trajectory):
         """Even a long successful trajectory scores higher than a short failure."""
-        config = FitnessConfig(
-            fitness_gamma=0.99,
-            fitness_lambda=0.1,
-            fitness_max_steps=50,
-            _env_file=None,
+        config = _cfg(
+            gamma=0.99,
+            lambda_=0.1,
+            max_steps=50,
         )
         fitness = CompositeFitness(config)
 
@@ -133,14 +134,13 @@ class TestAblationConsistency:
 
     def test_disabling_both_terms_equals_discounted_return_only(self, make_trajectory):
         """With both auxiliary weights at 0, composite equals discounted return alone."""
-        base_config = FitnessConfig(
-            fitness_gamma=0.5,
-            fitness_lambda=0.1,
-            fitness_loop_penalty_weight=0.0,
-            fitness_step_efficiency_weight=0.0,
-            _env_file=None,
+        config = _cfg(
+            gamma=0.5,
+            lambda_=0.1,
+            loop_penalty_weight=0.0,
+            step_efficiency_weight=0.0,
         )
-        fitness = CompositeFitness(base_config)
+        fitness = CompositeFitness(config)
 
         trajectory = make_trajectory(
             rewards=[0.0, 0.0, 1.0],
@@ -153,20 +153,18 @@ class TestAblationConsistency:
 
     def test_full_composite_differs_from_discounted_return_only(self, make_trajectory):
         """With auxiliary terms active, composite score diverges from discounted return."""
-        full_config = FitnessConfig(
-            fitness_gamma=0.5,
-            fitness_lambda=0.1,
-            fitness_loop_penalty_weight=1.0,
-            fitness_step_efficiency_weight=1.0,
-            fitness_max_steps=50,
-            _env_file=None,
+        full_config = _cfg(
+            gamma=0.5,
+            lambda_=0.1,
+            loop_penalty_weight=1.0,
+            step_efficiency_weight=1.0,
+            max_steps=50,
         )
-        dr_only_config = FitnessConfig(
-            fitness_gamma=0.5,
-            fitness_lambda=0.1,
-            fitness_loop_penalty_weight=0.0,
-            fitness_step_efficiency_weight=0.0,
-            _env_file=None,
+        dr_only_config = _cfg(
+            gamma=0.5,
+            lambda_=0.1,
+            loop_penalty_weight=0.0,
+            step_efficiency_weight=0.0,
         )
 
         trajectory = make_trajectory(

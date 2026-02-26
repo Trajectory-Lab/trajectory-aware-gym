@@ -1,5 +1,5 @@
 """Fitness function configuration (re-exported from canonical location)."""
 
-from trajectory_aware_gym.config import FitnessConfig
+from trajectory_aware_gym.config import FitnessModel
 
-__all__ = ["FitnessConfig"]
+__all__ = ["FitnessModel"]

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from trajectory_aware_gym.adapters.trajectory_logger import TrajectoryLog
-from trajectory_aware_gym.config import FitnessConfig
+from trajectory_aware_gym.config.core import FitnessModel
 
 
 class DiscountedReturnTerm:
@@ -16,8 +16,12 @@ class DiscountedReturnTerm:
     r_t are the actual per-step rewards from the environment.
     """
 
-    def __init__(self, config: FitnessConfig | None = None) -> None:
-        self._config = config or FitnessConfig()
+    def __init__(self, config: FitnessModel | None = None) -> None:
+        if config is None:
+            from trajectory_aware_gym.config import settings
+
+            config = settings.fitness
+        self._config = config
 
     @property
     def name(self) -> str:
@@ -29,8 +33,8 @@ class DiscountedReturnTerm:
             return 0.0
 
         total_steps = len(steps)
-        gamma = self._config.fitness_gamma
-        lam = self._config.fitness_lambda
+        gamma = self._config.gamma
+        lam = self._config.lambda_
 
         is_success = 1.0 if steps[-1].reward > 0 else 0.0
 
@@ -51,8 +55,12 @@ class LoopDetectionPenaltyTerm:
     to the fraction of steps exhibiting loops.
     """
 
-    def __init__(self, config: FitnessConfig | None = None) -> None:
-        self._config = config or FitnessConfig()
+    def __init__(self, config: FitnessModel | None = None) -> None:
+        if config is None:
+            from trajectory_aware_gym.config import settings
+
+            config = settings.fitness
+        self._config = config
 
     @property
     def name(self) -> str:
@@ -63,7 +71,7 @@ class LoopDetectionPenaltyTerm:
         if len(steps) < 2:
             return 0.0
 
-        window = self._config.fitness_loop_window
+        window = self._config.loop_window
         loop_count = 0
 
         for i in range(1, len(steps)):
@@ -85,8 +93,12 @@ class StepEfficiencyBonusTerm:
     Only awards a bonus when the trajectory ends with a positive final reward.
     """
 
-    def __init__(self, config: FitnessConfig | None = None) -> None:
-        self._config = config or FitnessConfig()
+    def __init__(self, config: FitnessModel | None = None) -> None:
+        if config is None:
+            from trajectory_aware_gym.config import settings
+
+            config = settings.fitness
+        self._config = config
 
     @property
     def name(self) -> str:
@@ -100,7 +112,7 @@ class StepEfficiencyBonusTerm:
         if steps[-1].reward <= 0:
             return 0.0
 
-        max_steps = self._config.fitness_max_steps
+        max_steps = self._config.max_steps
         actual_steps = len(steps)
         efficiency = 1.0 - (actual_steps / max_steps)
 

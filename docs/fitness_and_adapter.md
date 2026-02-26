@@ -134,8 +134,8 @@ score = Σ weight_i · term_i.compute(trajectory)
 | Term | Weight | Purpose |
 |------|--------|---------|
 | `DiscountedReturnTerm` | 1.0 (fixed) | Primary success signal |
-| `LoopDetectionPenaltyTerm` | `fitness_loop_penalty_weight` | Penalize repetition |
-| `StepEfficiencyBonusTerm` | `fitness_step_efficiency_weight` | Reward brevity |
+| `LoopDetectionPenaltyTerm` | `loop_penalty_weight` | Penalize repetition |
+| `StepEfficiencyBonusTerm` | `step_efficiency_weight` | Reward brevity |
 
 Set any weight to 0.0 to disable a term for ablation studies.
 
@@ -147,25 +147,28 @@ Set any weight to 0.0 to disable a term for ablation studies.
 
 ## Configuration
 
-`FitnessConfig` lives in the centralized config module
-(`trajectory_aware_gym.config.settings`) alongside all other project
-configuration classes. It uses Pydantic Settings and can be set through
-environment variables or a `.env` file.
+`FitnessModel` lives in `trajectory_aware_gym.config.core` and is loaded
+from `config/trajectory-aware-gym.yaml` (section `fitness:`) with env var overrides
+using the `FITNESS_` prefix.
 
-| Env Var | Default | Constraints | Description |
-|---------|---------|-------------|-------------|
-| `FITNESS_GAMMA` | 0.99 | [0.0, 1.0] | Reverse-time discount factor |
-| `FITNESS_LAMBDA` | 0.1 | ≥ 0.0 | Auxiliary per-turn reward scaling |
-| `FITNESS_LOOP_PENALTY_WEIGHT` | 1.0 | ≥ 0.0 | Loop penalty term weight |
-| `FITNESS_STEP_EFFICIENCY_WEIGHT` | 1.0 | ≥ 0.0 | Step efficiency term weight |
-| `FITNESS_MAX_STEPS` | 50 | ≥ 1 | Max steps for efficiency normalization |
-| `FITNESS_LOOP_WINDOW` | 3 | ≥ 1 | Sliding window for loop detection |
+| YAML Field | Env Override | Default | Constraints | Description |
+|------------|-------------|---------|-------------|-------------|
+| `gamma` | `FITNESS_GAMMA` | 0.99 | [0.0, 1.0] | Reverse-time discount factor |
+| `lambda` | `FITNESS_LAMBDA` | 0.1 | ≥ 0.0 | Auxiliary per-turn reward scaling |
+| `loop_penalty_weight` | `FITNESS_LOOP_PENALTY_WEIGHT` | 1.0 | ≥ 0.0 | Loop penalty term weight |
+| `step_efficiency_weight` | `FITNESS_STEP_EFFICIENCY_WEIGHT` | 1.0 | ≥ 0.0 | Step efficiency term weight |
+| `max_steps` | `FITNESS_MAX_STEPS` | 50 | ≥ 1 | Max steps for efficiency normalization |
+| `loop_window` | `FITNESS_LOOP_WINDOW` | 3 | ≥ 1 | Sliding window for loop detection |
 
 ```python
-from trajectory_aware_gym.config import FitnessConfig
+from trajectory_aware_gym.config import settings
 from trajectory_aware_gym.fitness import CompositeFitness
 
-config = FitnessConfig(fitness_gamma=0.95, fitness_lambda=0.2)
+# Use YAML defaults
+fitness = CompositeFitness(settings.fitness)
+
+# Override specific values for ablation
+config = settings.fitness.model_copy(update={"gamma": 0.95, "lambda_": 0.2})
 fitness = CompositeFitness(config)
 ```
 

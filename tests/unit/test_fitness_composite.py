@@ -7,9 +7,14 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from trajectory_aware_gym.adapters.trajectory_logger import TrajectoryLog, TrajectoryStep
-from trajectory_aware_gym.config import FitnessConfig
+from trajectory_aware_gym.config import FitnessModel, settings
 from trajectory_aware_gym.fitness.composite import CompositeFitness
 from trajectory_aware_gym.fitness.types import FitnessFunction, FitnessTerm
+
+
+def _cfg(**overrides: object) -> FitnessModel:
+    """Build a FitnessModel from YAML defaults with specific overrides."""
+    return settings.fitness.model_copy(update=overrides)
 
 
 @pytest.fixture
@@ -54,12 +59,17 @@ class TestCompositeFitness:
     """Tests for the composite fitness orchestrator."""
 
     def test_protocol_conformance(self):
-        fitness = CompositeFitness(FitnessConfig(_env_file=None))
+        fitness = CompositeFitness(settings.fitness)
         assert isinstance(fitness, FitnessFunction)
 
+    def test_default_config_uses_settings(self, make_trajectory):
+        fitness = CompositeFitness()
+        trajectory = make_trajectory(rewards=[0.0, 1.0])
+        result = fitness.evaluate(trajectory)
+        assert result.score > 0
+
     def test_breakdown_has_three_terms(self, make_trajectory):
-        config = FitnessConfig(_env_file=None)
-        fitness = CompositeFitness(config)
+        fitness = CompositeFitness(settings.fitness)
         trajectory = make_trajectory(rewards=[0.0, 1.0])
         result = fitness.evaluate(trajectory)
 
@@ -72,19 +82,17 @@ class TestCompositeFitness:
         ]
 
     def test_score_equals_evaluate_score(self, make_trajectory):
-        config = FitnessConfig(_env_file=None)
-        fitness = CompositeFitness(config)
+        fitness = CompositeFitness(settings.fitness)
         trajectory = make_trajectory(rewards=[0.0, 0.0, 1.0])
         assert fitness.score(trajectory) == fitness.evaluate(trajectory).score
 
     def test_score_equals_sum_of_weighted_terms(self, make_trajectory):
-        config = FitnessConfig(
-            fitness_gamma=0.5,
-            fitness_lambda=0.1,
-            fitness_loop_penalty_weight=1.0,
-            fitness_step_efficiency_weight=1.0,
-            fitness_max_steps=50,
-            _env_file=None,
+        config = _cfg(
+            gamma=0.5,
+            lambda_=0.1,
+            loop_penalty_weight=1.0,
+            step_efficiency_weight=1.0,
+            max_steps=50,
         )
         fitness = CompositeFitness(config)
         trajectory = make_trajectory(rewards=[0.0, 1.0])
@@ -94,7 +102,7 @@ class TestCompositeFitness:
         assert result.score == pytest.approx(expected_total, abs=1e-9)
 
     def test_metadata_captures_config(self, make_trajectory):
-        config = FitnessConfig(fitness_gamma=0.8, fitness_lambda=0.2, _env_file=None)
+        config = _cfg(gamma=0.8, lambda_=0.2)
         fitness = CompositeFitness(config)
         trajectory = make_trajectory(rewards=[1.0], environment_id="math12k")
         result = fitness.evaluate(trajectory)
@@ -105,15 +113,13 @@ class TestCompositeFitness:
         assert "run_id" in result.metadata
 
     def test_trajectory_length_in_result(self, make_trajectory):
-        config = FitnessConfig(_env_file=None)
-        fitness = CompositeFitness(config)
+        fitness = CompositeFitness(settings.fitness)
         trajectory = make_trajectory(rewards=[0.0, 0.0, 0.0, 1.0])
         result = fitness.evaluate(trajectory)
         assert result.trajectory_length == 4
 
     def test_empty_trajectory(self, make_trajectory):
-        config = FitnessConfig(_env_file=None)
-        fitness = CompositeFitness(config)
+        fitness = CompositeFitness(settings.fitness)
         trajectory = make_trajectory(rewards=[])
         result = fitness.evaluate(trajectory)
 
@@ -127,11 +133,10 @@ class TestCompositeFitnessAblation:
     """Tests for ablation support via weight zeroing."""
 
     def test_disable_loop_penalty(self, make_trajectory):
-        config = FitnessConfig(
-            fitness_loop_penalty_weight=0.0,
-            fitness_gamma=0.5,
-            fitness_lambda=0.0,
-            _env_file=None,
+        config = _cfg(
+            loop_penalty_weight=0.0,
+            gamma=0.5,
+            lambda_=0.0,
         )
         fitness = CompositeFitness(config)
         # All identical actions should produce loops, but penalty weight is 0
@@ -143,11 +148,10 @@ class TestCompositeFitnessAblation:
         assert loop_term.weighted_value == 0.0  # But zeroed out by weight
 
     def test_disable_step_efficiency(self, make_trajectory):
-        config = FitnessConfig(
-            fitness_step_efficiency_weight=0.0,
-            fitness_gamma=0.5,
-            fitness_lambda=0.0,
-            _env_file=None,
+        config = _cfg(
+            step_efficiency_weight=0.0,
+            gamma=0.5,
+            lambda_=0.0,
         )
         fitness = CompositeFitness(config)
         trajectory = make_trajectory(rewards=[0.0, 1.0])
@@ -158,12 +162,11 @@ class TestCompositeFitnessAblation:
         assert eff_term.weighted_value == 0.0  # But zeroed out
 
     def test_only_discounted_return(self, make_trajectory):
-        config = FitnessConfig(
-            fitness_loop_penalty_weight=0.0,
-            fitness_step_efficiency_weight=0.0,
-            fitness_gamma=0.5,
-            fitness_lambda=0.0,
-            _env_file=None,
+        config = _cfg(
+            loop_penalty_weight=0.0,
+            step_efficiency_weight=0.0,
+            gamma=0.5,
+            lambda_=0.0,
         )
         fitness = CompositeFitness(config)
         trajectory = make_trajectory(rewards=[0.0, 1.0], actions=["a", "a"])
@@ -190,5 +193,5 @@ class TestFitnessTermProtocol:
 
         module = importlib.import_module(module_path)
         cls = getattr(module, class_name)
-        instance = cls(FitnessConfig(_env_file=None))
+        instance = cls(settings.fitness)
         assert isinstance(instance, FitnessTerm)
