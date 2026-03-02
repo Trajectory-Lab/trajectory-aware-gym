@@ -14,7 +14,14 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    ValidationError,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 from trajectory_aware_gym.config import ProjectPaths
 
@@ -114,10 +121,22 @@ class TrajectoryLog(BaseModel):
     initial_info: dict[str, Any] = Field(default_factory=dict)
     steps: list[TrajectoryStep] = Field(default_factory=list)
     total_reward: float
-    num_steps: int = 0
     episode_outcome: EpisodeOutcome | None = None
-    total_tokens: int = 0
-    total_cost_usd: float = 0.0
+
+    @computed_field
+    @property
+    def num_steps(self) -> int:
+        return len(self.steps)
+
+    @computed_field
+    @property
+    def total_tokens(self) -> int:
+        return sum(step.llm_call.total_tokens for step in self.steps if step.llm_call)
+
+    @computed_field
+    @property
+    def total_cost_usd(self) -> float:
+        return sum(step.llm_call.cost_usd or 0.0 for step in self.steps if step.llm_call)
 
     @field_validator("environment_id", "initial_observation")
     @classmethod
@@ -255,13 +274,6 @@ class TrajectoryLogger:
         if self.initial_observation is None:
             raise ValueError("initial state is not set; call set_initial_state() first")
 
-        total_tokens = sum(s.llm_call.total_tokens for s in self.steps if s.llm_call)
-        total_cost = sum(
-            s.llm_call.cost_usd
-            for s in self.steps
-            if s.llm_call and s.llm_call.cost_usd is not None
-        )
-
         return TrajectoryLog(
             environment_id=self.environment_id,
             seed=self.seed,
@@ -272,10 +284,7 @@ class TrajectoryLogger:
             initial_info=self.initial_info,
             steps=self.steps,
             total_reward=sum(step.reward for step in self.steps),
-            num_steps=len(self.steps),
             episode_outcome=_derive_outcome(self.steps),
-            total_tokens=total_tokens,
-            total_cost_usd=total_cost,
         )
 
     def save(self, project_paths: ProjectPaths | None = None) -> Path:

@@ -1,62 +1,67 @@
-# Normalized Objective-Profile Fitness (Supplementary Design)
+# Trajectory-Aware Fitness Objective Profile (Issue #16)
 
-> Adapted from the objective-profile approach proposed by @mattjm100 in PR #118.
-> These ideas complement the primary fitness implementation (Equation 3.1) and
-> are available as experimental fitness terms (`NormalizedProgressTerm`,
-> `ActionStabilityTerm`) for ablation studies.
+This document defines a trajectory fitness approach based on a **normalized objective profile** with both scalar score and structured diagnostics.
 
-## Motivation
+## Goals
 
-The primary fitness function uses raw, unbounded term values combined via
-weighted sum. The objective-profile approach normalizes all components to
-`[0, 1]`, which can improve stability when combining signals across
-environments with different reward scales.
+- Produce a single scalar score for optimization loops.
+- Preserve interpretable per-objective component values for analysis.
+- Keep scoring stable across environments with different reward scales.
+
+## Distinct Design Choice
+
+Instead of a raw weighted sum of unnormalized terms, this design uses:
+
+1. **Normalized components** in `[0, 1]`
+2. **Configurable objective weights** that sum to 1.0 by default
+3. **Diagnostic messages** for failure modes (looping, no progress, truncated runs)
 
 ## Objective Components
 
-| Component     | Range   | Description |
-|---------------|---------|-------------|
-| **outcome**   | [0, 1]  | Terminal success bonus + normalized final reward signal |
-| **progress**  | [0, 1]  | Stepwise reward trend quality (non-decreasing ratio) |
-| **efficiency**| [0, 1]  | Fewer steps relative to `max_steps` |
-| **stability** | [0, 1]  | Penalizes action repetition (70%) and oscillation (30%) |
+- `outcome`: Terminal success + normalized final reward signal.
+- `progress`: Stepwise reward trend quality (positive-improvement ratio).
+- `efficiency`: Fewer steps relative to `max_steps`.
+- `stability`: Penalizes action repetition and action oscillation.
+
+All components are clipped to `[0, 1]`.
 
 ## Scalar Fitness
 
-Given component vector **c** and weight vector **w**:
+Let component vector be:
 
-```
-F(τ) = Σᵢ wᵢ · cᵢ
-```
+$$
+\mathbf{c} = (c_{outcome}, c_{progress}, c_{efficiency}, c_{stability})
+$$
 
-Default weights: outcome=0.40, progress=0.25, efficiency=0.20, stability=0.15.
+and weights:
 
-## Integration with Primary Fitness
+$$
+\mathbf{w} = (w_{outcome}, w_{progress}, w_{efficiency}, w_{stability})
+$$
 
-Rather than replacing the discounted return formula (Eq. 3.1), these
-normalized components are exposed as individual `FitnessTerm` implementations:
+The scalar score is:
 
-- `NormalizedProgressTerm` — reward trend quality
-- `ActionStabilityTerm` — repetition + oscillation penalty
+$$
+F(\tau) = \sum_i w_i c_i
+$$
 
-These can be added to `CompositeFitness` alongside the existing terms for
-ablation experiments testing whether normalized signals improve convergence.
+with default:
 
-## Diagnostic Signals
+- `outcome=0.40`
+- `progress=0.25`
+- `efficiency=0.20`
+- `stability=0.15`
 
-The profile approach also suggests diagnostic annotations:
+## Structured Feedback
 
-| Condition                   | Diagnostic tag              |
-|-----------------------------|-----------------------------|
-| Trajectory truncated        | `trajectory_truncated`      |
-| Progress component < 0.4   | `low_progress`              |
-| Stability component < 0.5  | `unstable_action_pattern`   |
-| Outcome component < 0.5    | `weak_outcome_signal`       |
+Scoring returns:
 
-These can be incorporated into `FitnessResult.metadata` when the
-experimental terms are enabled.
+- Scalar fitness value
+- Per-component normalized values
+- Objective weights used
+- Diagnostic notes for interpretability/debugging
 
-## Validation Expectations
+## Controlled Validation Expectations
 
 - Successful, short, non-repetitive trajectories should rank highest.
 - Failed or truncated trajectories should rank lower.
