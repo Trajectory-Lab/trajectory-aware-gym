@@ -51,10 +51,13 @@ Or install via package managers:
    poe setup
    ```
 
-3. **Configure AWS** (copy and edit):
+3. **Configure credentials** (copy and edit):
    ```bash
    cp .env.example .env
+   # Add your AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
    ```
+
+   Non-sensitive defaults live in [`trajectory-aware-gym.yaml`](src/trajectory_aware_gym/config/trajectory-aware-gym.yaml). Env vars in `.env` override YAML values. See [docs/configuration.md](docs/configuration.md) for details.
 
 ## Quickstart
 
@@ -85,7 +88,7 @@ src/trajectory_aware_gym/
 ├── adapters/    # GEM-DSPy integration
 ├── fitness/     # Trajectory-aware fitness functions
 ├── optimizers/  # GEPA configuration
-├── config/      # Settings and AWS configuration
+├── config/      # Centralized settings (YAML + env var loading)
 └── utils/       # Utilities
 ```
 
@@ -133,8 +136,10 @@ poe typecheck
 
 ## Documentation
 
+- **[docs/configuration.md](docs/configuration.md)**: Configuration guide — YAML schema, env var overrides, adding models
 - **[AGENTS.md](AGENTS.md)**: Comprehensive guidelines for AI coding assistants working on this project
-- **[.env.example](.env.example)**: Example environment configuration with AWS Bedrock settings
+- **[.env.example](.env.example)**: Example environment configuration with secrets
+- **[trajectory-aware-gym.yaml](src/trajectory_aware_gym/config/trajectory-aware-gym.yaml)**: Non-sensitive default configuration (checked into git)
 - **[test_bedrock.ipynb](scripts/notebooks/test_bedrock.ipynb)**: Interactive notebook for testing setup and exploring LLM integrations
 
 ## License
