@@ -13,13 +13,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
+
 from pydantic import (
     BaseModel,
     Field,
     ValidationError,
+    computed_field,
     field_validator,
     model_validator,
-    computed_field,
 )
 
 from trajectory_aware_gym.config import ProjectPaths
@@ -279,13 +280,6 @@ class TrajectoryLogger:
         if self.initial_observation is None:
             raise ValueError("initial state is not set; call set_initial_state() first")
 
-        total_tokens = sum(s.llm_call.total_tokens for s in self.steps if s.llm_call)
-        total_cost = sum(
-            s.llm_call.cost_usd
-            for s in self.steps
-            if s.llm_call and s.llm_call.cost_usd is not None
-        )
-
         return TrajectoryLog(
             environment_id=self.environment_id,
             seed=self.seed,
@@ -296,10 +290,7 @@ class TrajectoryLogger:
             initial_info=self.initial_info,
             steps=self.steps,
             total_reward=sum(step.reward for step in self.steps),
-            num_steps=len(self.steps),
             episode_outcome=_derive_outcome(self.steps),
-            total_tokens=total_tokens,
-            total_cost_usd=total_cost,
         )
 
     def save(self, project_paths: ProjectPaths | None = None) -> Path:
