@@ -1,6 +1,36 @@
 """Trajectory logging utilities for GEM environment episodes.
 
+Public API
+----------
+- ``TrajectoryLogger``              -- collect and persist per-step trajectory data
+- ``extract_llm_calls_from_tracker`` -- convert ``dspy.track_usage()`` output to our schema
+
+DSPy integration example::
+
+    from trajectory_aware_gym.adapters import TrajectoryLogger, extract_llm_calls_from_tracker
+
+    logger = TrajectoryLogger(environment_id="math:Math12K", seed=42)
+    logger.set_initial_state(observation, info)
+
+    for step in range(max_steps):
+        with dspy.track_usage() as tracker:
+            prediction = module(observation=observation)
+
+        llm_calls = extract_llm_calls_from_tracker(tracker)   # <-- convert DSPy usage
+
+        observation, reward, terminated, truncated, info = env.step(action)
+        logger.add_step(                                       # <-- record the step
+            action=action, observation=observation, reward=reward,
+            terminated=terminated, truncated=truncated, info=info,
+            llm_calls=llm_calls,
+        )
+        if terminated or truncated:
+            break
+
+    trajectory_log = logger.build_log()
+
 Schema version history:
+    1.1.0 - llm_call -> llm_calls (list) to support multiple LM forwards per env step (DSPy).
     1.0.0 - Initial schema with tool call tracking, LLM metadata, and cost aggregation.
 """
 
@@ -20,7 +50,7 @@ from trajectory_aware_gym.config import ProjectPaths
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "1.1.0"
 
 type EpisodeOutcome = Literal["success", "failure", "truncated"]
 
@@ -76,9 +106,7 @@ class TrajectoryStep(BaseModel):
     info: dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime | None = None
     tool_calls: list[ToolCall] = Field(default_factory=list)
-    # Assumes at most one LLM call per env step. F3 (DSPy integration) may need
-    # llm_calls: list[LLMCallMetadata] if DSPy issues multiple forward() per step.
-    llm_call: LLMCallMetadata | None = None
+    llm_calls: list[LLMCallMetadata] = Field(default_factory=list)
 
     @field_validator("reward")
     @classmethod
@@ -143,7 +171,7 @@ class TrajectoryLog(BaseModel):
                 f"num_steps ({self.num_steps}) must equal len(steps) ({len(self.steps)})"
             )
 
-        computed_tokens = sum(step.llm_call.total_tokens for step in self.steps if step.llm_call)
+        computed_tokens = sum(call.total_tokens for step in self.steps for call in step.llm_calls)
         if self.total_tokens != computed_tokens:
             raise ValueError(
                 f"total_tokens ({self.total_tokens}) must equal "
@@ -151,9 +179,10 @@ class TrajectoryLog(BaseModel):
             )
 
         computed_cost = sum(
-            step.llm_call.cost_usd
+            call.cost_usd
             for step in self.steps
-            if step.llm_call and step.llm_call.cost_usd is not None
+            for call in step.llm_calls
+            if call.cost_usd is not None
         )
         if abs(self.total_cost_usd - computed_cost) > 1e-9:
             raise ValueError(
@@ -196,7 +225,10 @@ def _derive_outcome(steps: list[TrajectoryStep]) -> EpisodeOutcome | None:
 
 
 class TrajectoryLogger:
-    """Collects and persists validated trajectory logs for one episode."""
+    """Collects and persists validated trajectory logs for one episode.
+
+    See module docstring for DSPy integration example.
+    """
 
     def __init__(
         self,
@@ -232,7 +264,7 @@ class TrajectoryLogger:
         info: dict[str, Any] | None = None,
         timestamp: datetime | None = None,
         tool_calls: list[ToolCall] | None = None,
-        llm_call: LLMCallMetadata | None = None,
+        llm_calls: list[LLMCallMetadata] | None = None,
     ) -> TrajectoryStep:
         """Append a validated transition to the trajectory."""
         step = TrajectoryStep(
@@ -245,7 +277,7 @@ class TrajectoryLogger:
             info=info or {},
             timestamp=timestamp or datetime.now(UTC),
             tool_calls=tool_calls or [],
-            llm_call=llm_call,
+            llm_calls=llm_calls or [],
         )
         self.steps.append(step)
         return step
@@ -255,11 +287,9 @@ class TrajectoryLogger:
         if self.initial_observation is None:
             raise ValueError("initial state is not set; call set_initial_state() first")
 
-        total_tokens = sum(s.llm_call.total_tokens for s in self.steps if s.llm_call)
+        total_tokens = sum(call.total_tokens for s in self.steps for call in s.llm_calls)
         total_cost = sum(
-            s.llm_call.cost_usd
-            for s in self.steps
-            if s.llm_call and s.llm_call.cost_usd is not None
+            call.cost_usd for s in self.steps for call in s.llm_calls if call.cost_usd is not None
         )
 
         return TrajectoryLog(
@@ -333,3 +363,39 @@ def filter_trajectories(
     if environment_id is not None:
         result = [t for t in result if t.environment_id == environment_id]
     return result
+
+
+# ---------------------------------------------------------------------------
+# DSPy usage tracking helpers (F3)
+# ---------------------------------------------------------------------------
+
+
+def extract_llm_calls_from_tracker(tracker: Any) -> list[LLMCallMetadata]:
+    """Convert a ``dspy.track_usage()`` tracker into LLMCallMetadata entries.
+
+    ``tracker.usage_data`` is ``dict[str, list[dict]]`` where each key is a
+    model name and each dict contains ``prompt_tokens``, ``completion_tokens``,
+    and ``total_tokens`` from LiteLLM.
+
+    Usage::
+
+        with dspy.track_usage() as tracker:
+            prediction = module(observation=obs)
+        llm_calls = extract_llm_calls_from_tracker(tracker)
+        logger.add_step(..., llm_calls=llm_calls)
+    """
+    calls: list[LLMCallMetadata] = []
+    for model_id, usages in getattr(tracker, "usage_data", {}).items():
+        for usage in usages:
+            prompt = usage.get("prompt_tokens", 0)
+            completion = usage.get("completion_tokens", 0)
+            calls.append(
+                LLMCallMetadata(
+                    model_id=model_id,
+                    prompt_tokens=prompt,
+                    completion_tokens=completion,
+                    total_tokens=prompt + completion,
+                    cost_usd=usage.get("cost", None),
+                )
+            )
+    return calls

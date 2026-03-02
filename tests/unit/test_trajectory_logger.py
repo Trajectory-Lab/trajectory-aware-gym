@@ -26,6 +26,7 @@ from trajectory_aware_gym.adapters.trajectory_logger import (
     TrajectoryLogger,
     TrajectoryStep,
     _derive_outcome,
+    extract_llm_calls_from_tracker,
     filter_trajectories,
     load_all_trajectories,
     load_trajectory,
@@ -45,7 +46,7 @@ def _make_step(
     truncated: bool = False,
     info: dict[str, Any] | None = None,
     tool_calls: list[ToolCall] | None = None,
-    llm_call: LLMCallMetadata | None = None,
+    llm_calls: list[LLMCallMetadata] | None = None,
     timestamp: datetime | None = None,
 ) -> TrajectoryStep:
     return TrajectoryStep(
@@ -57,7 +58,7 @@ def _make_step(
         truncated=truncated,
         info=info or {},
         tool_calls=tool_calls or [],
-        llm_call=llm_call,
+        llm_calls=llm_calls or [],
         timestamp=timestamp,
     )
 
@@ -91,9 +92,9 @@ def _make_log(
         "steps": steps,
         "total_reward": sum(s.reward for s in steps),
         "num_steps": len(steps),
-        "total_tokens": sum(s.llm_call.total_tokens for s in steps if s.llm_call),
+        "total_tokens": sum(call.total_tokens for s in steps for call in s.llm_calls),
         "total_cost_usd": sum(
-            s.llm_call.cost_usd for s in steps if s.llm_call and s.llm_call.cost_usd is not None
+            call.cost_usd for s in steps for call in s.llm_calls if call.cost_usd is not None
         ),
     }
     defaults.update(overrides)
@@ -248,16 +249,23 @@ class TestTrajectoryStep:
         assert len(step.tool_calls) == 1
         assert step.tool_calls[0].tool_name == "python_exec"
 
-    def test_step_with_llm_call(self):
+    def test_step_with_llm_calls(self):
         meta = _make_llm_call()
-        step = _make_step(llm_call=meta)
-        assert step.llm_call is not None
-        assert step.llm_call.total_tokens == 30
+        step = _make_step(llm_calls=[meta])
+        assert len(step.llm_calls) == 1
+        assert step.llm_calls[0].total_tokens == 30
+
+    def test_step_with_multiple_llm_calls(self):
+        calls = [_make_llm_call(10, 20, 0.01), _make_llm_call(5, 15, 0.005)]
+        step = _make_step(llm_calls=calls)
+        assert len(step.llm_calls) == 2
+        assert step.llm_calls[0].total_tokens == 30
+        assert step.llm_calls[1].total_tokens == 20
 
     def test_step_defaults_no_tool_calls_or_llm(self):
         step = _make_step()
         assert step.tool_calls == []
-        assert step.llm_call is None
+        assert step.llm_calls == []
         assert step.timestamp is None
 
     def test_step_with_timestamp(self):
@@ -330,12 +338,12 @@ class TestTrajectoryLog:
             _make_log(steps=[_make_step()], num_steps=5)
 
     def test_total_tokens_mismatch_rejected(self):
-        step = _make_step(llm_call=_make_llm_call(prompt=10, completion=20))
+        step = _make_step(llm_calls=[_make_llm_call(prompt=10, completion=20)])
         with pytest.raises(ValidationError, match="total_tokens"):
             _make_log(steps=[step], total_tokens=999)
 
     def test_total_cost_mismatch_rejected(self):
-        step = _make_step(llm_call=_make_llm_call(cost=0.05))
+        step = _make_step(llm_calls=[_make_llm_call(cost=0.05)])
         with pytest.raises(ValidationError, match="total_cost_usd"):
             _make_log(steps=[step], total_cost_usd=99.0)
 
@@ -352,15 +360,15 @@ class TestTrajectoryLog:
         assert log.episode_outcome == outcome
 
     def test_log_with_multiple_llm_steps(self):
-        s1 = _make_step(step_index=1, llm_call=_make_llm_call(10, 20, 0.01))
-        s2 = _make_step(step_index=2, llm_call=_make_llm_call(15, 25, 0.02))
+        s1 = _make_step(step_index=1, llm_calls=[_make_llm_call(10, 20, 0.01)])
+        s2 = _make_step(step_index=2, llm_calls=[_make_llm_call(15, 25, 0.02)])
         log = _make_log(steps=[s1, s2])
         assert log.total_tokens == 70
         assert abs(log.total_cost_usd - 0.03) < 1e-9
 
     def test_log_with_none_cost_steps(self):
-        s1 = _make_step(step_index=1, llm_call=_make_llm_call(10, 20, cost=None))
-        s2 = _make_step(step_index=2, llm_call=_make_llm_call(5, 5, cost=0.01))
+        s1 = _make_step(step_index=1, llm_calls=[_make_llm_call(10, 20, cost=None)])
+        s2 = _make_step(step_index=2, llm_calls=[_make_llm_call(5, 5, cost=0.01)])
         log = _make_log(steps=[s1, s2])
         assert abs(log.total_cost_usd - 0.01) < 1e-9
 
@@ -388,6 +396,27 @@ class TestTrajectoryLog:
         log = _make_log(steps=[s1, s2])
         assert log.total_tokens == 0
         assert log.total_cost_usd == 0.0
+
+    def test_multiple_llm_calls_per_step_aggregation(self):
+        s1 = _make_step(
+            step_index=1,
+            llm_calls=[_make_llm_call(10, 20, 0.01), _make_llm_call(5, 15, 0.005)],
+        )
+        s2 = _make_step(
+            step_index=2,
+            llm_calls=[_make_llm_call(8, 12, 0.008)],
+        )
+        log = _make_log(steps=[s1, s2])
+        assert log.total_tokens == 30 + 20 + 20
+        assert abs(log.total_cost_usd - 0.023) < 1e-9
+
+    def test_cost_zero_differs_from_none(self):
+        s1 = _make_step(step_index=1, llm_calls=[_make_llm_call(10, 20, cost=0.0)])
+        s2 = _make_step(step_index=2, llm_calls=[_make_llm_call(10, 20, cost=None)])
+        log = _make_log(steps=[s1, s2])
+        assert log.total_cost_usd == 0.0
+        assert log.steps[0].llm_calls[0].cost_usd == 0.0
+        assert log.steps[1].llm_calls[0].cost_usd is None
 
 
 # ===========================================================================
@@ -571,7 +600,7 @@ class TestTrajectoryLogger:
             reward=0.0,
             terminated=False,
             truncated=False,
-            llm_call=_make_llm_call(10, 20, 0.01),
+            llm_calls=[_make_llm_call(10, 20, 0.01)],
         )
         logger.add_step(
             action="a2",
@@ -579,12 +608,38 @@ class TestTrajectoryLogger:
             reward=1.0,
             terminated=True,
             truncated=False,
-            llm_call=_make_llm_call(15, 25, 0.02),
+            llm_calls=[_make_llm_call(15, 25, 0.02)],
         )
         log = logger.build_log()
         assert log.total_tokens == 70
         assert abs(log.total_cost_usd - 0.03) < 1e-9
         assert log.num_steps == 2
+
+    def test_build_log_multi_call_per_step_aggregation(self):
+        logger = TrajectoryLogger(environment_id="math:Math12K")
+        logger.set_initial_state("problem")
+        logger.add_step(
+            action="think",
+            observation="hint",
+            reward=0.0,
+            terminated=False,
+            truncated=False,
+            llm_calls=[
+                _make_llm_call(10, 20, 0.01),
+                _make_llm_call(5, 15, 0.005),
+            ],
+        )
+        logger.add_step(
+            action="answer",
+            observation="correct",
+            reward=1.0,
+            terminated=True,
+            truncated=False,
+            llm_calls=[_make_llm_call(8, 12, 0.008)],
+        )
+        log = logger.build_log()
+        assert log.total_tokens == 30 + 20 + 20
+        assert abs(log.total_cost_usd - 0.023) < 1e-9
 
     def test_add_step_with_tool_calls(self):
         logger = TrajectoryLogger(environment_id="code:CodeContest")
@@ -629,7 +684,7 @@ class TestTrajectoryLogger:
             reward=1.0,
             terminated=True,
             truncated=False,
-            llm_call=_make_llm_call(5, 10, 0.005),
+            llm_calls=[_make_llm_call(5, 10, 0.005)],
         )
         file_path = logger.save(project_paths=paths)
         payload = json.loads(file_path.read_text(encoding="utf-8"))
@@ -745,7 +800,7 @@ class TestTrajectoryLoadAndFilter:
             terminated=True,
             truncated=False,
             tool_calls=[tc],
-            llm_call=_make_llm_call(20, 30, 0.02),
+            llm_calls=[_make_llm_call(20, 30, 0.02)],
         )
         file_path = logger.save(project_paths=paths)
 
@@ -754,8 +809,34 @@ class TestTrajectoryLoadAndFilter:
         assert loaded.episode_outcome == "success"
         assert len(loaded.steps[0].tool_calls) == 1
         assert loaded.steps[0].tool_calls[0].tool_name == "python_exec"
-        assert loaded.steps[0].llm_call is not None
-        assert loaded.steps[0].llm_call.total_tokens == 50
+        assert len(loaded.steps[0].llm_calls) == 1
+        assert loaded.steps[0].llm_calls[0].total_tokens == 50
+
+    def test_round_trip_multiple_llm_calls_per_step(self, tmp_path):
+        paths = ProjectPaths(root=tmp_path)
+        logger = TrajectoryLogger(environment_id="math:Math12K", seed=7)
+        logger.set_initial_state("problem")
+        logger.add_step(
+            action="think+act",
+            observation="result",
+            reward=1.0,
+            terminated=True,
+            truncated=False,
+            llm_calls=[
+                _make_llm_call(10, 20, 0.01),
+                _make_llm_call(5, 15, None),
+            ],
+        )
+        file_path = logger.save(project_paths=paths)
+
+        loaded = load_trajectory(file_path)
+        assert len(loaded.steps[0].llm_calls) == 2
+        assert loaded.steps[0].llm_calls[0].total_tokens == 30
+        assert loaded.steps[0].llm_calls[0].cost_usd == 0.01
+        assert loaded.steps[0].llm_calls[1].total_tokens == 20
+        assert loaded.steps[0].llm_calls[1].cost_usd is None
+        assert loaded.total_tokens == 50
+        assert abs(loaded.total_cost_usd - 0.01) < 1e-9
 
     @pytest.mark.parametrize(
         ("outcome", "expected_count"),
@@ -807,3 +888,181 @@ class TestTrajectoryLoadAndFilter:
         filtered = filter_trajectories(logs, environment_id="math:Math12K")
         assert len(filtered) == 1
         assert filtered[0].environment_id == "math:Math12K"
+
+
+# ===========================================================================
+# F3: extract_llm_calls_from_tracker Tests
+# ===========================================================================
+
+
+class _FakeTracker:
+    """Mimics dspy.track_usage() tracker with a usage_data dict."""
+
+    def __init__(self, usage_data: dict[str, list[dict]]):
+        self.usage_data = usage_data
+
+
+class TestExtractLLMCallsFromTracker:
+    """Tests for the DSPy usage tracker conversion helper."""
+
+    def test_single_model_single_call(self):
+        tracker = _FakeTracker(
+            {
+                "bedrock/qwen3-1.7b": [
+                    {"prompt_tokens": 10, "completion_tokens": 20},
+                ],
+            }
+        )
+        calls = extract_llm_calls_from_tracker(tracker)
+        assert len(calls) == 1
+        assert calls[0].model_id == "bedrock/qwen3-1.7b"
+        assert calls[0].prompt_tokens == 10
+        assert calls[0].completion_tokens == 20
+        assert calls[0].total_tokens == 30
+
+    def test_single_model_multiple_calls(self):
+        tracker = _FakeTracker(
+            {
+                "bedrock/qwen3-1.7b": [
+                    {"prompt_tokens": 10, "completion_tokens": 20},
+                    {"prompt_tokens": 15, "completion_tokens": 25},
+                ],
+            }
+        )
+        calls = extract_llm_calls_from_tracker(tracker)
+        assert len(calls) == 2
+        assert calls[0].total_tokens == 30
+        assert calls[1].total_tokens == 40
+
+    def test_multiple_models(self):
+        tracker = _FakeTracker(
+            {
+                "bedrock/qwen3-1.7b": [
+                    {"prompt_tokens": 10, "completion_tokens": 20},
+                ],
+                "bedrock/claude-sonnet": [
+                    {"prompt_tokens": 100, "completion_tokens": 200},
+                ],
+            }
+        )
+        calls = extract_llm_calls_from_tracker(tracker)
+        assert len(calls) == 2
+        model_ids = {c.model_id for c in calls}
+        assert model_ids == {"bedrock/qwen3-1.7b", "bedrock/claude-sonnet"}
+
+    def test_empty_usage_data(self):
+        tracker = _FakeTracker({})
+        calls = extract_llm_calls_from_tracker(tracker)
+        assert calls == []
+
+    def test_no_usage_data_attribute(self):
+        tracker = object()
+        calls = extract_llm_calls_from_tracker(tracker)
+        assert calls == []
+
+    def test_cost_included_when_present(self):
+        tracker = _FakeTracker(
+            {
+                "bedrock/qwen3-1.7b": [
+                    {"prompt_tokens": 10, "completion_tokens": 20, "cost": 0.005},
+                ],
+            }
+        )
+        calls = extract_llm_calls_from_tracker(tracker)
+        assert calls[0].cost_usd == 0.005
+
+    def test_cost_none_when_absent(self):
+        tracker = _FakeTracker(
+            {
+                "bedrock/qwen3-1.7b": [
+                    {"prompt_tokens": 10, "completion_tokens": 20},
+                ],
+            }
+        )
+        calls = extract_llm_calls_from_tracker(tracker)
+        assert calls[0].cost_usd is None
+
+    def test_missing_token_fields_default_to_zero(self):
+        tracker = _FakeTracker(
+            {
+                "bedrock/qwen3-1.7b": [{}],
+            }
+        )
+        calls = extract_llm_calls_from_tracker(tracker)
+        assert len(calls) == 1
+        assert calls[0].prompt_tokens == 0
+        assert calls[0].completion_tokens == 0
+        assert calls[0].total_tokens == 0
+
+    def test_integrates_with_add_step(self):
+        tracker = _FakeTracker(
+            {
+                "bedrock/qwen3-1.7b": [
+                    {"prompt_tokens": 10, "completion_tokens": 20, "cost": 0.01},
+                    {"prompt_tokens": 5, "completion_tokens": 15, "cost": 0.005},
+                ],
+            }
+        )
+        llm_calls = extract_llm_calls_from_tracker(tracker)
+
+        logger = TrajectoryLogger(environment_id="math:Math12K")
+        logger.set_initial_state("problem")
+        logger.add_step(
+            action="answer",
+            observation="correct",
+            reward=1.0,
+            terminated=True,
+            truncated=False,
+            llm_calls=llm_calls,
+        )
+        log = logger.build_log()
+        assert log.total_tokens == 50
+        assert abs(log.total_cost_usd - 0.015) < 1e-9
+
+    def test_extra_keys_in_usage_dict_ignored(self):
+        tracker = _FakeTracker(
+            {
+                "bedrock/qwen3-1.7b": [
+                    {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 20,
+                        "future_field": "whatever",
+                        "cache_hits": 3,
+                    },
+                ],
+            }
+        )
+        calls = extract_llm_calls_from_tracker(tracker)
+        assert len(calls) == 1
+        assert calls[0].total_tokens == 30
+
+    def test_cost_zero_is_preserved(self):
+        tracker = _FakeTracker(
+            {
+                "bedrock/qwen3-1.7b": [
+                    {"prompt_tokens": 0, "completion_tokens": 0, "cost": 0.0},
+                ],
+            }
+        )
+        calls = extract_llm_calls_from_tracker(tracker)
+        assert calls[0].cost_usd == 0.0
+        assert calls[0].cost_usd is not None
+
+    def test_multiple_models_multiple_calls_each(self):
+        tracker = _FakeTracker(
+            {
+                "bedrock/qwen3-1.7b": [
+                    {"prompt_tokens": 10, "completion_tokens": 20, "cost": 0.01},
+                    {"prompt_tokens": 5, "completion_tokens": 15, "cost": 0.005},
+                ],
+                "bedrock/claude-sonnet": [
+                    {"prompt_tokens": 100, "completion_tokens": 200, "cost": 0.1},
+                ],
+            }
+        )
+        calls = extract_llm_calls_from_tracker(tracker)
+        assert len(calls) == 3
+        total_tokens = sum(c.total_tokens for c in calls)
+        assert total_tokens == 30 + 20 + 300
+        total_cost = sum(c.cost_usd for c in calls if c.cost_usd is not None)
+        assert abs(total_cost - 0.115) < 1e-9
