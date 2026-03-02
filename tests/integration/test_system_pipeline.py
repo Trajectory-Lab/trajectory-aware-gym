@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import json
+import types
 
 import pytest
 
-from trajectory_aware_gym.adapters.trajectory_logger import TrajectoryLog, TrajectoryLogger
+from trajectory_aware_gym.adapters.trajectory_logger import (
+    TrajectoryLog,
+    TrajectoryLogger,
+)
 from trajectory_aware_gym.config.settings import ProjectPaths
 
 
@@ -79,6 +83,45 @@ def fake_lm(monkeypatch):
     return calls
 
 
+@pytest.fixture
+def mock_settings(monkeypatch):
+    """Create a mock settings module with simple objects instead of Properties."""
+
+    # Create simple objects with the needed attributes
+    class MockGem:
+        def __init__(self):
+            self.temperature_train = 0.9
+            self.temperature_eval = 0.1
+
+    class MockOllama:
+        def __init__(self):
+            self.api_base = "http://fake-ollama"
+            self.task_model_1_7b = "ollama_chat/qwen3:1.7b"
+            self.task_model_4b = "ollama_chat/qwen3:4b"
+
+    class MockAWS:
+        def __init__(self):
+            self.bedrock_llama_1b = "us.meta.llama3-2-1b-instruct-v1:0"
+            self.bedrock_llama_3b = "us.meta.llama3-2-3b-instruct-v1:0"
+            self.bedrock_llama_8b = "us.meta.llama3-1-8b-instruct-v1:0"
+
+    class MockGEPA:
+        def __init__(self):
+            self.reflection_model = "anthropic.claude-sonnet-4-5-v2:0"
+
+    # Create a mock settings module
+    mock_settings_module = types.ModuleType("mock_settings")
+    mock_settings_module.gem = MockGem()
+    mock_settings_module.ollama = MockOllama()
+    mock_settings_module.aws = MockAWS()
+    mock_settings_module.gepa = MockGEPA()
+
+    # Replace the settings module in llm_provider's namespace
+    import trajectory_aware_gym.config.llm_provider as llm_provider
+
+    monkeypatch.setattr(llm_provider, "settings", mock_settings_module)
+
+
 @pytest.mark.parametrize(
     ("model", "mode", "expected_model", "expected_temp", "expected_api_base"),
     [
@@ -101,7 +144,7 @@ def fake_lm(monkeypatch):
         pytest.param(
             "llama:1b",
             "train",
-            "bedrock/bedrock-llama-1b",
+            "bedrock/us.meta.llama3-2-1b-instruct-v1:0",
             0.9,
             None,
             id="bedrock-llama-1b-train",
@@ -109,7 +152,7 @@ def fake_lm(monkeypatch):
         pytest.param(
             "llama:3b",
             "eval",
-            "bedrock/bedrock-llama-3b",
+            "bedrock/us.meta.llama3-2-3b-instruct-v1:0",
             0.1,
             None,
             id="bedrock-llama-3b-eval",
@@ -117,7 +160,7 @@ def fake_lm(monkeypatch):
         pytest.param(
             "llama:8b",
             "train",
-            "bedrock/bedrock-llama-8b",
+            "bedrock/us.meta.llama3-1-8b-instruct-v1:0",
             0.9,
             None,
             id="bedrock-llama-8b-train",
@@ -125,29 +168,19 @@ def fake_lm(monkeypatch):
     ],
 )
 def test_task_model_routing_and_temperature(
-    monkeypatch, fake_lm, model, mode, expected_model, expected_temp, expected_api_base
+    monkeypatch,
+    fake_lm,
+    mock_settings,
+    model,
+    mode,
+    expected_model,
+    expected_temp,
+    expected_api_base,
 ):
     """Task model factory routes model names and temperature correctly."""
     import trajectory_aware_gym.config.llm_provider as llm_provider
 
-    class FakeGEMConfig:
-        gem_temperature_train = 0.9
-        gem_temperature_eval = 0.1
-
-    class FakeOllamaConfig:
-        ollama_api_base = "http://fake-ollama"
-        local_task_model_1_7b = "ollama_chat/qwen3:1.7b"
-        local_task_model_4b = "ollama_chat/qwen3:4b"
-
-    class FakeAWSConfig:
-        bedrock_llama_1b = "bedrock-llama-1b"
-        bedrock_llama_3b = "bedrock-llama-3b"
-        bedrock_llama_8b = "bedrock-llama-8b"
-
-    monkeypatch.setattr(llm_provider, "GEMConfig", FakeGEMConfig)
-    monkeypatch.setattr(llm_provider, "OllamaConfig", FakeOllamaConfig)
-    monkeypatch.setattr(llm_provider, "AWSConfig", FakeAWSConfig)
-
+    # Settings are already mocked by the fixture
     llm_provider.get_task_lm(model, mode=mode)
 
     assert fake_lm[0]["model"] == expected_model
@@ -159,15 +192,9 @@ def test_task_model_routing_and_temperature(
         assert "api_base" not in fake_lm[0]
 
 
-def test_task_model_unrecognised_name_returns_none(monkeypatch, fake_lm):
+def test_task_model_unrecognised_name_returns_none(monkeypatch, fake_lm, mock_settings):
     """Unrecognised model name falls through match/case and returns None."""
     import trajectory_aware_gym.config.llm_provider as llm_provider
-
-    class FakeGEMConfig:
-        gem_temperature_train = 1.0
-        gem_temperature_eval = 0.0
-
-    monkeypatch.setattr(llm_provider, "GEMConfig", FakeGEMConfig)
 
     result = llm_provider.get_task_lm("nonexistent-model", mode="train")
 
@@ -175,14 +202,9 @@ def test_task_model_unrecognised_name_returns_none(monkeypatch, fake_lm):
     assert len(fake_lm) == 0
 
 
-def test_reflection_model_routing(monkeypatch, fake_lm):
+def test_reflection_model_routing(monkeypatch, fake_lm, mock_settings):
     """Reflection model factory uses GEPA reflection model setting."""
     import trajectory_aware_gym.config.llm_provider as llm_provider
-
-    class FakeGEPAConfig:
-        gepa_reflection_model = "anthropic.claude-sonnet-4-5-v2:0"
-
-    monkeypatch.setattr(llm_provider, "GEPAConfig", FakeGEPAConfig)
 
     llm_provider.get_reflection_lm()
 
