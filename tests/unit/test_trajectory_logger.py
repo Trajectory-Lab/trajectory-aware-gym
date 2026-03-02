@@ -93,9 +93,7 @@ def _make_log(
         "num_steps": len(steps),
         "total_tokens": sum(s.llm_call.total_tokens for s in steps if s.llm_call),
         "total_cost_usd": sum(
-            s.llm_call.cost_usd
-            for s in steps
-            if s.llm_call and s.llm_call.cost_usd is not None
+            s.llm_call.cost_usd for s in steps if s.llm_call and s.llm_call.cost_usd is not None
         ),
     }
     defaults.update(overrides)
@@ -468,15 +466,11 @@ class TestDeriveOutcome:
         assert _derive_outcome([step]) == "success"
 
     def test_info_truthy_int_value(self):
-        step = _make_step(
-            terminated=True, truncated=False, reward=0.0, info={"correct": 1}
-        )
+        step = _make_step(terminated=True, truncated=False, reward=0.0, info={"correct": 1})
         assert _derive_outcome([step]) == "success"
 
     def test_info_true_overrides_negative_reward(self):
-        step = _make_step(
-            terminated=True, truncated=False, reward=-1.0, info={"correct": True}
-        )
+        step = _make_step(terminated=True, truncated=False, reward=-1.0, info={"correct": True})
         assert _derive_outcome([step]) == "success"
 
 
@@ -552,27 +546,21 @@ class TestTrajectoryLogger:
     def test_build_log_outcome_success(self):
         logger = TrajectoryLogger(environment_id="game:GuessTheNumber-v0-easy")
         logger.set_initial_state("start")
-        logger.add_step(
-            action="a", observation="o", reward=1.0, terminated=True, truncated=False
-        )
+        logger.add_step(action="a", observation="o", reward=1.0, terminated=True, truncated=False)
         log = logger.build_log()
         assert log.episode_outcome == "success"
 
     def test_build_log_outcome_failure(self):
         logger = TrajectoryLogger(environment_id="game:GuessTheNumber-v0-easy")
         logger.set_initial_state("start")
-        logger.add_step(
-            action="a", observation="o", reward=0.0, terminated=True, truncated=False
-        )
+        logger.add_step(action="a", observation="o", reward=0.0, terminated=True, truncated=False)
         log = logger.build_log()
         assert log.episode_outcome == "failure"
 
     def test_build_log_outcome_truncated(self):
         logger = TrajectoryLogger(environment_id="game:GuessTheNumber-v0-easy")
         logger.set_initial_state("start")
-        logger.add_step(
-            action="a", observation="o", reward=0.5, terminated=False, truncated=True
-        )
+        logger.add_step(action="a", observation="o", reward=0.5, terminated=False, truncated=True)
         log = logger.build_log()
         assert log.episode_outcome == "truncated"
 
@@ -695,14 +683,10 @@ class TestTrajectoryLoadAndFilter:
 
         logger = TrajectoryLogger(environment_id="math:Math12K", seed=1)
         logger.set_initial_state("problem")
-        logger.add_step(
-            action="a", observation="o", reward=1.0, terminated=True, truncated=False
-        )
+        logger.add_step(action="a", observation="o", reward=1.0, terminated=True, truncated=False)
         logger.save(project_paths=paths)
 
-        (paths.logs / "trajectory_corrupt_badid.json").write_text(
-            "{not json", encoding="utf-8"
-        )
+        (paths.logs / "trajectory_corrupt_badid.json").write_text("{not json", encoding="utf-8")
         (paths.logs / "trajectory_empty_badid.json").write_text("", encoding="utf-8")
 
         logs = load_all_trajectories(paths.logs)
@@ -713,9 +697,7 @@ class TestTrajectoryLoadAndFilter:
         paths = ProjectPaths(root=tmp_path)
         logger = TrajectoryLogger(environment_id="math:Math12K", seed=1)
         logger.set_initial_state("problem")
-        logger.add_step(
-            action="a", observation="o", reward=1.0, terminated=True, truncated=False
-        )
+        logger.add_step(action="a", observation="o", reward=1.0, terminated=True, truncated=False)
         file_path = logger.save(project_paths=paths)
 
         loaded = load_trajectory(file_path)

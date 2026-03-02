@@ -57,7 +57,9 @@ def compute_progress_component(trajectory: TrajectoryLog) -> float:
     if len(rewards) < 2:
         return _clip01(0.5 * (1.0 if rewards and rewards[0] > 0 else 0.0))
 
-    positive_moves = sum(1 for left, right in zip(rewards, rewards[1:], strict=False) if right >= left)
+    positive_moves = sum(
+        1 for left, right in zip(rewards, rewards[1:], strict=False) if right >= left
+    )
     return _clip01(positive_moves / (len(rewards) - 1))
 
 

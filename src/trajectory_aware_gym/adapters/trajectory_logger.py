@@ -136,9 +136,7 @@ class TrajectoryLog(BaseModel):
     @computed_field
     @property
     def total_cost_usd(self) -> float:
-        return sum(
-            step.llm_call.cost_usd or 0.0 for step in self.steps if step.llm_call
-        )
+        return sum(step.llm_call.cost_usd or 0.0 for step in self.steps if step.llm_call)
 
     @field_validator("environment_id", "initial_observation")
     @classmethod
@@ -164,9 +162,7 @@ class TrajectoryLog(BaseModel):
                 f"num_steps ({self.num_steps}) must equal len(steps) ({len(self.steps)})"
             )
 
-        computed_tokens = sum(
-            step.llm_call.total_tokens for step in self.steps if step.llm_call
-        )
+        computed_tokens = sum(step.llm_call.total_tokens for step in self.steps if step.llm_call)
         if self.total_tokens != computed_tokens:
             raise ValueError(
                 f"total_tokens ({self.total_tokens}) must equal "
@@ -234,9 +230,7 @@ class TrajectoryLogger:
         self.initial_info: dict[str, Any] = {}
         self.steps: list[TrajectoryStep] = []
 
-    def set_initial_state(
-        self, observation: str, info: dict[str, Any] | None = None
-    ) -> None:
+    def set_initial_state(self, observation: str, info: dict[str, Any] | None = None) -> None:
         if self.initial_observation is not None:
             raise RuntimeError("Initial state has already been set; cannot overwrite.")
         self.initial_observation = observation
@@ -329,9 +323,7 @@ def load_all_trajectories(directory: Path | str) -> list[TrajectoryLog]:
     logs: list[TrajectoryLog] = []
     for p in d.glob("trajectory_*.json"):
         try:
-            logs.append(
-                TrajectoryLog.model_validate_json(p.read_text(encoding="utf-8"))
-            )
+            logs.append(TrajectoryLog.model_validate_json(p.read_text(encoding="utf-8")))
         except (json.JSONDecodeError, ValidationError) as exc:
             logger.warning("Skipping corrupt trajectory %s: %s", p, exc)
     return sorted(logs, key=lambda t: t.started_at)

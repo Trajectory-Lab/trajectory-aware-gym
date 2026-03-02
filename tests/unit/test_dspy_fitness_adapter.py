@@ -11,7 +11,9 @@ from trajectory_aware_gym.adapters.trajectory_logger import (
 )
 
 
-def make_trajectory(*, reward: float, terminated: bool = True, truncated: bool = False) -> TrajectoryLog:
+def make_trajectory(
+    *, reward: float, terminated: bool = True, truncated: bool = False
+) -> TrajectoryLog:
     started = datetime.now(UTC)
     return TrajectoryLog(
         environment_id="toy-env",
