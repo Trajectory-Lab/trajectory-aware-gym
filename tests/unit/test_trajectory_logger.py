@@ -93,7 +93,9 @@ def _make_log(
         "num_steps": len(steps),
         "total_tokens": sum(s.llm_call.total_tokens for s in steps if s.llm_call),
         "total_cost_usd": sum(
-            s.llm_call.cost_usd for s in steps if s.llm_call and s.llm_call.cost_usd is not None
+            s.llm_call.cost_usd
+            for s in steps
+            if s.llm_call and s.llm_call.cost_usd is not None
         ),
     }
     defaults.update(overrides)
@@ -304,7 +306,6 @@ class TestTrajectoryLog:
                 initial_observation="start",
                 steps=[_make_step(reward=0.5)],
                 total_reward=0.4,
-                num_steps=1,
             )
 
     def test_finished_at_cannot_precede_started_at(self):
@@ -318,26 +319,25 @@ class TestTrajectoryLog:
                 initial_observation="start",
                 steps=[],
                 total_reward=0.0,
-                num_steps=0,
             )
 
     def test_schema_version_defaults(self):
         log = _make_log()
         assert log.schema_version == SCHEMA_VERSION
 
-    def test_num_steps_mismatch_rejected(self):
-        with pytest.raises(ValidationError, match="num_steps"):
-            _make_log(steps=[_make_step()], num_steps=5)
+    def test_num_steps_is_derived_from_steps(self):
+        log = _make_log(steps=[_make_step(), _make_step()])
+        assert log.num_steps == 2
 
-    def test_total_tokens_mismatch_rejected(self):
+    def test_total_tokens_is_derived_from_steps(self):
         step = _make_step(llm_call=_make_llm_call(prompt=10, completion=20))
-        with pytest.raises(ValidationError, match="total_tokens"):
-            _make_log(steps=[step], total_tokens=999)
+        log = _make_log(steps=[step])
+        assert log.total_tokens == step.llm_call.total_tokens
 
-    def test_total_cost_mismatch_rejected(self):
+    def test_total_cost_is_derived_from_steps(self):
         step = _make_step(llm_call=_make_llm_call(cost=0.05))
-        with pytest.raises(ValidationError, match="total_cost_usd"):
-            _make_log(steps=[step], total_cost_usd=99.0)
+        log = _make_log(steps=[step])
+        assert log.total_cost_usd == step.llm_call.cost_usd
 
     def test_system_prompt_stored(self):
         log = _make_log(system_prompt="You are a helpful math tutor.")
@@ -468,11 +468,15 @@ class TestDeriveOutcome:
         assert _derive_outcome([step]) == "success"
 
     def test_info_truthy_int_value(self):
-        step = _make_step(terminated=True, truncated=False, reward=0.0, info={"correct": 1})
+        step = _make_step(
+            terminated=True, truncated=False, reward=0.0, info={"correct": 1}
+        )
         assert _derive_outcome([step]) == "success"
 
     def test_info_true_overrides_negative_reward(self):
-        step = _make_step(terminated=True, truncated=False, reward=-1.0, info={"correct": True})
+        step = _make_step(
+            terminated=True, truncated=False, reward=-1.0, info={"correct": True}
+        )
         assert _derive_outcome([step]) == "success"
 
 
@@ -530,7 +534,11 @@ class TestTrajectoryLogger:
         logger.set_system_prompt("Solve step by step.")
         logger.set_initial_state("What is 2+2?")
         logger.add_step(
-            action="\\\\boxed{4}", observation="done", reward=1.0, terminated=True, truncated=False
+            action="\\\\boxed{4}",
+            observation="done",
+            reward=1.0,
+            terminated=True,
+            truncated=False,
         )
         log = logger.build_log()
         assert log.system_prompt == "Solve step by step."
@@ -544,21 +552,27 @@ class TestTrajectoryLogger:
     def test_build_log_outcome_success(self):
         logger = TrajectoryLogger(environment_id="game:GuessTheNumber-v0-easy")
         logger.set_initial_state("start")
-        logger.add_step(action="a", observation="o", reward=1.0, terminated=True, truncated=False)
+        logger.add_step(
+            action="a", observation="o", reward=1.0, terminated=True, truncated=False
+        )
         log = logger.build_log()
         assert log.episode_outcome == "success"
 
     def test_build_log_outcome_failure(self):
         logger = TrajectoryLogger(environment_id="game:GuessTheNumber-v0-easy")
         logger.set_initial_state("start")
-        logger.add_step(action="a", observation="o", reward=0.0, terminated=True, truncated=False)
+        logger.add_step(
+            action="a", observation="o", reward=0.0, terminated=True, truncated=False
+        )
         log = logger.build_log()
         assert log.episode_outcome == "failure"
 
     def test_build_log_outcome_truncated(self):
         logger = TrajectoryLogger(environment_id="game:GuessTheNumber-v0-easy")
         logger.set_initial_state("start")
-        logger.add_step(action="a", observation="o", reward=0.5, terminated=False, truncated=True)
+        logger.add_step(
+            action="a", observation="o", reward=0.5, terminated=False, truncated=True
+        )
         log = logger.build_log()
         assert log.episode_outcome == "truncated"
 
@@ -681,10 +695,14 @@ class TestTrajectoryLoadAndFilter:
 
         logger = TrajectoryLogger(environment_id="math:Math12K", seed=1)
         logger.set_initial_state("problem")
-        logger.add_step(action="a", observation="o", reward=1.0, terminated=True, truncated=False)
+        logger.add_step(
+            action="a", observation="o", reward=1.0, terminated=True, truncated=False
+        )
         logger.save(project_paths=paths)
 
-        (paths.logs / "trajectory_corrupt_badid.json").write_text("{not json", encoding="utf-8")
+        (paths.logs / "trajectory_corrupt_badid.json").write_text(
+            "{not json", encoding="utf-8"
+        )
         (paths.logs / "trajectory_empty_badid.json").write_text("", encoding="utf-8")
 
         logs = load_all_trajectories(paths.logs)
@@ -695,7 +713,9 @@ class TestTrajectoryLoadAndFilter:
         paths = ProjectPaths(root=tmp_path)
         logger = TrajectoryLogger(environment_id="math:Math12K", seed=1)
         logger.set_initial_state("problem")
-        logger.add_step(action="a", observation="o", reward=1.0, terminated=True, truncated=False)
+        logger.add_step(
+            action="a", observation="o", reward=1.0, terminated=True, truncated=False
+        )
         file_path = logger.save(project_paths=paths)
 
         loaded = load_trajectory(file_path)
@@ -801,7 +821,9 @@ class TestTrajectoryLoadAndFilter:
                 finished_at=now + timedelta(seconds=1),
             ),
             _make_log(
-                environment_id="math:GSM8K", started_at=now, finished_at=now + timedelta(seconds=1)
+                environment_id="math:GSM8K",
+                started_at=now,
+                finished_at=now + timedelta(seconds=1),
             ),
         ]
         filtered = filter_trajectories(logs, environment_id="math:Math12K")
