@@ -25,4 +25,3 @@ __all__ = [
     "build_trajectory_evaluator",
     "validate_optimization_trend",
 ]
-

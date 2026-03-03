@@ -130,16 +130,24 @@ class GEPAOptimizer:
         self._population_size = population_size
         self._iterations = iterations
         self._elite_count = elite_count
-        self._rng = Random(random_seed)
+        self._rng = Random(random_seed)  # nosec B311
 
-    def _evaluate_population(self, population: list[PromptCandidate]) -> list[PromptCandidate]:
+    def _evaluate_population(
+        self, population: list[PromptCandidate]
+    ) -> list[PromptCandidate]:
         for candidate in population:
             if candidate.fitness is None:
                 candidate.fitness = self._evaluator(candidate.prompt)
         return population
 
-    def _select_elites(self, population: list[PromptCandidate]) -> list[PromptCandidate]:
-        ranked = sorted(population, key=lambda candidate: candidate.fitness or float("-inf"), reverse=True)
+    def _select_elites(
+        self, population: list[PromptCandidate]
+    ) -> list[PromptCandidate]:
+        ranked = sorted(
+            population,
+            key=lambda candidate: candidate.fitness or float("-inf"),
+            reverse=True,
+        )
         return [
             PromptCandidate(
                 prompt=elite.prompt,
@@ -149,7 +157,9 @@ class GEPAOptimizer:
             for elite in ranked[: self._elite_count]
         ]
 
-    def _spawn_offspring(self, elites: list[PromptCandidate], iteration: int) -> list[PromptCandidate]:
+    def _spawn_offspring(
+        self, elites: list[PromptCandidate], iteration: int
+    ) -> list[PromptCandidate]:
         offspring: list[PromptCandidate] = []
         for candidate_index in range(self._population_size - len(elites)):
             parent = self._rng.choice(elites)
@@ -177,8 +187,16 @@ class GEPAOptimizer:
 
         for iteration in range(1, self._iterations + 1):
             self._evaluate_population(population)
-            best = max(candidate.fitness for candidate in population if candidate.fitness is not None)
-            average = mean(candidate.fitness for candidate in population if candidate.fitness is not None)
+            best = max(
+                candidate.fitness
+                for candidate in population
+                if candidate.fitness is not None
+            )
+            average = mean(
+                candidate.fitness
+                for candidate in population
+                if candidate.fitness is not None
+            )
             history.append(
                 OptimizationIteration(
                     iteration=iteration,

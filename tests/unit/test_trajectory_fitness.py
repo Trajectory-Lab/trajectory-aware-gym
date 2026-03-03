@@ -10,7 +10,9 @@ from trajectory_aware_gym.adapters.trajectory_logger import TrajectoryLog, Traje
 from trajectory_aware_gym.fitness import TrajectoryFitnessConfig, score_trajectory
 
 
-def _build_trajectory(*, actions: list[str], rewards: list[float], terminated: bool) -> TrajectoryLog:
+def _build_trajectory(
+    *, actions: list[str], rewards: list[float], terminated: bool
+) -> TrajectoryLog:
     started = datetime.now(UTC)
     steps = [
         TrajectoryStep(
@@ -44,7 +46,9 @@ def test_score_trajectory_success_has_positive_signal():
 
 
 def test_score_trajectory_loop_penalty_applied():
-    trajectory = _build_trajectory(actions=["same", "same", "same"], rewards=[0.0, 0.0, 0.1], terminated=True)
+    trajectory = _build_trajectory(
+        actions=["same", "same", "same"], rewards=[0.0, 0.0, 0.1], terminated=True
+    )
     result = score_trajectory(trajectory)
 
     assert result.repeated_action_count == 2
@@ -59,7 +63,9 @@ def test_score_trajectory_loop_penalty_applied():
     ],
 )
 def test_step_efficiency_bonus_depends_on_budget(max_steps: int, expected_sign: int):
-    trajectory = _build_trajectory(actions=["a", "b", "c"], rewards=[0.0, 0.0, 1.0], terminated=True)
+    trajectory = _build_trajectory(
+        actions=["a", "b", "c"], rewards=[0.0, 0.0, 1.0], terminated=True
+    )
     config = TrajectoryFitnessConfig(max_steps=max_steps)
     result = score_trajectory(trajectory, config)
 
