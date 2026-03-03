@@ -1,12 +1,19 @@
-"""Run a single GEM episode and persist a validated trajectory log."""
+"""Run a single GEM episode and persist a validated trajectory log.
+
+Demonstrates the extended trajectory logging schema (F1/F2) with:
+- Optional system prompt tracking
+- Episode outcome derivation
+- Per-step timestamps
+"""
 
 from __future__ import annotations
 
 import argparse
 import importlib
+import json
 
 from trajectory_aware_gym.adapters import TrajectoryLogger
-from trajectory_aware_gym.config import GEMConfig
+from trajectory_aware_gym.config import settings
 
 
 def choose_guess(observation: str, low: int, high: int) -> tuple[int, int, int]:
@@ -25,9 +32,12 @@ def choose_guess(observation: str, low: int, high: int) -> tuple[int, int, int]:
     return guess, low, high
 
 
-def run_episode(environment_id: str, seed: int | None = None) -> tuple[float, int, str]:
+def run_episode(
+    environment_id: str,
+    seed: int | None = None,
+    system_prompt: str | None = None,
+) -> tuple[float, int, str]:
     """Execute one episode and save a trajectory log to disk."""
-    config = GEMConfig(_env_file=None)
     gem = importlib.import_module("gem")
     importlib.import_module("gem.envs")
     env = gem.make(environment_id)
@@ -36,12 +46,14 @@ def run_episode(environment_id: str, seed: int | None = None) -> tuple[float, in
     observation, info = env.reset(**reset_kwargs)
 
     logger = TrajectoryLogger(environment_id=environment_id, seed=seed)
+    if system_prompt:
+        logger.set_system_prompt(system_prompt)
     logger.set_initial_state(observation=observation, info=info)
 
     total_reward = 0.0
     low, high = 1, 10
 
-    for _ in range(config.gem_max_steps):
+    for _ in range(settings.gem.max_steps):
         guess, low, high = choose_guess(observation, low, high)
         action = f"\\\\boxed{{{guess}}}"
 
@@ -76,17 +88,31 @@ def parse_args() -> argparse.Namespace:
         help="GEM environment id",
     )
     parser.add_argument("--seed", type=int, default=123, help="Seed for environment reset")
+    parser.add_argument("--system-prompt", type=str, default=None, help="System prompt to log")
+    parser.add_argument("--show-log", action="store_true", help="Print the full JSON log")
     return parser.parse_args()
 
 
 def main() -> None:
     """CLI entrypoint."""
     args = parse_args()
-    total_reward, steps, log_path = run_episode(args.environment, args.seed)
-    print(f"Environment: {args.environment}")
-    print(f"Steps: {steps}")
-    print(f"Total reward: {total_reward:.3f}")
+    total_reward, steps, log_path = run_episode(
+        args.environment,
+        args.seed,
+        args.system_prompt,
+    )
+    print(f"Environment:    {args.environment}")
+    print(f"Steps:          {steps}")
+    print(f"Total reward:   {total_reward:.3f}")
     print(f"Trajectory log: {log_path}")
+
+    if args.show_log:
+        from pathlib import Path
+
+        payload = json.loads(Path(log_path).read_text(encoding="utf-8"))
+        print(f"\nSchema version: {payload['schema_version']}")
+        print(f"Outcome:        {payload['episode_outcome']}")
+        print(f"System prompt:  {payload.get('system_prompt', '(none)')}")
 
 
 if __name__ == "__main__":
