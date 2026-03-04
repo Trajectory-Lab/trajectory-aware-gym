@@ -138,8 +138,9 @@ poe typecheck
 
 - **[docs/configuration.md](docs/configuration.md)**: Configuration guide — YAML schema, env var overrides, adding models
 - **[AGENTS.md](AGENTS.md)**: Comprehensive guidelines for AI coding assistants working on this project
-- **[.env.example](.env.example)**: Example environment configuration with secrets
-- **[trajectory-aware-gym.yaml](src/trajectory_aware_gym/config/trajectory-aware-gym.yaml)**: Non-sensitive default configuration (checked into git)
+- **[.env.example](.env.example)**: Example environment configuration with AWS Bedrock settings
+- **[integration_test_matrix.md](docs/integration_test_matrix.md)**: Integration test plan and CI matrix for Phase 2
+- **[phase2_handoff.md](docs/phase2_handoff.md)**: Unit/integration testing handoff summary
 - **[test_bedrock.ipynb](scripts/notebooks/test_bedrock.ipynb)**: Interactive notebook for testing setup and exploring LLM integrations
 
 ## License

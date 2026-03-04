@@ -19,6 +19,7 @@ DSPy integration example::
         llm_calls = extract_llm_calls_from_tracker(tracker)   # <-- convert DSPy usage
 
         observation, reward, terminated, truncated, info = env.step(action)
+
         logger.add_step(                                       # <-- record the step
             action=action, observation=observation, reward=reward,
             terminated=terminated, truncated=truncated, info=info,
@@ -44,7 +45,14 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    ValidationError,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 from trajectory_aware_gym.config import ProjectPaths
 
@@ -142,10 +150,22 @@ class TrajectoryLog(BaseModel):
     initial_info: dict[str, Any] = Field(default_factory=dict)
     steps: list[TrajectoryStep] = Field(default_factory=list)
     total_reward: float
-    num_steps: int = 0
     episode_outcome: EpisodeOutcome | None = None
-    total_tokens: int = 0
-    total_cost_usd: float = 0.0
+
+    @computed_field
+    @property
+    def num_steps(self) -> int:
+        return len(self.steps)
+
+    @computed_field
+    @property
+    def total_tokens(self) -> int:
+        return sum(call.total_tokens for step in self.steps for call in step.llm_calls)
+
+    @computed_field
+    @property
+    def total_cost_usd(self) -> float:
+        return sum(call.cost_usd or 0.0 for step in self.steps for call in step.llm_calls)
 
     @field_validator("environment_id", "initial_observation")
     @classmethod
@@ -165,30 +185,6 @@ class TrajectoryLog(BaseModel):
         computed_total = sum(step.reward for step in self.steps)
         if abs(self.total_reward - computed_total) > 1e-9:
             raise ValueError("total_reward must equal the sum of step rewards")
-
-        if self.num_steps != len(self.steps):
-            raise ValueError(
-                f"num_steps ({self.num_steps}) must equal len(steps) ({len(self.steps)})"
-            )
-
-        computed_tokens = sum(call.total_tokens for step in self.steps for call in step.llm_calls)
-        if self.total_tokens != computed_tokens:
-            raise ValueError(
-                f"total_tokens ({self.total_tokens}) must equal "
-                f"sum of step tokens ({computed_tokens})"
-            )
-
-        computed_cost = sum(
-            call.cost_usd
-            for step in self.steps
-            for call in step.llm_calls
-            if call.cost_usd is not None
-        )
-        if abs(self.total_cost_usd - computed_cost) > 1e-9:
-            raise ValueError(
-                f"total_cost_usd ({self.total_cost_usd}) must equal "
-                f"sum of step costs ({computed_cost})"
-            )
 
         return self
 
@@ -287,11 +283,6 @@ class TrajectoryLogger:
         if self.initial_observation is None:
             raise ValueError("initial state is not set; call set_initial_state() first")
 
-        total_tokens = sum(call.total_tokens for s in self.steps for call in s.llm_calls)
-        total_cost = sum(
-            call.cost_usd for s in self.steps for call in s.llm_calls if call.cost_usd is not None
-        )
-
         return TrajectoryLog(
             environment_id=self.environment_id,
             seed=self.seed,
@@ -302,10 +293,7 @@ class TrajectoryLogger:
             initial_info=self.initial_info,
             steps=self.steps,
             total_reward=sum(step.reward for step in self.steps),
-            num_steps=len(self.steps),
             episode_outcome=_derive_outcome(self.steps),
-            total_tokens=total_tokens,
-            total_cost_usd=total_cost,
         )
 
     def save(self, project_paths: ProjectPaths | None = None) -> Path:
