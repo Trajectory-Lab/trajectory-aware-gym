@@ -152,7 +152,7 @@ sequence = [
   { cmd = "ruff check --fix src tests" },
   { cmd = "ruff format src tests" }
 ]
-help = "Format code with ruff and black"
+help = "Format code with ruff"
 
 [tool.poe.tasks.typecheck]
 cmd = "pyright src"
