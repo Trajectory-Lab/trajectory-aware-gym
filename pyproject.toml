@@ -46,6 +46,7 @@ dependencies = [
     "rich>=13.7.0",
     "click>=8.3.1",
     "requests>=2.32.5",
+    "ddgs>=1.0.0",
 ]
 
 
@@ -99,11 +100,6 @@ ignore = [
 "__init__.py" = ["F401"]  # unused imports
 "tests/**/*.py" = ["F401", "F811"]  # allow test fixtures
 
-[tool.black]
-line-length = 100
-target-version = ["py313"]
-include = '\.pyi?$'
-
 [tool.pyright]
 pythonVersion = "3.13"
 typeCheckingMode = "basic"
@@ -123,7 +119,6 @@ dev = [
     "pytest-asyncio>=0.23.0",
     # Linting and formatting
     "ruff>=0.6.0",
-    "black>=24.0.0",
     "mypy>=1.8.0",
     "pyright>=1.1.408",
     # Security
@@ -153,7 +148,10 @@ cmd = "ruff check src tests"
 help = "Run ruff linter"
 
 [tool.poe.tasks.format]
-cmd = "ruff check --fix src tests && black src tests"
+sequence = [
+  { cmd = "ruff check --fix src tests" },
+  { cmd = "ruff format src tests" }
+]
 help = "Format code with ruff and black"
 
 [tool.poe.tasks.typecheck]
