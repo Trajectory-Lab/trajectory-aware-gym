@@ -17,9 +17,9 @@ from trajectory_aware_gym.optimizers import (
 def test_optimizer_rejects_blank_seed_prompt():
     optimizer = GEPAOptimizer(
         evaluator=lambda prompt: float(len(prompt)),
-        mutator=lambda prompt,
-        iteration,
-        candidate_index: f"{prompt}:{iteration}:{candidate_index}",
+        mutator=lambda prompt, iteration, candidate_index: (
+            f"{prompt}:{iteration}:{candidate_index}"
+        ),
         population_size=4,
         iterations=2,
     )

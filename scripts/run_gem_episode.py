@@ -13,7 +13,9 @@ import importlib
 import json
 
 from trajectory_aware_gym.adapters import TrajectoryLogger
+from trajectory_aware_gym.adapters.tool_runtime import ToolRuntime
 from trajectory_aware_gym.config import settings
+from trajectory_aware_gym.utils.tool_setup import build_tool_registry
 
 
 def choose_guess(observation: str, low: int, high: int) -> tuple[int, int, int]:
@@ -46,6 +48,10 @@ def run_episode(
     observation, info = env.reset(**reset_kwargs)
 
     logger = TrajectoryLogger(environment_id=environment_id, seed=seed)
+
+    tool_registry = build_tool_registry()
+    tool_runtime = ToolRuntime(tool_registry)
+
     if system_prompt:
         logger.set_system_prompt(system_prompt)
     logger.set_initial_state(observation=observation, info=info)
@@ -54,7 +60,26 @@ def run_episode(
     low, high = 1, 10
 
     for _ in range(settings.gem.max_steps):
-        guess, low, high = choose_guess(observation, low, high)
+        # --- Compute guess using python tool ---
+
+        tool_call = {
+            "tool": "python_exec",
+            "arguments": {
+                "code": f"""
+        low = {low}
+        high = {high}
+        print((low + high) // 2)
+        """
+            },
+        }
+
+        tool_result = tool_runtime.execute(tool_call)
+
+        if tool_result["status"] == "success":
+            guess = int(tool_result["output"].strip())
+        else:
+            # fallback to local logic if tool fails
+            guess, low, high = choose_guess(observation, low, high)
         action = f"\\\\boxed{{{guess}}}"
 
         observation, reward, terminated, truncated, step_info = env.step(action)
