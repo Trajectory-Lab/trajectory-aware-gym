@@ -11,11 +11,12 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import textwrap
 
 from trajectory_aware_gym.adapters import TrajectoryLogger
 from trajectory_aware_gym.adapters.tool_runtime import ToolRuntime
+from trajectory_aware_gym.adapters.trajectory_logger import ToolCall
 from trajectory_aware_gym.config import settings
-from trajectory_aware_gym.utils.tool_setup import build_tool_registry
 
 
 def choose_guess(observation: str, low: int, high: int) -> tuple[int, int, int]:
@@ -49,8 +50,7 @@ def run_episode(
 
     logger = TrajectoryLogger(environment_id=environment_id, seed=seed)
 
-    tool_registry = build_tool_registry()
-    tool_runtime = ToolRuntime(tool_registry)
+    tool_runtime = ToolRuntime()
 
     if system_prompt:
         logger.set_system_prompt(system_prompt)
@@ -60,26 +60,32 @@ def run_episode(
     low, high = 1, 10
 
     for _ in range(settings.gem.max_steps):
-        # --- Compute guess using python tool ---
+        # --- Update bounds from last observation, then compute guess via tool ---
+        guess, low, high = choose_guess(observation, low, high)
 
         tool_call = {
             "tool": "python_exec",
             "arguments": {
-                "code": f"""
-        low = {low}
-        high = {high}
-        print((low + high) // 2)
-        """
+                "code": textwrap.dedent(f"""\
+                    low = {low}
+                    high = {high}
+                    print((low + high) // 2)
+                """).strip(),
             },
         }
 
         tool_result = tool_runtime.execute(tool_call)
 
+        logged_tool_call = ToolCall(
+            tool_name=tool_call["tool"],
+            tool_input=json.dumps(tool_call.get("arguments", {})),
+            tool_output=json.dumps(tool_result),
+            success=tool_result.get("status") == "success",
+        )
+
         if tool_result["status"] == "success":
             guess = int(tool_result["output"].strip())
-        else:
-            # fallback to local logic if tool fails
-            guess, low, high = choose_guess(observation, low, high)
+
         action = f"\\\\boxed{{{guess}}}"
 
         observation, reward, terminated, truncated, step_info = env.step(action)
@@ -90,6 +96,7 @@ def run_episode(
             terminated=terminated,
             truncated=truncated,
             info=step_info,
+            tool_calls=[logged_tool_call],
         )
 
         total_reward += reward

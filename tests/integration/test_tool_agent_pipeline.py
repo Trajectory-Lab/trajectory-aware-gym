@@ -1,11 +1,8 @@
 from trajectory_aware_gym.adapters.tool_runtime import ToolRuntime
-from trajectory_aware_gym.utils.tool_setup import build_tool_registry
 
 
 def test_tool_runtime():
-    registry = build_tool_registry()
-
-    runtime = ToolRuntime(registry)
+    runtime = ToolRuntime()
 
     call = {
         "tool": "python_exec",
