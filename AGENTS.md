@@ -8,6 +8,12 @@ This file provides comprehensive guidance for AI coding assistants (Claude Code,
 
 This is a Harvard Extension School capstone project comparing **token-space prompt optimization** (GEPA) against **weight-space reinforcement learning** (PPO, GRPO) for agentic LLM tasks. The core contribution is the **GEM-DSPy adapter**, which bridges OpenAI Gym-style RL environments with prompt optimization frameworks.
 
+### Reference Documents
+
+- **[docs/Capstone_proposal.md](docs/Capstone_proposal.md)**: Full capstone proposal — hypotheses, methodology, theoretical framework, timeline, budget
+- **[docs/GEM_paper.md](docs/GEM_paper.md)**: GEM paper (Liu et al., 2025) — gym framework, RL baselines, environment specs, hyperparameters
+- **[docs/GEPA_paper.md](docs/GEPA_paper.md)**: GEPA paper (Agrawal et al., 2025) — reflective prompt evolution, Pareto-aware selection
+
 ## Package Management
 
 **Use `uv` for all Python operations:**
@@ -105,10 +111,9 @@ The project evaluates two optimization paradigms:
 
 ### Environments
 
-Three GEM environments from the proposal:
-1. **Math12K**: Chain-of-thought mathematical reasoning (single-turn)
-2. **CodeContest**: Competitive programming with test execution (multi-turn, tool-using)
-3. **HotpotQA**: Multi-hop question answering (multi-turn, retrieval-heavy)
+Two GEM environments with published RL baselines:
+1. **Orz57K**: Mathematical reasoning with Python tool (multi-turn, tool-using) — RL baseline 71.0% on MATH500
+2. **HotpotQA**: Multi-hop question answering with search tool (multi-turn, retrieval-heavy) — RL baseline 43.2%
 
 ## Development Commands
 
@@ -191,21 +196,12 @@ uv run bandit -r src
 - Standard checks (trailing whitespace, YAML/TOML/JSON validation, etc.)
 
 ### Running Experiments
-```bash
-# Activate environment first (if needed for interactive work)
-source .venv/bin/activate
+Primary experiment configs:
+- `experiments/orz57k/config.yaml`
+- `experiments/hotpotqa/config.yaml`
+- `experiments/quick-test/config.yaml`
 
-# Run GEPA optimization on Math12K
-uv run python examples/run_gepa_math12k.py
-
-# Compare against RL baselines
-uv run python scripts/compare_baselines.py --environment math12k
-
-# Run with specific configuration
-uv run python scripts/run_experiment.py \
-  --config experiments/configs/baseline.yaml \
-  --replications 3
-```
+Use these YAMLs as the source of truth for environment selection, dataset splits, and RL comparison targets.
 
 ## Configuration Management
 

@@ -11,7 +11,7 @@ This Harvard Extension School capstone project evaluates whether evolutionary pr
 - 📊 **Trajectory-Aware Fitness**: Per-turn reward signals for fine-grained credit assignment
 - 🧬 **GEPA Integration**: Evolutionary prompt optimization with Claude Sonnet 4.5 as reflection model
 - 💰 **Cost Tracking**: Built-in token and cost tracking for all LLM calls
-- 🎯 **Three Environments**: Math12K, CodeContest, HotpotQA from GEM benchmark
+- 🎯 **Two Published-Baseline Environments**: Orz57K and HotpotQA, with `quick-test` for fast iteration
 
 ## Prerequisites
 
