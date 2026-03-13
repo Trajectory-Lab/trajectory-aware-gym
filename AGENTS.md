@@ -405,7 +405,7 @@ if is_admin(user):
 When adding new features or deprecating existing ones, update the relevant documentation:
 
 - **[README.md](README.md)**: Project overview, setup instructions, project structure
-- **[docs/configuration.md](docs/configuration.md)**: Configuration schema, env var conventions, adding models/sections
+- **[docs/02-architecture/configuration.md](docs/02-architecture/configuration.md)**: Configuration schema, env var conventions, adding models/sections
 - **[AGENTS.md](AGENTS.md)**: This file — agent guidelines, architecture, development commands
 - **[.env.example](.env.example)**: Keep in sync with any new secret/override env vars
 
