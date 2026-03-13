@@ -81,27 +81,16 @@ def test_build_smoke_run_spec_requires_model_without_config():
         run_gem_episode.build_smoke_run_spec(args)
 
 
-def test_build_smoke_messages_include_observation_and_history():
+def test_build_smoke_messages_include_observation():
     messages = run_gem_episode.build_smoke_messages(
-        environment_id="math:Orz57K",
         observation="Solve 2 + 2",
-        step_index=2,
-        history=[
-            {
-                "step_index": 1,
-                "action": "\\boxed{3}",
-                "observation": "That is incorrect.",
-                "reward": 0.0,
-            }
-        ],
         system_prompt="smoke prompt",
     )
 
     assert messages[0]["role"] == "system"
     assert messages[0]["content"] == "smoke prompt"
-    assert "Environment: math:Orz57K" in messages[1]["content"]
+    assert messages[1]["role"] == "user"
     assert "Solve 2 + 2" in messages[1]["content"]
-    assert "\\boxed{3}" in messages[1]["content"]
 
 
 @pytest.mark.parametrize(
