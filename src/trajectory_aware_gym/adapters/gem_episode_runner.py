@@ -6,7 +6,7 @@ import importlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from litellm import completion, completion_cost  # type: ignore[import-untyped]
 
@@ -122,7 +122,8 @@ def generate_smoke_action(
             max_tokens=max_tokens,
         ),
     )
-    msg = response.choices[0].message
+    response_payload = cast(Any, response)
+    msg = response_payload.choices[0].message
     action = _extract_text_content(msg.content)
     if not action:
         reasoning = getattr(msg, "reasoning_content", None) or ""

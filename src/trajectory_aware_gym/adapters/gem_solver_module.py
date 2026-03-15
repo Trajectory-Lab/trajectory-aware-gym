@@ -9,7 +9,7 @@ to the returned Prediction so the GEPA metric can score it.
 from __future__ import annotations
 
 import copy
-from typing import Any
+from typing import Any, cast
 
 import dspy  # type: ignore[import-untyped]
 
@@ -64,7 +64,7 @@ class GEMSolverModule(dspy.Module):
 
     @property
     def instructions(self) -> str:
-        return self.predict.signature.instructions
+        return cast(str, getattr(self.predict.signature, "instructions", ""))
 
     def forward(self, *, problem: str, seed: int | None = None, **kwargs: Any) -> dspy.Prediction:
         # GEPA needs an actual DSPy predictor invocation in the module trace so it

@@ -36,7 +36,7 @@ def get_task_model_id(model: TaskModelName = "qwen3:1.7b") -> str | None:
 def get_task_lm(
     model: TaskModelName = "qwen3:1.7b",
     mode: Literal["train", "eval"] = "train",
-) -> dspy.LM:
+) -> dspy.LM | None:
     """Get a task model LM instance.
 
     Routes to the correct provider (Ollama for local models,
