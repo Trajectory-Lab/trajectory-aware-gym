@@ -68,36 +68,45 @@ def _repeat_action_rate(actions: list[str]) -> float:
 class EpisodeRawMetrics(BaseModel):
     """Per-episode raw metrics for downstream normalization and aggregation."""
 
+    # Identity and run context.
     run_id: str
     environment_id: str
     seed: int | None = None
 
+    # End-to-end episode timing.
     started_at: datetime
     finished_at: datetime
     episode_latency_seconds: float = Field(ge=0.0)
 
+    # Episode outcome markers.
     step_count: int = Field(ge=0)
     terminated: bool
     truncated: bool
     success: bool
 
+    # Efficiency metrics from rewards and action trajectory.
     total_reward: float
     reward_per_step: float
     steps_per_second: float
     reward_per_second: float
     repeat_action_rate: float = Field(ge=0.0, le=1.0)
 
+    # Raw cost and token usage.
     llm_cost_usd: float | None = Field(default=None, ge=0.0)
     prompt_tokens: int | None = Field(default=None, ge=0)
     completion_tokens: int | None = Field(default=None, ge=0)
     total_tokens: int | None = Field(default=None, ge=0)
+
+    # Step-level LLM latency.
     mean_llm_latency_seconds: float | None = Field(default=None, ge=0.0)
     p95_llm_latency_seconds: float | None = Field(default=None, ge=0.0)
 
+    # Derived cost and token efficiency metrics.
     cost_per_step_usd: float | None = Field(default=None, ge=0.0)
     cost_per_success_usd: float | None = Field(default=None, ge=0.0)
     tokens_per_step: float | None = Field(default=None, ge=0.0)
 
+    # Coverage of optional step-level instrumentation.
     cost_data_coverage: float = Field(ge=0.0, le=1.0)
     token_data_coverage: float = Field(ge=0.0, le=1.0)
     llm_latency_data_coverage: float = Field(ge=0.0, le=1.0)
@@ -105,6 +114,7 @@ class EpisodeRawMetrics(BaseModel):
 
 def extract_episode_raw_metrics(trajectory: TrajectoryLog) -> EpisodeRawMetrics:
     """Extract pragmatic raw metrics from one trajectory log."""
+    # Episode context and outcome flags.
     step_count = len(trajectory.steps)
     episode_latency = max(0.0, (trajectory.finished_at - trajectory.started_at).total_seconds())
     actions = [step.action for step in trajectory.steps]
@@ -123,6 +133,7 @@ def extract_episode_raw_metrics(trajectory: TrajectoryLog) -> EpisodeRawMetrics:
     token_seen_steps = 0
     latency_seen_steps = 0
 
+    # Known aliases for step-level instrumentation fields.
     cost_paths = (
         ("cost_usd",),
         ("llm_cost_usd",),
@@ -198,11 +209,13 @@ def extract_episode_raw_metrics(trajectory: TrajectoryLog) -> EpisodeRawMetrics:
             llm_latency_values.append(step_llm_latency)
             latency_seen_steps += 1
 
+    # Aggregate raw cost and token totals.
     llm_cost_usd = sum(cost_values) if cost_values else None
     prompt_tokens = sum(prompt_token_values) if prompt_token_values else None
     completion_tokens = sum(completion_token_values) if completion_token_values else None
     total_tokens = sum(total_token_values) if total_token_values else None
 
+    # Summarize step-level latency distribution.
     if llm_latency_values:
         sorted_latencies = sorted(llm_latency_values)
         mean_llm_latency_seconds = sum(sorted_latencies) / len(sorted_latencies)
@@ -211,6 +224,7 @@ def extract_episode_raw_metrics(trajectory: TrajectoryLog) -> EpisodeRawMetrics:
         mean_llm_latency_seconds = None
         p95_llm_latency_seconds = None
 
+    # Compute efficiency ratios used in downstream comparisons.
     reward_per_step = trajectory.total_reward / step_count if step_count else 0.0
     steps_per_second = step_count / episode_latency if episode_latency > 0 else 0.0
     reward_per_second = trajectory.total_reward / episode_latency if episode_latency > 0 else 0.0
@@ -221,6 +235,7 @@ def extract_episode_raw_metrics(trajectory: TrajectoryLog) -> EpisodeRawMetrics:
     cost_per_success_usd = llm_cost_usd if llm_cost_usd is not None and success else None
     tokens_per_step = total_tokens / step_count if total_tokens is not None and step_count else None
 
+    # Coverage keeps missing instrumentation explicit for N2/N3.
     denominator = step_count if step_count else 1
 
     return EpisodeRawMetrics(
