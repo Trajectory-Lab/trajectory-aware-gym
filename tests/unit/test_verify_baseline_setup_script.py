@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
@@ -84,3 +85,18 @@ def test_main_raises_when_required_pair_missing(
 
     with pytest.raises(ValueError, match="Missing required baseline configs"):
         script_module.main()
+
+
+def test_parse_args_reads_custom_config_dir(
+    script_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Argument parser should accept explicit baseline config directory."""
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["verify_baseline_setup.py", "--config-dir", "tmp/baselines"],
+    )
+
+    args = script_module.parse_args()
+
+    assert args.config_dir == Path("tmp/baselines")
