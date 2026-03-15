@@ -19,25 +19,38 @@ import json
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
-from litellm import completion, completion_cost
-
-from trajectory_aware_gym.adapters import TrajectoryLogger
+from trajectory_aware_gym.adapters import GEMEpisodeRunner, TrajectoryLogger
+from trajectory_aware_gym.adapters.gem_episode_runner import (
+    DEFAULT_MAX_RESPONSE_TOKENS,
+)
+from trajectory_aware_gym.adapters.gem_episode_runner import (
+    _build_completion_kwargs as _runner_build_completion_kwargs,
+)
+from trajectory_aware_gym.adapters.gem_episode_runner import (
+    build_smoke_messages as _runner_build_smoke_messages,
+)
+from trajectory_aware_gym.adapters.gem_episode_runner import (
+    generate_smoke_action as _runner_generate_smoke_action,
+)
 from trajectory_aware_gym.adapters.tool_runtime import ToolRuntime
-from trajectory_aware_gym.adapters.trajectory_logger import LLMCallMetadata, ToolCall
+from trajectory_aware_gym.adapters.trajectory_logger import ToolCall
 from trajectory_aware_gym.config import settings
 from trajectory_aware_gym.models.experiment import ExperimentConfig
 
 DEFAULT_ENVIRONMENT_ID = "game:GuessTheNumber-v0-easy"
 DEFAULT_GUESS_SEED = 123
 DEFAULT_SMOKE_MAX_STEPS = 1
-DEFAULT_SMOKE_MAX_TOKENS = 2048
+DEFAULT_SMOKE_MAX_TOKENS = DEFAULT_MAX_RESPONSE_TOKENS
 DEFAULT_SMOKE_SYSTEM_PROMPT = (
     "You are a math problem solver. "
     "Solve the problem step by step, then give your final answer "
     "inside \\boxed{}.  For example: \\boxed{42}"
 )
+
+build_smoke_messages = _runner_build_smoke_messages
+generate_smoke_action = _runner_generate_smoke_action
+_build_completion_kwargs = _runner_build_completion_kwargs
 
 
 @dataclass(frozen=True)
@@ -48,7 +61,9 @@ class SmokeRunSpec:
     experiment_name: str | None
     model_id: str
     seed: int | None
-    max_steps: int
+    episode_count: int
+    episode_max_steps: int
+    max_response_tokens: int
     temperature: float
     system_prompt: str
 
@@ -121,7 +136,19 @@ def build_smoke_run_spec(args: argparse.Namespace) -> SmokeRunSpec:
         else (config.seeds.data_seed if config is not None else None)
     )
     model_id = args.task_model_id or config.task_models[0].model_id
-    max_steps = args.max_steps if args.max_steps is not None else DEFAULT_SMOKE_MAX_STEPS
+    episode_count = args.max_steps if args.max_steps is not None else DEFAULT_SMOKE_MAX_STEPS
+    episode_max_steps = (
+        config.environment.max_steps if config is not None else settings.gem.max_steps
+    )
+    max_response_tokens = (
+        args.max_response_tokens
+        if args.max_response_tokens is not None
+        else (
+            config.eval_protocol.max_response_tokens
+            if config is not None
+            else DEFAULT_SMOKE_MAX_TOKENS
+        )
+    )
 
     if args.temperature is not None:
         temperature = args.temperature
@@ -141,102 +168,11 @@ def build_smoke_run_spec(args: argparse.Namespace) -> SmokeRunSpec:
         experiment_name=config.name if config is not None else None,
         model_id=model_id,
         seed=seed,
-        max_steps=max_steps,
+        episode_count=episode_count,
+        episode_max_steps=episode_max_steps,
+        max_response_tokens=max_response_tokens,
         temperature=temperature,
         system_prompt=system_prompt,
-    )
-
-
-def build_smoke_messages(
-    *,
-    observation: str,
-    system_prompt: str,
-) -> list[dict[str, str]]:
-    """Construct a minimal chat prompt for one environment step."""
-    return [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": observation},
-    ]
-
-
-def _extract_text_content(content: Any) -> str:
-    """Normalize LiteLLM message content into plain text."""
-    if isinstance(content, str):
-        return content.strip()
-
-    if isinstance(content, list):
-        chunks: list[str] = []
-        for item in content:
-            if isinstance(item, str):
-                chunks.append(item)
-                continue
-            if isinstance(item, dict) and item.get("type") == "text":
-                text = item.get("text")
-                if isinstance(text, str):
-                    chunks.append(text)
-        return "\n".join(chunk.strip() for chunk in chunks if chunk.strip())
-
-    return str(content).strip()
-
-
-def _build_completion_kwargs(
-    model_id: str,
-    *,
-    temperature: float,
-    max_tokens: int = DEFAULT_SMOKE_MAX_TOKENS,
-) -> dict[str, Any]:
-    kwargs: dict[str, Any] = {
-        "model": model_id,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
-    if model_id.startswith("ollama_chat/"):
-        kwargs["api_base"] = settings.ollama.api_base
-    return kwargs
-
-
-def generate_smoke_action(
-    *,
-    model_id: str,
-    messages: list[dict[str, str]],
-    temperature: float,
-) -> tuple[str, LLMCallMetadata]:
-    """Run one LLM completion and convert usage into trajectory metadata."""
-    if model_id.startswith("bedrock/"):
-        settings.validate_aws()
-
-    response = completion(
-        messages=messages,
-        **_build_completion_kwargs(
-            model_id,
-            temperature=temperature,
-        ),
-    )
-    msg = response.choices[0].message
-    action = _extract_text_content(msg.content)
-    if not action:
-        # Qwen3 thinking mode: answer may only appear in reasoning_content
-        reasoning = getattr(msg, "reasoning_content", None) or ""
-        action = _extract_text_content(reasoning) if reasoning else "[empty-action]"
-
-    usage = getattr(response, "usage", None)
-    prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
-    completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
-    total_tokens = int(getattr(usage, "total_tokens", 0) or (prompt_tokens + completion_tokens))
-
-    cost_usd: float | None = None
-    try:
-        maybe_cost = completion_cost(completion_response=response)
-        cost_usd = float(maybe_cost)
-    except (KeyError, TypeError, ValueError):
-        cost_usd = None
-
-    return action, LLMCallMetadata(
-        model_id=model_id,
-        prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
-        total_tokens=total_tokens,
-        cost_usd=cost_usd,
     )
 
 
@@ -317,75 +253,44 @@ def run_episode(
 
 
 def run_smoke_episode(spec: SmokeRunSpec) -> SmokeRunResult:
-    """Run N independent episodes against a single-turn GEM environment."""
-    gem = importlib.import_module("gem")
-    importlib.import_module("gem.envs")
-    env = gem.make(spec.environment_id)
-
+    """Run N independent prompt-conditioned GEM episodes."""
+    runner = GEMEpisodeRunner(
+        environment_id=spec.environment_id,
+        model_id=spec.model_id,
+        temperature=spec.temperature,
+        max_steps=spec.episode_max_steps,
+        max_response_tokens=spec.max_response_tokens,
+        seed=spec.seed,
+        experiment_name=spec.experiment_name,
+    )
     details: list[SmokeEpisodeDetail] = []
     total_reward = 0.0
     total_tokens = 0
     total_cost = 0.0
     correct_count = 0
 
-    for ep in range(spec.max_steps):
-        reset_kwargs = {"seed": spec.seed + ep} if spec.seed is not None else {}
-        observation, info = env.reset(**reset_kwargs)
+    for ep in range(spec.episode_count):
+        result = runner.run_episode(spec.system_prompt, episode_index=ep)
+        trajectory = result.trajectory
 
-        logger = TrajectoryLogger(environment_id=spec.environment_id, seed=spec.seed)
-        if spec.system_prompt:
-            logger.set_system_prompt(spec.system_prompt)
-
-        initial_info = dict(info) if isinstance(info, dict) else {}
-        if spec.experiment_name is not None:
-            initial_info["experiment_name"] = spec.experiment_name
-        initial_info["smoke_test"] = True
-        initial_info["task_model_id"] = spec.model_id
-        initial_info["episode_index"] = ep
-        logger.set_initial_state(observation=observation, info=initial_info)
-
-        messages = build_smoke_messages(
-            observation=observation,
-            system_prompt=spec.system_prompt,
-        )
-        action, llm_call = generate_smoke_action(
-            model_id=spec.model_id,
-            messages=messages,
-            temperature=spec.temperature,
-        )
-
-        _, reward, terminated, truncated, step_info = env.step(action)
-        logger.add_step(
-            action=action,
-            observation="<TERMINAL>",
-            reward=reward,
-            terminated=terminated,
-            truncated=truncated,
-            info=step_info,
-            llm_calls=[llm_call],
-        )
-        log_path = logger.save()
-
-        is_correct = reward > 0
-        total_reward += reward
-        total_tokens += llm_call.total_tokens
-        total_cost += llm_call.cost_usd or 0.0
+        is_correct = trajectory.episode_outcome == "success"
+        total_reward += trajectory.total_reward
+        total_tokens += trajectory.total_tokens
+        total_cost += trajectory.total_cost_usd
         if is_correct:
             correct_count += 1
 
+        first_step = trajectory.steps[0]
         details.append(
             SmokeEpisodeDetail(
-                problem=observation,
-                action=action,
-                reward=reward,
+                problem=trajectory.initial_observation,
+                action=first_step.action,
+                reward=trajectory.total_reward,
                 correct=is_correct,
-                tokens=llm_call.total_tokens,
-                log_path=str(log_path),
+                tokens=trajectory.total_tokens,
+                log_path=str(result.log_path) if result.log_path is not None else "",
             )
         )
-
-    if hasattr(env, "close"):
-        env.close()
 
     return SmokeRunResult(
         environment_id=spec.environment_id,
@@ -445,6 +350,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Override the default smoke temperature",
     )
+    parser.add_argument(
+        "--max-response-tokens",
+        type=int,
+        default=None,
+        help="Cap tokens per LLM response in smoke mode",
+    )
     parser.add_argument("--show-log", action="store_true", help="Print the full JSON log")
     return parser.parse_args()
 
@@ -477,6 +388,8 @@ def main() -> None:
         print(f"Total tokens: {result.total_tokens}  |  Total cost: ${result.total_cost_usd:.6f}")
         print(f"{'=' * 70}")
         log_path = result.details[-1].log_path if result.details else None
+        if log_path:
+            print(f"Trajectory log: {log_path}")
     else:
         environment_id = args.environment or DEFAULT_ENVIRONMENT_ID
         seed = args.seed if args.seed is not None else DEFAULT_GUESS_SEED

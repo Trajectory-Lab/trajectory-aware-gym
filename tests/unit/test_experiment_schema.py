@@ -508,7 +508,7 @@ class TestProductionConfigs:
 
     @pytest.mark.parametrize(
         "experiment_dir",
-        ["orz57k", "hotpotqa", "quick-test"],
+        ["orz57k", "hotpotqa", "quick-test", "math-dry-run"],
     )
     def test_loads_and_validates(self, experiment_dir):
         config_path = EXPERIMENTS_DIR / experiment_dir / "config.yaml"
@@ -544,4 +544,14 @@ class TestProductionConfigs:
         assert config.environment.train_size == 50
         assert config.environment.gem_env_id == "math:Orz57K"
         assert config.environment.tools == [ToolType.PYTHON_EXEC]
+        assert len(config.task_models) == 1
+
+    def test_math_dry_run_is_minimal(self):
+        config = ExperimentConfig.from_yaml(EXPERIMENTS_DIR / "math-dry-run" / "config.yaml")
+        assert config.num_replications == 1
+        assert config.environment.gem_env_id == "math:Orz57K"
+        assert config.environment.max_steps == 2
+        assert config.environment.train_size == 1
+        assert config.environment.tools == [ToolType.PYTHON_EXEC]
+        assert config.eval_protocol.max_response_tokens == 2048
         assert len(config.task_models) == 1

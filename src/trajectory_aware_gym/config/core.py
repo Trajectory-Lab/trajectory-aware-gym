@@ -172,9 +172,12 @@ class Settings:
         Call this explicitly before making Bedrock API calls, not at load time,
         since not all code paths require AWS access.
         """
-        uses_bedrock = self._gepa.reflection_model.startswith(
-            "anthropic."
-        ) or self._gepa.reflection_model.startswith("us.meta.")
+        uses_bedrock = (
+            self._gepa.reflection_model.startswith("anthropic.")
+            or self._gepa.reflection_model.startswith("us.meta.")
+            or self._gepa.reflection_model.startswith("openai.")
+            or self._gepa.reflection_model.startswith("us.anthropic.")
+        )
         if uses_bedrock and not self._aws.access_key_id:
             raise ValueError(
                 "AWS credentials required when Bedrock models are configured. "

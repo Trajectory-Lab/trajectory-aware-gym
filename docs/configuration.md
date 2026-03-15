@@ -72,7 +72,7 @@ dspy.configure(lm=get_task_lm("qwen3:1.7b", "train"))
 | Role | Purpose | Current Models |
 |------|---------|----------------|
 | **Task model** | Runs in GEM environments, optimized by GEPA | Qwen3 1.7B/4B (Ollama), Llama 1B/3B/8B (Bedrock) |
-| **Reflection model** | GEPA prompt mutation and reflection | Claude Sonnet 4.5 (Bedrock) |
+| **Reflection model** | GEPA prompt mutation and reflection | GPT OSS 120B (Bedrock) |
 
 ## Env Var Override Convention
 
@@ -101,7 +101,7 @@ Type coercion is automatic: `"42"` → `int`, `"3.14"` → `float`, `"true"` →
 | `access_key_id` | `str` | AWS access key (secret, from `.env`) |
 | `secret_access_key` | `str` | AWS secret key (secret, from `.env`) |
 | `session_token` | `str` | Optional session token (secret, from `.env`) |
-| `bedrock_claude_sonnet_4_5` | `str` | Bedrock model ID for Claude |
+| `bedrock_claude_sonnet_4_5` | `str` | Bedrock reflection model ID (legacy field name retained for compatibility) |
 | `bedrock_llama_1b` | `str` | Bedrock model ID for Llama 1B |
 | `bedrock_llama_3b` | `str` | Bedrock model ID for Llama 3B |
 | `bedrock_llama_8b` | `str` | Bedrock model ID for Llama 8B |
@@ -132,6 +132,14 @@ Type coercion is automatic: `"42"` → `int`, `"3.14"` → `float`, `"true"` →
 | `population_size` | `int` | Number of prompts in population |
 | `iterations` | `int` | Optimization iterations |
 | `reflection_model` | `str` | Bedrock model ID for reflection |
+
+### Dry-Run Note
+
+The current `math-dry-run` experiment closes the K4 integration milestone by validating the full GEPA + DSPy + GEM execution path with bounded budget and saved artifacts. It is still a smoke-test configuration:
+- small train/validation samples
+- bounded GEPA metric calls
+- short episode cap
+- no guarantee of multi-step or tool-using behavior in every run
 
 ### `experiment` — Experiment
 

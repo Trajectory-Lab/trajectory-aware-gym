@@ -101,13 +101,14 @@ def mock_settings(monkeypatch):
 
     class MockAWS:
         def __init__(self):
+            self.region = "us-east-1"
             self.bedrock_llama_1b = "us.meta.llama3-2-1b-instruct-v1:0"
             self.bedrock_llama_3b = "us.meta.llama3-2-3b-instruct-v1:0"
             self.bedrock_llama_8b = "us.meta.llama3-1-8b-instruct-v1:0"
 
     class MockGEPA:
         def __init__(self):
-            self.reflection_model = "anthropic.claude-sonnet-4-5-v2:0"
+            self.reflection_model = "openai.gpt-oss-120b-1:0"
 
     # Create a mock settings module
     mock_settings_module = types.ModuleType("mock_settings")
@@ -208,6 +209,23 @@ def test_reflection_model_routing(monkeypatch, fake_lm, mock_settings):
 
     llm_provider.get_reflection_lm()
 
-    assert fake_lm[0]["model"] == "bedrock/anthropic.claude-sonnet-4-5-v2:0"
+    assert fake_lm[0]["model"] == "bedrock/openai.gpt-oss-120b-1:0"
     assert fake_lm[0]["temperature"] == pytest.approx(1.0)
     assert fake_lm[0]["max_tokens"] == 4096
+    assert fake_lm[0]["aws_region_name"] == "us-east-1"
+
+
+def test_reflection_model_routing_accepts_explicit_model(fake_lm, mock_settings):
+    """Reflection model factory can be overridden by experiment-scoped config."""
+    import trajectory_aware_gym.config.llm_provider as llm_provider
+
+    llm_provider.get_reflection_lm(
+        "openai.gpt-oss-120b-1:0",
+        temperature=0.7,
+        max_tokens=2048,
+    )
+
+    assert fake_lm[0]["model"] == "bedrock/openai.gpt-oss-120b-1:0"
+    assert fake_lm[0]["temperature"] == pytest.approx(0.7)
+    assert fake_lm[0]["max_tokens"] == 2048
+    assert fake_lm[0]["aws_region_name"] == "us-east-1"
