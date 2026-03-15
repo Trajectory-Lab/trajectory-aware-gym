@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
 from trajectory_aware_gym.adapters.trajectory_logger import TrajectoryLog, TrajectoryStep
-from trajectory_aware_gym.metrics.raw_metrics import extract_episode_raw_metrics
+from trajectory_aware_gym.metrics.raw_metrics import (
+    _extract_numeric,
+    _percentile,
+    collect_raw_metrics,
+    extract_episode_raw_metrics,
+)
 
 
 def _build_trajectory(
@@ -160,3 +166,92 @@ def test_extract_episode_raw_metrics_without_llm_data() -> None:
     assert metrics.token_data_coverage == 0.0
     assert metrics.llm_latency_data_coverage == 0.0
     assert metrics.steps_per_second == pytest.approx(4.0)
+
+
+def test_total_tokens_derived_when_only_prompt_and_completion_tokens_are_present() -> None:
+    """Total tokens should be derived when step info omits total_tokens explicitly."""
+    steps = [
+        TrajectoryStep(
+            step_index=1,
+            action="x",
+            observation="y",
+            reward=1.0,
+            terminated=True,
+            truncated=False,
+            info={"usage": {"prompt_tokens": 40, "completion_tokens": 5}},
+        )
+    ]
+    trajectory = _build_trajectory(steps=steps, total_reward=1.0, elapsed_seconds=1.0)
+
+    metrics = extract_episode_raw_metrics(trajectory)
+
+    assert metrics.prompt_tokens == 40
+    assert metrics.completion_tokens == 5
+    assert metrics.total_tokens == 45
+    assert metrics.tokens_per_step == 45.0
+    assert metrics.token_data_coverage == 1.0
+
+
+@pytest.mark.parametrize(
+    ("mapping", "paths", "expected"),
+    [
+        ({"metrics": {"cost_usd": 0.5}}, (("metrics", "cost_usd"),), 0.5),
+        ({"a": 1}, (("a", "b"),), None),
+        ({"cost_usd": True}, (("cost_usd",),), None),
+    ],
+)
+def test_extract_numeric_edge_cases(
+    mapping: dict[str, object], paths: tuple[tuple[str, ...], ...], expected: float | None
+) -> None:
+    """Numeric extraction should handle nested misses and reject boolean values."""
+    assert _extract_numeric(mapping, paths) == expected
+
+
+def test_percentile_empty_values_raises() -> None:
+    """Percentile helper should reject empty input."""
+    with pytest.raises(ValueError, match="values must not be empty"):
+        _percentile([], percentile=95.0)
+
+
+def test_collect_raw_metrics_loads_and_sorts_logs(tmp_path: Path) -> None:
+    """Collector should load trajectory logs from disk and return sorted metric rows."""
+    first = _build_trajectory(
+        steps=[
+            TrajectoryStep(
+                step_index=1,
+                action="a",
+                observation="b",
+                reward=0.0,
+                terminated=False,
+                truncated=True,
+                info={},
+            )
+        ],
+        total_reward=0.0,
+        elapsed_seconds=1.0,
+    )
+    second = _build_trajectory(
+        steps=[
+            TrajectoryStep(
+                step_index=1,
+                action="c",
+                observation="d",
+                reward=1.0,
+                terminated=True,
+                truncated=False,
+                info={},
+            )
+        ],
+        total_reward=1.0,
+        elapsed_seconds=1.0,
+    )
+
+    path_b = tmp_path / "trajectory_b.json"
+    path_a = tmp_path / "trajectory_a.json"
+    path_b.write_text(first.model_dump_json(indent=2), encoding="utf-8")
+    path_a.write_text(second.model_dump_json(indent=2), encoding="utf-8")
+
+    rows = collect_raw_metrics([path_b, path_a])
+
+    assert len(rows) == 2
+    assert [row.total_reward for row in rows] == [1.0, 0.0]
