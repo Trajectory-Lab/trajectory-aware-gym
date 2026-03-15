@@ -166,3 +166,7 @@ help = "Run tests"
 [tool.poe.tasks.test-cov]
 cmd = "pytest --cov=src/trajectory_aware_gym --cov-report=html"
 help = "Run tests with coverage"
+
+[tool.poe.tasks.verify-baselines]
+cmd = "python scripts/verify_baseline_setup.py"
+help = "Validate baseline config matrix for GRPO/PPO target environments"

@@ -210,7 +210,11 @@ __marimo__/
 # Experiment data and logs
 logs/
 results/
-experiments/
+experiments/*
+!experiments/configs/
+experiments/configs/*
+!experiments/configs/baselines/
+!experiments/configs/baselines/*.toml
 data/trajectories/
 data/checkpoints/
 
