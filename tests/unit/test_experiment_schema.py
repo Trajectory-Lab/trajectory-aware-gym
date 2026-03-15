@@ -550,8 +550,9 @@ class TestProductionConfigs:
         config = ExperimentConfig.from_yaml(EXPERIMENTS_DIR / "math-dry-run" / "config.yaml")
         assert config.num_replications == 1
         assert config.environment.gem_env_id == "math:Orz57K"
-        assert config.environment.max_steps == 2
-        assert config.environment.train_size == 1
+        assert config.environment.max_steps == 5
+        assert config.environment.train_size == 12
+        assert config.environment.val_size == 3
         assert config.environment.tools == [ToolType.PYTHON_EXEC]
-        assert config.eval_protocol.max_response_tokens == 2048
+        assert config.eval_protocol.max_response_tokens == 1536
         assert len(config.task_models) == 1

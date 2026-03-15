@@ -28,7 +28,7 @@ class TestBuildRunner:
         runner = build_runner(config)
         assert runner._environment_id == "math:Orz57K"
         assert runner._model_id == "bedrock/us.meta.llama3-1-8b-instruct-v1:0"
-        assert runner._max_steps == 2
+        assert runner._max_steps == 5
 
 
 class TestBuildTrainset:

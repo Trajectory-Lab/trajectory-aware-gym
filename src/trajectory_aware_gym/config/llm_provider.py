@@ -18,7 +18,7 @@ TaskModelName: TypeAlias = Literal[  # noqa: UP040
 ]
 
 
-def get_task_model_id(model: TaskModelName = "qwen3:1.7b") -> str:
+def get_task_model_id(model: TaskModelName = "qwen3:1.7b") -> str | None:
     """Resolve a task model alias to the underlying LiteLLM model ID."""
     match model:
         case "qwen3:1.7b":
@@ -50,6 +50,8 @@ def get_task_lm(
         settings.gem.temperature_train if mode == "train" else settings.gem.temperature_eval
     )
     model_id = get_task_model_id(model)
+    if model_id is None:
+        return None
     kwargs = {
         "model": model_id,
         "temperature": temperature,
