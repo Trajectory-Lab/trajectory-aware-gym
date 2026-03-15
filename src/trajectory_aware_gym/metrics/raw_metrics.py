@@ -21,7 +21,9 @@ def _get_ci(mapping: Mapping[str, Any], key: str) -> Any:
     return None
 
 
-def _extract_numeric(mapping: Mapping[str, Any], paths: tuple[tuple[str, ...], ...]) -> float | None:
+def _extract_numeric(
+    mapping: Mapping[str, Any], paths: tuple[tuple[str, ...], ...]
+) -> float | None:
     """Extract the first numeric value from a list of candidate key paths."""
     for path in paths:
         current: Any = mapping
@@ -213,7 +215,9 @@ def extract_episode_raw_metrics(trajectory: TrajectoryLog) -> EpisodeRawMetrics:
     steps_per_second = step_count / episode_latency if episode_latency > 0 else 0.0
     reward_per_second = trajectory.total_reward / episode_latency if episode_latency > 0 else 0.0
 
-    cost_per_step_usd = llm_cost_usd / step_count if llm_cost_usd is not None and step_count else None
+    cost_per_step_usd = (
+        llm_cost_usd / step_count if llm_cost_usd is not None and step_count else None
+    )
     cost_per_success_usd = llm_cost_usd if llm_cost_usd is not None and success else None
     tokens_per_step = total_tokens / step_count if total_tokens is not None and step_count else None
 

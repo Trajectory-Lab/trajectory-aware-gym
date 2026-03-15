@@ -100,7 +100,9 @@ def test_extract_episode_raw_metrics_with_step_level_llm_data() -> None:
         (False, False, 0.0, False),
     ],
 )
-def test_success_logic(terminated: bool, truncated: bool, total_reward: float, expected_success: bool) -> None:
+def test_success_logic(
+    terminated: bool, truncated: bool, total_reward: float, expected_success: bool
+) -> None:
     """Success requires terminal completion plus positive episode reward."""
     steps = [
         TrajectoryStep(
