@@ -16,6 +16,7 @@ gem:
   max_steps: 50
   temperature_train: 1.0
   temperature_eval: 0.0
+  tool_timeout: 30 #seconds
 
 fitness:
   gamma: 0.99
