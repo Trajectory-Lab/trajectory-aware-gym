@@ -4,6 +4,7 @@ from threading import Thread
 from typing import Any
 
 import trajectory_aware_gym.mcp.tools  # noqa: F401
+from trajectory_aware_gym.config import settings
 from trajectory_aware_gym.mcp.server import mcp
 from trajectory_aware_gym.utils.tool_logging import log_tool_call
 
@@ -35,7 +36,11 @@ class ToolRuntime:
 
         thread = Thread(target=runner)
         thread.start()
-        thread.join()
+        timeout = settings.gem.tool_timeout
+        thread.join(timeout=timeout)
+
+        if thread.is_alive():
+            raise TimeoutError(f"Tool execution timed out after {timeout}s")
 
         if error is not None:
             raise error
@@ -66,7 +71,16 @@ class ToolRuntime:
         name = tool_call["tool"]
         args = tool_call.get("arguments", {})
 
-        raw_result = self._run_sync(self._server.call_tool(name, args))
+        try:
+            tool = self._run_sync(self._server.get_tool(name))
+        except (KeyError, ValueError) as exc:
+            raw_result = {"status": "error", "error": f"Tool '{name}' not found: {exc}"}
+            result = self._normalize_result(raw_result)
+            log_tool_call(self.log_path, name, args, result)
+            return result
+
+        raw_result = self._run_sync(tool.run(args))
+
         result = self._normalize_result(raw_result)
 
         log_tool_call(self.log_path, name, args, result)
@@ -74,36 +88,13 @@ class ToolRuntime:
         return result
 
     def list_schemas(self) -> list[dict[str, Any]]:
-        raw_schemas = self._run_sync(self._server.list_tools())
+        tools = self._run_sync(self._server.get_tools())  # pyright: ignore[reportAttributeAccessIssue]
 
-        normalized_schemas: list[dict[str, Any]] = []
-        for schema in raw_schemas:
-            if all(hasattr(schema, field) for field in ("name", "description", "parameters")):
-                normalized_schemas.append(
-                    {
-                        "name": schema.name,
-                        "description": schema.description,
-                        "parameters": schema.parameters,
-                    }
-                )
-                continue
-
-            if isinstance(schema, dict):
-                normalized_schemas.append(schema)
-                continue
-
-            if hasattr(schema, "model_dump"):
-                dumped = schema.model_dump()
-                if isinstance(dumped, dict):
-                    normalized_schemas.append(
-                        {
-                            "name": dumped.get("name"),
-                            "description": dumped.get("description"),
-                            "parameters": dumped.get("parameters"),
-                        }
-                    )
-                    continue
-
-            normalized_schemas.append({"tool": str(schema)})
-
-        return normalized_schemas
+        return [
+            {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.parameters,
+            }
+            for tool in tools.values()
+        ]

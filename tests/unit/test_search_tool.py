@@ -23,7 +23,7 @@ class _FakeDDGS:
 def test_search_tool(monkeypatch):
     monkeypatch.setattr("trajectory_aware_gym.mcp.tools.search.DDGS", _FakeDDGS)
 
-    result = search(query="OpenAI")
+    result = search.fn(query="OpenAI")
 
     assert result["status"] == "success"
     assert len(result["results"]) > 0
@@ -43,7 +43,7 @@ class _FailingDDGS:
 def test_search_tool_returns_error_on_exception(monkeypatch):
     monkeypatch.setattr("trajectory_aware_gym.mcp.tools.search.DDGS", _FailingDDGS)
 
-    result = search(query="anything")
+    result = search.fn(query="anything")
 
     assert result["status"] == "error"
     assert "network unavailable" in result["error"]
