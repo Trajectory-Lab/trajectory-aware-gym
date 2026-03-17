@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from typing import Any
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -88,7 +88,10 @@ class TestExecute:
         mock_tool = MagicMock()
         mock_result = {"status": "success", "output": "42"}
 
-        with patch.object(runtime, "_run_sync", side_effect=[mock_tool, mock_result]) as mock_sync:
+        with (
+            patch.object(runtime._server, "get_tool", new=MagicMock()),
+            patch.object(runtime, "_run_sync", side_effect=[mock_tool, mock_result]) as mock_sync,
+        ):
             result = runtime.execute({"tool": "python_exec", "arguments": {"code": "print(42)"}})
 
         assert result == mock_result
@@ -103,7 +106,10 @@ class TestExecute:
     def test_execute_defaults_arguments_to_empty_dict(self, runtime):
         mock_tool = MagicMock()
 
-        with patch.object(runtime, "_run_sync", side_effect=[mock_tool, {"ok": True}]):
+        with (
+            patch.object(runtime._server, "get_tool", new=MagicMock()),
+            patch.object(runtime, "_run_sync", side_effect=[mock_tool, {"ok": True}]),
+        ):
             result = runtime.execute({"tool": "some_tool"})
 
         assert result == {"ok": True}
@@ -111,13 +117,19 @@ class TestExecute:
     def test_execute_normalizes_non_dict_result(self, runtime):
         mock_tool = MagicMock()
 
-        with patch.object(runtime, "_run_sync", side_effect=[mock_tool, "raw"]):
+        with (
+            patch.object(runtime._server, "get_tool", new=MagicMock()),
+            patch.object(runtime, "_run_sync", side_effect=[mock_tool, "raw"]),
+        ):
             result = runtime.execute({"tool": "t", "arguments": {}})
 
         assert result == {"status": "success", "result": "raw"}
 
     def test_execute_returns_error_dict_on_unknown_tool(self, runtime, tmp_path):
-        with patch.object(runtime, "_run_sync", side_effect=KeyError("no_such_tool")):
+        with (
+            patch.object(runtime._server, "get_tool", new=MagicMock()),
+            patch.object(runtime, "_run_sync", side_effect=KeyError("no_such_tool")),
+        ):
             result = runtime.execute({"tool": "no_such_tool", "arguments": {}})
 
         assert result["status"] == "error"
@@ -127,7 +139,10 @@ class TestExecute:
         assert log_file.exists()
 
     def test_execute_returns_error_on_value_error(self, runtime):
-        with patch.object(runtime, "_run_sync", side_effect=ValueError("invalid tool")):
+        with (
+            patch.object(runtime._server, "get_tool", new=MagicMock()),
+            patch.object(runtime, "_run_sync", side_effect=ValueError("invalid tool")),
+        ):
             result = runtime.execute({"tool": "bad_tool", "arguments": {}})
 
         assert result["status"] == "error"
@@ -164,11 +179,16 @@ class TestRunSyncWithLoop:
         assert result == "threaded"
 
     def test_thread_timeout_raises(self, runtime):
+        leaked_coro = None
+
         async def inner():
+            nonlocal leaked_coro
+
             async def slow_coro():
                 await asyncio.sleep(60)
 
-            return runtime._run_sync(slow_coro())
+            leaked_coro = slow_coro()
+            return runtime._run_sync(leaked_coro)
 
         with patch("trajectory_aware_gym.adapters.tool_runtime.Thread") as mock_thread_cls:
             mock_thread = mock_thread_cls.return_value
@@ -176,6 +196,9 @@ class TestRunSyncWithLoop:
 
             with pytest.raises(TimeoutError, match="timed out"):
                 asyncio.run(inner())
+
+        if leaked_coro is not None:
+            leaked_coro.close()
 
     def test_thread_runner_propagates_exception(self, runtime):
         async def inner():
@@ -205,7 +228,10 @@ class TestListSchemas:
         tool_a = self._make_tool("tool_a", "Does A", {"type": "object"})
         tool_b = self._make_tool("tool_b", "Does B", {})
 
-        with patch.object(runtime, "_run_sync", return_value={"tool_a": tool_a, "tool_b": tool_b}):
+        with (
+            patch.object(runtime._server, "get_tools", new=MagicMock()),
+            patch.object(runtime, "_run_sync", return_value={"tool_a": tool_a, "tool_b": tool_b}),
+        ):
             schemas = runtime.list_schemas()
 
         assert schemas == [
@@ -214,13 +240,19 @@ class TestListSchemas:
         ]
 
     def test_empty_tools(self, runtime):
-        with patch.object(runtime, "_run_sync", return_value={}):
+        with (
+            patch.object(runtime._server, "get_tools", new=MagicMock()),
+            patch.object(runtime, "_run_sync", return_value={}),
+        ):
             assert runtime.list_schemas() == []
 
     def test_single_tool(self, runtime):
         tool = self._make_tool("only", "The only tool", {"x": "int"})
 
-        with patch.object(runtime, "_run_sync", return_value={"only": tool}):
+        with (
+            patch.object(runtime._server, "get_tools", new=MagicMock()),
+            patch.object(runtime, "_run_sync", return_value={"only": tool}),
+        ):
             schemas = runtime.list_schemas()
 
         assert len(schemas) == 1
