@@ -47,6 +47,7 @@ dependencies = [
     "click>=8.3.1",
     "requests>=2.32.5",
     "ddgs>=1.0.0",
+    "fastmcp>=2.0,<3.0",
 ]
 
 
