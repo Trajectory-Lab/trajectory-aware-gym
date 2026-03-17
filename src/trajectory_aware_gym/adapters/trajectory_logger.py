@@ -94,9 +94,9 @@ class LLMCallMetadata(BaseModel):
     @model_validator(mode="after")
     def validate_token_sum(self) -> LLMCallMetadata:
         expected = self.prompt_tokens + self.completion_tokens
-        if self.total_tokens != expected:
+        if self.total_tokens < expected:
             raise ValueError(
-                f"total_tokens ({self.total_tokens}) must equal "
+                f"total_tokens ({self.total_tokens}) must be at least "
                 f"prompt_tokens + completion_tokens ({expected})"
             )
         return self
