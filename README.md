@@ -13,6 +13,7 @@ This Harvard Extension School capstone project evaluates whether evolutionary pr
 - 💰 **Cost Tracking**: Built-in token and cost tracking for all LLM calls
 - 🎯 **Two Published-Baseline Environments**: Orz57K and HotpotQA, with `quick-test` for fast iteration
 
+
 ## Current Status
 
 K4 is functionally complete: the repository now supports an end-to-end GEPA + DSPy + GEM dry-run that:

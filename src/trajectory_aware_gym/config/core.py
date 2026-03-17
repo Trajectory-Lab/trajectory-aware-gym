@@ -69,6 +69,7 @@ class GEMModel(BaseModel):
     max_steps: int
     temperature_train: float
     temperature_eval: float
+    tool_timeout: int = Field(ge=1)
 
 
 class GEPAModel(BaseModel):

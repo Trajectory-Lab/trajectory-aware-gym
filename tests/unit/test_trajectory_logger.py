@@ -160,14 +160,24 @@ class TestLLMCallMetadata:
         )
         assert meta.total_tokens == prompt + completion
 
-    def test_token_sum_mismatch_rejected(self):
+    def test_total_below_sum_rejected(self):
         with pytest.raises(ValidationError, match="total_tokens"):
             LLMCallMetadata(
                 model_id="bedrock/qwen3-1.7b",
                 prompt_tokens=10,
                 completion_tokens=20,
-                total_tokens=99,
+                total_tokens=25,
             )
+
+    def test_thinking_tokens_accepted(self):
+        """total_tokens may exceed prompt + completion (e.g. Qwen3 thinking tokens)."""
+        meta = LLMCallMetadata(
+            model_id="ollama_chat/qwen3:4b",
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=300,
+        )
+        assert meta.total_tokens == 300
 
     def test_negative_tokens_rejected(self):
         with pytest.raises(ValidationError):
