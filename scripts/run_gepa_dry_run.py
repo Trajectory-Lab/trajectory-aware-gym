@@ -36,8 +36,7 @@ DEFAULT_SEED_PROMPT = (
 )
 
 LOG_DIR = Path("logs/gepa-dry-run")
-DRY_RUN_MAX_METRIC_CALLS = 12
-DRY_RUN_NUM_THREADS = 2
+DRY_RUN_MAX_METRIC_CALLS = 32
 
 
 def load_config(path: Path) -> ExperimentConfig:
@@ -115,9 +114,13 @@ def run_dry_run(
         question_preview = str(example.problem).replace("\n", " ")[:120]
         print(f"    Sample {index}: seed={example.seed} problem={question_preview}")
 
+    # Resolve num_threads from centralized config
+    from trajectory_aware_gym.config import settings as settings
+
+    num_threads = settings.gepa.num_threads
+
     # Configure DSPy LM for the task model
     task_model_cfg = config.task_models[0]
-    from trajectory_aware_gym.config import settings as app_settings
 
     if task_model_cfg.provider == "bedrock":
         task_lm = get_task_lm(
@@ -131,7 +134,7 @@ def run_dry_run(
             "max_tokens": config.eval_protocol.max_response_tokens,
         }
         if task_model_cfg.provider == "ollama":
-            task_lm_kwargs["api_base"] = app_settings.ollama.api_base
+            task_lm_kwargs["api_base"] = settings.ollama.api_base
         task_lm = dspy.LM(**task_lm_kwargs)
     dspy.configure(lm=task_lm)
 
@@ -156,7 +159,7 @@ def run_dry_run(
     gepa_kwargs: dict = {
         "metric": metric,
         "max_metric_calls": DRY_RUN_MAX_METRIC_CALLS,
-        "num_threads": DRY_RUN_NUM_THREADS,
+        "num_threads": num_threads,
         "log_dir": str(LOG_DIR),
         "track_stats": True,
         "seed": config.seeds.data_seed,
@@ -170,7 +173,7 @@ def run_dry_run(
     print(
         "\nStarting GEPA compile "
         f"(max_metric_calls={DRY_RUN_MAX_METRIC_CALLS}, "
-        f"num_threads={DRY_RUN_NUM_THREADS})..."
+        f"num_threads={num_threads})..."
     )
     start_time = time.monotonic()
     optimized_module = optimizer.compile(
@@ -194,7 +197,7 @@ def run_dry_run(
         "gepa_budget": {
             "config_mode": config.gepa_budget.mode,
             "max_metric_calls": DRY_RUN_MAX_METRIC_CALLS,
-            "num_threads": DRY_RUN_NUM_THREADS,
+            "num_threads": num_threads,
         },
         "train_size": len(trainset),
         "val_size": len(valset),

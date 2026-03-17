@@ -78,6 +78,7 @@ class GEPAModel(BaseModel):
     budget: Literal["light", "medium", "heavy"]
     population_size: int
     iterations: int
+    num_threads: int = Field(ge=1)
     reflection_model: str
 
 

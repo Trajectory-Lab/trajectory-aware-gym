@@ -30,6 +30,7 @@ gepa:
   budget: medium
   population_size: 6
   iterations: 75
+  num_threads: 16
   reflection_model: "openai.gpt-oss-120b-1:0"
 
 experiment:
