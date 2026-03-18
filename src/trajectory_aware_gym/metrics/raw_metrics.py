@@ -176,14 +176,32 @@ def extract_episode_raw_metrics(trajectory: TrajectoryLog) -> EpisodeRawMetrics:
     for step in trajectory.steps:
         info: Mapping[str, Any] = step.info if isinstance(step.info, Mapping) else {}
 
+        # Try info dict first (backward compat with external trajectory formats).
         step_cost = _extract_numeric(info, cost_paths)
-        if step_cost is not None:
-            cost_values.append(step_cost)
-            cost_seen_steps += 1
-
         step_prompt_tokens = _extract_int(info, prompt_token_paths)
         step_completion_tokens = _extract_int(info, completion_token_paths)
         step_total_tokens = _extract_int(info, total_token_paths)
+        step_llm_latency = _extract_numeric(info, latency_paths)
+
+        # Fall back to step.llm_calls when info dict has no data.
+        if step.llm_calls and step_total_tokens is None and step_prompt_tokens is None:
+            step_prompt_tokens = sum(c.prompt_tokens for c in step.llm_calls)
+            step_completion_tokens = sum(c.completion_tokens for c in step.llm_calls)
+            step_total_tokens = sum(c.total_tokens for c in step.llm_calls)
+
+        if step.llm_calls and step_cost is None:
+            calls_with_cost = [c.cost_usd for c in step.llm_calls if c.cost_usd is not None]
+            if calls_with_cost:
+                step_cost = sum(calls_with_cost)
+
+        if step.llm_calls and step_llm_latency is None:
+            calls_with_latency = [c.latency_ms for c in step.llm_calls if c.latency_ms is not None]
+            if calls_with_latency:
+                step_llm_latency = sum(calls_with_latency) / 1000.0
+
+        if step_cost is not None:
+            cost_values.append(step_cost)
+            cost_seen_steps += 1
 
         if step_total_tokens is None and (
             step_prompt_tokens is not None or step_completion_tokens is not None
@@ -204,7 +222,6 @@ def extract_episode_raw_metrics(trajectory: TrajectoryLog) -> EpisodeRawMetrics:
         ):
             token_seen_steps += 1
 
-        step_llm_latency = _extract_numeric(info, latency_paths)
         if step_llm_latency is not None:
             llm_latency_values.append(step_llm_latency)
             latency_seen_steps += 1

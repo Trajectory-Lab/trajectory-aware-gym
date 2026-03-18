@@ -8,10 +8,12 @@ import types
 import pytest
 
 from trajectory_aware_gym.adapters.trajectory_logger import (
+    LLMCallMetadata,
     TrajectoryLog,
     TrajectoryLogger,
 )
 from trajectory_aware_gym.config.settings import ProjectPaths
+from trajectory_aware_gym.metrics import extract_episode_raw_metrics
 
 
 def test_episode_trajectory_persists_to_logs(tmp_path):
@@ -229,3 +231,135 @@ def test_reflection_model_routing_accepts_explicit_model(fake_lm, mock_settings)
     assert fake_lm[0]["temperature"] == pytest.approx(0.7)
     assert fake_lm[0]["max_tokens"] == 2048
     assert fake_lm[0]["aws_region_name"] == "us-east-1"
+
+
+def test_episode_trajectory_produces_valid_raw_metrics(tmp_path):
+    """Raw metrics are extractable from a persisted trajectory with LLM call metadata."""
+    paths = ProjectPaths(root=tmp_path)
+    logger = TrajectoryLogger(environment_id="math:Orz57K", seed=42)
+    logger.set_system_prompt("Solve carefully.")
+    logger.set_initial_state("Solve 2+2", {"source": "integration"})
+    logger.add_step(
+        action="\\boxed{4}",
+        observation="Correct",
+        reward=1.0,
+        terminated=True,
+        truncated=False,
+        info={"correct": True},
+        llm_calls=[
+            LLMCallMetadata(
+                model_id="ollama_chat/qwen3:1.7b",
+                prompt_tokens=50,
+                completion_tokens=10,
+                total_tokens=60,
+                cost_usd=0.005,
+            )
+        ],
+    )
+
+    output_file = logger.save(project_paths=paths)
+    loaded = TrajectoryLog.model_validate_json(output_file.read_text(encoding="utf-8"))
+    metrics = extract_episode_raw_metrics(loaded)
+
+    assert metrics.environment_id == "math:Orz57K"
+    assert metrics.step_count == 1
+    assert metrics.success is True
+    assert metrics.total_reward == 1.0
+    assert metrics.total_tokens == 60
+    assert metrics.prompt_tokens == 50
+    assert metrics.completion_tokens == 10
+    assert metrics.llm_cost_usd == pytest.approx(0.005)
+    assert metrics.token_data_coverage == 1.0
+    assert metrics.cost_data_coverage == 1.0
+
+
+def test_multi_step_episode_metrics_aggregate_across_steps(tmp_path):
+    """Multi-step trajectory metrics aggregate token/cost data and track coverage."""
+    paths = ProjectPaths(root=tmp_path)
+    logger = TrajectoryLogger(environment_id="game:GuessTheNumber-v0-easy", seed=7)
+    logger.set_initial_state("start")
+    logger.add_step(
+        action="\\boxed{3}",
+        observation="higher",
+        reward=0.0,
+        terminated=False,
+        truncated=False,
+        llm_calls=[
+            LLMCallMetadata(
+                model_id="test-model",
+                prompt_tokens=30,
+                completion_tokens=5,
+                total_tokens=35,
+                cost_usd=0.001,
+            )
+        ],
+    )
+    logger.add_step(
+        action="\\boxed{5}",
+        observation="win",
+        reward=1.0,
+        terminated=True,
+        truncated=False,
+        llm_calls=[
+            LLMCallMetadata(
+                model_id="test-model",
+                prompt_tokens=40,
+                completion_tokens=8,
+                total_tokens=48,
+                cost_usd=0.002,
+            )
+        ],
+    )
+
+    output_file = logger.save(project_paths=paths)
+    loaded = TrajectoryLog.model_validate_json(output_file.read_text(encoding="utf-8"))
+    metrics = extract_episode_raw_metrics(loaded)
+
+    assert metrics.step_count == 2
+    assert metrics.total_tokens == 83
+    assert metrics.prompt_tokens == 70
+    assert metrics.llm_cost_usd == pytest.approx(0.003)
+    assert metrics.tokens_per_step == pytest.approx(83 / 2)
+    assert metrics.cost_per_step_usd == pytest.approx(0.003 / 2)
+    assert metrics.repeat_action_rate == 0.0
+    assert metrics.token_data_coverage == 1.0
+
+
+def test_partial_instrumentation_coverage_tracked(tmp_path):
+    """Coverage fractions reflect steps with and without LLM metadata."""
+    paths = ProjectPaths(root=tmp_path)
+    logger = TrajectoryLogger(environment_id="math:Orz57K", seed=1)
+    logger.set_initial_state("problem")
+    logger.add_step(
+        action="attempt1",
+        observation="wrong",
+        reward=0.0,
+        terminated=False,
+        truncated=False,
+        llm_calls=[
+            LLMCallMetadata(
+                model_id="m",
+                prompt_tokens=10,
+                completion_tokens=5,
+                total_tokens=15,
+                cost_usd=0.001,
+            )
+        ],
+    )
+    logger.add_step(
+        action="attempt2",
+        observation="done",
+        reward=0.0,
+        terminated=False,
+        truncated=True,
+    )
+
+    output_file = logger.save(project_paths=paths)
+    loaded = TrajectoryLog.model_validate_json(output_file.read_text(encoding="utf-8"))
+    metrics = extract_episode_raw_metrics(loaded)
+
+    assert metrics.step_count == 2
+    assert metrics.token_data_coverage == pytest.approx(0.5)
+    assert metrics.cost_data_coverage == pytest.approx(0.5)
+    assert metrics.total_tokens == 15
+    assert metrics.llm_cost_usd == pytest.approx(0.001)

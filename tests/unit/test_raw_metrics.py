@@ -7,7 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from trajectory_aware_gym.adapters.trajectory_logger import TrajectoryLog, TrajectoryStep
+from trajectory_aware_gym.adapters.trajectory_logger import (
+    LLMCallMetadata,
+    TrajectoryLog,
+    TrajectoryStep,
+)
 from trajectory_aware_gym.metrics.raw_metrics import (
     _extract_numeric,
     _percentile,
@@ -255,3 +259,105 @@ def test_collect_raw_metrics_loads_and_sorts_logs(tmp_path: Path) -> None:
 
     assert len(rows) == 2
     assert [row.total_reward for row in rows] == [1.0, 0.0]
+
+
+def test_extract_metrics_reads_from_llm_calls_when_info_empty() -> None:
+    """Token and cost data is extracted from step.llm_calls when step.info has none."""
+    steps = [
+        TrajectoryStep(
+            step_index=1,
+            action="act",
+            observation="obs",
+            reward=1.0,
+            terminated=True,
+            truncated=False,
+            info={},
+            llm_calls=[
+                LLMCallMetadata(
+                    model_id="m",
+                    prompt_tokens=10,
+                    completion_tokens=5,
+                    total_tokens=15,
+                    cost_usd=0.01,
+                )
+            ],
+        )
+    ]
+    trajectory = _build_trajectory(steps=steps, total_reward=1.0, elapsed_seconds=1.0)
+    metrics = extract_episode_raw_metrics(trajectory)
+
+    assert metrics.total_tokens == 15
+    assert metrics.prompt_tokens == 10
+    assert metrics.completion_tokens == 5
+    assert metrics.llm_cost_usd == pytest.approx(0.01)
+    assert metrics.token_data_coverage == 1.0
+    assert metrics.cost_data_coverage == 1.0
+
+
+def test_extract_metrics_aggregates_multiple_llm_calls_per_step() -> None:
+    """Multiple llm_calls within a single step are summed correctly."""
+    steps = [
+        TrajectoryStep(
+            step_index=1,
+            action="act",
+            observation="obs",
+            reward=0.0,
+            terminated=True,
+            truncated=False,
+            info={},
+            llm_calls=[
+                LLMCallMetadata(
+                    model_id="m",
+                    prompt_tokens=10,
+                    completion_tokens=5,
+                    total_tokens=15,
+                    cost_usd=0.005,
+                    latency_ms=200.0,
+                ),
+                LLMCallMetadata(
+                    model_id="m",
+                    prompt_tokens=20,
+                    completion_tokens=8,
+                    total_tokens=28,
+                    cost_usd=0.010,
+                    latency_ms=300.0,
+                ),
+            ],
+        )
+    ]
+    trajectory = _build_trajectory(steps=steps, total_reward=0.0, elapsed_seconds=1.0)
+    metrics = extract_episode_raw_metrics(trajectory)
+
+    assert metrics.prompt_tokens == 30
+    assert metrics.completion_tokens == 13
+    assert metrics.total_tokens == 43
+    assert metrics.llm_cost_usd == pytest.approx(0.015)
+    assert metrics.mean_llm_latency_seconds == pytest.approx(0.5)
+
+
+def test_info_dict_takes_precedence_over_llm_calls() -> None:
+    """When step.info has token data, llm_calls are not double-counted."""
+    steps = [
+        TrajectoryStep(
+            step_index=1,
+            action="act",
+            observation="obs",
+            reward=1.0,
+            terminated=True,
+            truncated=False,
+            info={"prompt_tokens": 99, "completion_tokens": 11, "total_tokens": 110},
+            llm_calls=[
+                LLMCallMetadata(
+                    model_id="m",
+                    prompt_tokens=10,
+                    completion_tokens=5,
+                    total_tokens=15,
+                )
+            ],
+        )
+    ]
+    trajectory = _build_trajectory(steps=steps, total_reward=1.0, elapsed_seconds=1.0)
+    metrics = extract_episode_raw_metrics(trajectory)
+
+    assert metrics.total_tokens == 110
+    assert metrics.prompt_tokens == 99

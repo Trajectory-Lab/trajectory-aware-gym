@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from trajectory_aware_gym.adapters.gem_episode_runner import GEMEpisodeRunner
 
 
@@ -76,6 +78,7 @@ def test_run_episode_records_trajectory_and_cost(monkeypatch):
 
     result = runner.run_episode("Solve carefully.", persist=False)
     trajectory = result.trajectory
+    metrics = result.raw_metrics
 
     assert result.log_path is None
     assert trajectory.environment_id == "math:Orz57K"
@@ -92,6 +95,13 @@ def test_run_episode_records_trajectory_and_cost(monkeypatch):
     assert len(trajectory.steps) == 1
     assert trajectory.steps[0].action == "\\boxed{4}"
     assert len(trajectory.steps[0].llm_calls) == 1
+
+    assert metrics.run_id == trajectory.run_id
+    assert metrics.step_count == 1
+    assert metrics.total_reward == 1.0
+    assert metrics.success is True
+    assert metrics.total_tokens == 12
+    assert metrics.llm_cost_usd == pytest.approx(0.0123)
 
 
 def test_run_episode_executes_tool_call_before_final_action(monkeypatch):
@@ -146,7 +156,9 @@ def test_run_episode_executes_tool_call_before_final_action(monkeypatch):
         max_tool_rounds=2,
     )
 
-    trajectory = runner.run_episode("Use tools when needed.", persist=False).trajectory
+    result = runner.run_episode("Use tools when needed.", persist=False)
+    trajectory = result.trajectory
+    metrics = result.raw_metrics
     step = trajectory.steps[0]
 
     assert runtime.calls == [{"tool": "python_exec", "arguments": {"code": "print(2+2)"}}]
@@ -156,3 +168,5 @@ def test_run_episode_executes_tool_call_before_final_action(monkeypatch):
     assert step.tool_calls[0].success is True
     assert len(step.llm_calls) == 2
     assert trajectory.total_tokens == 24
+    assert metrics.total_tokens == 24
+    assert metrics.step_count == 1
