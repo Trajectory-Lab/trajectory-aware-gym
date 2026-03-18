@@ -8,6 +8,12 @@ This file provides comprehensive guidance for AI coding assistants (Claude Code,
 
 This is a Harvard Extension School capstone project comparing **token-space prompt optimization** (GEPA) against **weight-space reinforcement learning** (PPO, GRPO) for agentic LLM tasks. The core contribution is the **GEM-DSPy adapter**, which bridges OpenAI Gym-style RL environments with prompt optimization frameworks.
 
+### Reference Documents
+
+- **[docs/Capstone_proposal.md](docs/Capstone_proposal.md)**: Full capstone proposal — hypotheses, methodology, theoretical framework, timeline, budget
+- **[docs/GEM_paper.md](docs/GEM_paper.md)**: GEM paper (Liu et al., 2025) — gym framework, RL baselines, environment specs, hyperparameters
+- **[docs/GEPA_paper.md](docs/GEPA_paper.md)**: GEPA paper (Agrawal et al., 2025) — reflective prompt evolution, Pareto-aware selection
+
 ## Package Management
 
 **Use `uv` for all Python operations:**
@@ -93,22 +99,21 @@ The project evaluates two optimization paradigms:
 - Composite metrics include loop detection penalty and step efficiency bonus
 
 **GEPA Integration** (`src/trajectory_aware_gym/optimizers/`):
-- Uses Claude Sonnet 4.5 as reflection model (distinct from task model)
+- Uses a Bedrock-hosted reflection model (currently GPT OSS 120B in the dry-run path, distinct from the task model)
 - Maintains **Pareto frontier** of prompts (not single best) to preserve diversity
 - Budget modes: light/medium/heavy controlling iteration count and population size
 
 **AWS/LLM Infrastructure** (`src/trajectory_aware_gym/config/`):
 - All LLM calls route through **LiteLLM** for unified provider interface
-- Task models: Qwen3 (1.7B, 4B) via AWS Bedrock for fair comparison with GEM's RL baselines
-- Reflection model: Claude Sonnet 4.5 via Bedrock for GEPA mutations
-- Configuration via Pydantic Settings with `.env` file
+- Task models: Qwen3 (1.7B, 4B) via Ollama and Llama 1B/3B/8B via AWS Bedrock
+- Reflection model: configurable Bedrock model, with GPT OSS 120B currently used in the dry-run path
+- Configuration via YAML (`src/trajectory_aware_gym/config/trajectory-aware-gym.yaml`) with `.env` overrides (see Configuration Management)
 
 ### Environments
 
-Three GEM environments from the proposal:
-1. **Math12K**: Chain-of-thought mathematical reasoning (single-turn)
-2. **CodeContest**: Competitive programming with test execution (multi-turn, tool-using)
-3. **HotpotQA**: Multi-hop question answering (multi-turn, retrieval-heavy)
+Two GEM environments with published RL baselines:
+1. **Orz57K**: Mathematical reasoning with Python tool (multi-turn, tool-using) — RL baseline 71.0% on MATH500
+2. **HotpotQA**: Multi-hop question answering with search tool (multi-turn, retrieval-heavy) — RL baseline 43.2%
 
 ## Development Commands
 
@@ -132,7 +137,8 @@ uv run pytest tests/integration/ -v
 - Parameters should be **comprehensive** and include edge cases (empty strings, zero, negative values, boundary conditions, None where applicable)
 - Prefer parametrized tests over repetitive test methods
 - Use fixtures for shared setup (e.g., `tmp_path`, `monkeypatch`)
-- For pydantic-settings configs, pass `_env_file=None` to avoid `.env` interference
+- For config tests, use `Settings.reset()` in fixtures to clear singleton state between tests
+- Tests load from the production `src/trajectory_aware_gym/config/trajectory-aware-gym.yaml`; use `monkeypatch.setenv()` for overrides
 
 ```python
 # Good: comprehensive parametrized test with edge cases
@@ -190,40 +196,49 @@ uv run bandit -r src
 - Standard checks (trailing whitespace, YAML/TOML/JSON validation, etc.)
 
 ### Running Experiments
-```bash
-# Activate environment first (if needed for interactive work)
-source .venv/bin/activate
+Primary experiment configs:
+- `experiments/orz57k/config.yaml`
+- `experiments/hotpotqa/config.yaml`
+- `experiments/quick-test/config.yaml`
 
-# Run GEPA optimization on Math12K
-uv run python examples/run_gepa_math12k.py
-
-# Compare against RL baselines
-uv run python scripts/compare_baselines.py --environment math12k
-
-# Run with specific configuration
-uv run python scripts/run_experiment.py \
-  --config experiments/configs/baseline.yaml \
-  --replications 3
-```
+Use these YAMLs as the source of truth for environment selection, dataset splits, and RL comparison targets.
 
 ## Configuration Management
 
+Configuration is centralized in `src/trajectory_aware_gym/config/trajectory-aware-gym.yaml` with `.env` overrides.
+
+**Priority (highest → lowest):** `.env` / env vars → `src/trajectory_aware_gym/config/trajectory-aware-gym.yaml`
+
+No defaults are hardcoded in Python — all values come from `.env` or YAML.
+
+### Key Files
+
+- **`src/trajectory_aware_gym/config/trajectory-aware-gym.yaml`**: Non-sensitive defaults (checked into git)
+- **`.env`**: Secrets and per-developer overrides (git-ignored)
+- **`src/trajectory_aware_gym/config/core.py`**: Settings loader + sub-models
+
 ### Environment Variables (.env)
 
-Critical settings:
-- **AWS_REGION**, **AWS_ACCESS_KEY_ID**, **AWS_SECRET_ACCESS_KEY**: Bedrock access
-- **BEDROCK_QWEN3_1_7B**, **BEDROCK_CLAUDE_SONNET_4_5**: Model IDs
+Env vars use `PREFIX_FIELD` naming (e.g., `AWS_REGION`, `GEM_MAX_STEPS`):
+- **AWS_ACCESS_KEY_ID**, **AWS_SECRET_ACCESS_KEY**: Bedrock credentials
+- **AWS_REGION**: AWS region override
 - **GEPA_BUDGET**: light/medium/heavy (controls iterations and population)
+- **GEM_MAX_STEPS**: Max steps per episode
 - **GEM_TEMPERATURE_TRAIN**: 1.0 for exploration, **GEM_TEMPERATURE_EVAL**: 0.0 for determinism
+
+Any YAML value can be overridden via env var using its section prefix:
+`{SECTION_PREFIX}_{FIELD_NAME}` (e.g., `OLLAMA_API_BASE`, `LOG_LEVEL`)
 
 ### Programmatic Access
 
 ```python
-from trajectory_aware_gym.config import AWSConfig, GEPAConfig, GEMConfig
+from trajectory_aware_gym.config import settings
 
-aws = AWSConfig()  # Auto-loads from .env
-gepa = GEPAConfig()
-gem = GEMConfig()
+# Access sub-configs via properties
+settings.aws.region
+settings.gem.max_steps
+settings.gepa.budget
+settings.ollama.api_base
 ```
 
 ## Cost and Token Tracking
@@ -362,11 +377,13 @@ if is_admin(user):
 
 ## Project Timeline (16 weeks)
 
-- **Weeks 1-2** (Phase 1): Environment setup ← **Currently here**
+- **Weeks 1-2** (Phase 1): Environment setup
 - **Weeks 3-7** (Phase 2): GEM-DSPy-GEPA integration
 - **Weeks 8-11** (Phase 3): Primary experiments
 - **Weeks 12-13** (Phase 4): Generalization & ablations
 - **Weeks 14-16** (Phase 5): Analysis & writing
+
+**Current status:** K4 dry-run integration is functionally closed. The repository now has a working end-to-end GEPA + DSPy + GEM smoke path, but prompt-improvement quality, multi-step tool use, and experiment-grade evaluation remain active work.
 
 ## Key Research Hypotheses
 
@@ -380,3 +397,14 @@ if is_admin(user):
 - **Do NOT** use test set during optimization (strict held-out evaluation)
 - **Do** maintain identical evaluation protocols between paradigms for fair comparison
 - **Do** track and report cost/token usage for ALL LLM calls (critical for H2 hypothesis validation)
+
+## Documentation Maintenance
+
+When adding new features or deprecating existing ones, update the relevant documentation:
+
+- **[README.md](README.md)**: Project overview, setup instructions, project structure
+- **[docs/configuration.md](docs/configuration.md)**: Configuration schema, env var conventions, adding models/sections
+- **[AGENTS.md](AGENTS.md)**: This file — agent guidelines, architecture, development commands
+- **[.env.example](.env.example)**: Keep in sync with any new secret/override env vars
+
+Do not let documentation drift from the code. If you change a config field, model name, or access pattern, update the corresponding docs in the same PR.

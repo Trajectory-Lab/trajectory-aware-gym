@@ -1,0 +1,72 @@
+# Minimal real-infra dry-run for Orz57K
+# Intended for a small Bedrock-backed smoke episode against GEM.
+
+name: math-dry-run
+description: >
+  Small real-infrastructure dry-run for the Orz57K math benchmark.
+  Uses one Bedrock task model, one rollout, and a short episode cap.
+
+environment:
+  gem_env_id: "math:Orz57K"
+  env_type: math
+  dspy_module: react
+  train_size: 12
+  val_size: 3
+  max_steps: 5
+  discount_gamma: 1.0
+  tools: [python_exec]
+  dataset:
+    hf_dataset_id: "axon-rl/ORZ-57k"
+    total_train_size: 57000
+    subsample_size: 12
+    subsample_strategy: uniform
+    eval_dataset_id: "axon-rl/math-eval"
+    eval_split: MATH500
+    eval_size: 12
+
+eval_protocol:
+  max_response_tokens: 1536
+  temperature_train: 0.2
+  temperature_eval: 0.0
+  top_p: 1.0
+  top_k: -1
+  rollouts_per_task: 1
+  tost_margin: 0.05
+  tost_alpha: 0.05
+  bootstrap_iterations: 100
+
+task_models:
+  - name: "llama:8b"
+    model_id: "bedrock/us.meta.llama3-1-8b-instruct-v1:0"
+    provider: bedrock
+    parameter_count: "8B"
+
+reflection_model:
+  model_id: "openai.gpt-oss-120b-1:0"
+  provider: bedrock
+  temperature: 1.0
+  max_tokens: 15136
+
+gepa_budget:
+  mode: light
+  iterations: 2
+  population_size: 3
+  elite_count: 1
+  tasks_per_minibatch: 1
+
+seeds:
+  data_seed: 42
+  replication_seeds: [42]
+
+num_replications: 1
+
+fitness_override:
+  gamma: 1.0
+  max_steps: 2
+
+cost_budget:
+  estimated_tokens_per_experiment: 10000
+  total_budget_usd: 1.0
+  buffer_pct: 0.25
+
+rl_baselines: []

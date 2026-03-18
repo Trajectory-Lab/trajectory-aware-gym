@@ -1,0 +1,6 @@
+enabled_tools:
+  - python_exec
+  - search
+
+search:
+  max_results: 5

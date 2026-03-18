@@ -40,11 +40,16 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "pydantic>=2.5.0",
     "pydantic-settings>=2.1.0",
+    "PyYAML>=6.0",
     # Utilities
     "tqdm>=4.66.0",
     "rich>=13.7.0",
     "click>=8.3.1",
     "requests>=2.32.5",
+    "ddgs>=1.0.0",
+    "fastmcp>=2.0,<3.0",
+    "datasets>=4.7.0",
+    "pylatexenc>=2.10",
 ]
 
 
@@ -98,11 +103,6 @@ ignore = [
 "__init__.py" = ["F401"]  # unused imports
 "tests/**/*.py" = ["F401", "F811"]  # allow test fixtures
 
-[tool.black]
-line-length = 100
-target-version = ["py313"]
-include = '\.pyi?$'
-
 [tool.pyright]
 pythonVersion = "3.13"
 typeCheckingMode = "basic"
@@ -122,7 +122,6 @@ dev = [
     "pytest-asyncio>=0.23.0",
     # Linting and formatting
     "ruff>=0.6.0",
-    "black>=24.0.0",
     "mypy>=1.8.0",
     "pyright>=1.1.408",
     # Security
@@ -152,8 +151,11 @@ cmd = "ruff check src tests"
 help = "Run ruff linter"
 
 [tool.poe.tasks.format]
-cmd = "ruff check --fix src tests && black src tests"
-help = "Format code with ruff and black"
+sequence = [
+  { cmd = "ruff check --fix src tests" },
+  { cmd = "ruff format src tests" }
+]
+help = "Format code with ruff"
 
 [tool.poe.tasks.typecheck]
 cmd = "pyright src"
@@ -167,6 +169,10 @@ help = "Run tests"
 cmd = "pytest --cov=src/trajectory_aware_gym --cov-report=html"
 help = "Run tests with coverage"
 
-[tool.poe.tasks.verify-baselines]
-cmd = "python scripts/verify_baseline_setup.py"
-help = "Validate baseline config matrix for GRPO/PPO target environments"
+[tool.poe.tasks.dry-run-math]
+cmd = "python scripts/run_gem_episode.py --smoke --experiment-config experiments/math-dry-run/config.yaml --max-steps 1"
+help = "Run the minimal real-infrastructure Orz57K dry-run against the configured task model"
+
+[tool.poe.tasks.dry-run-gepa]
+cmd = "python scripts/run_gepa_dry_run.py --config experiments/math-dry-run/config.yaml"
+help = "Run the full GEPA + DSPy + GEM dry-run pipeline (K4 deliverable)"

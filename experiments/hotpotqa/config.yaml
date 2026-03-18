@@ -1,0 +1,101 @@
+# HotpotQA: multi-turn multi-hop question answering
+# GEM paper: gamma=0.9 for QA tasks, r=1 correct / r=0 wrong
+
+name: hotpotqa
+description: >
+  GEPA prompt optimization on HotpotQA with web search tool access.
+  Compares against GEM's published REINFORCE+ReBN single-environment baseline.
+
+environment:
+  gem_env_id: "qa:HotpotQA"
+  env_type: qa
+  dspy_module: react
+  train_size: 500
+  max_steps: 10
+  discount_gamma: 0.9
+  tools: [web_search]
+  dataset:
+    hf_dataset_id: "axon-rl/HotpotQA"
+    total_train_size: 90400
+    subsample_size: 500
+    subsample_strategy: uniform
+    eval_dataset_id: "axon-rl/search-eval"
+    eval_split: hotpotqa
+    eval_size: 512
+
+eval_protocol:
+  max_response_tokens: 4096
+  temperature_train: 1.0
+  temperature_eval: 0.0
+  top_p: 1.0
+  top_k: -1
+  rollouts_per_task: 5
+  tost_margin: 0.05
+  tost_alpha: 0.05
+  bootstrap_iterations: 1000
+
+task_models:
+  - name: Qwen3-1.7B
+    model_id: "ollama_chat/qwen3:1.7b"
+    provider: ollama
+    parameter_count: "1.7B"
+
+  - name: Qwen3-4B
+    model_id: "ollama_chat/qwen3:4b"
+    provider: ollama
+    parameter_count: "4B"
+
+reflection_model:
+  model_id: "anthropic.claude-sonnet-4-5-v2:0"
+  provider: bedrock
+  temperature: 1.0
+  max_tokens: 4096
+
+gepa_budget:
+  mode: medium
+  iterations: 75
+  population_size: 6
+  elite_count: 2
+  tasks_per_minibatch: 3
+
+seeds:
+  data_seed: 42
+  replication_seeds: [42, 123, 456]
+
+num_replications: 3
+
+rl_baselines:
+  - algorithm: "REINFORCE+ReBN"
+    environment: "qa:HotpotQA"
+    model_name: Qwen3-4B
+    model_size: "4B"
+    success_rate: 0.432
+    tool_augmented: true
+    training_condition: single
+    metric_name: pass@1
+    source: "GEM (Liu et al., 2025)"
+    source_detail: "Table 2, HotpotQA, +RL+tool single"
+    estimated: false
+
+comparison_protocol:
+  primary_metric: success_rate
+  equivalence_test: TOST
+  primary_rl_baseline: "REINFORCE+ReBN (+tool, single)"
+  prompt_baselines:
+    - name: zero-shot
+      description: "Unoptimized DSPy agent with hand-written instructions"
+      optimizer:
+      requires_optimization: false
+    - name: miprov2
+      description: "DSPy's Bayesian prompt optimizer baseline"
+      optimizer: MIPROv2
+      requires_optimization: true
+
+fitness_override:
+  gamma: 0.9
+  max_steps: 10
+
+cost_budget:
+  estimated_tokens_per_experiment: 94000000
+  total_budget_usd: 2500.0
+  buffer_pct: 0.25
