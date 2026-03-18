@@ -43,12 +43,12 @@ def parse_args() -> argparse.Namespace:
 def _write_csv(file_path: Path, rows: list[EpisodeRawMetrics]) -> None:
     """Write raw metric rows to CSV."""
     if not rows:
-        file_path.write_text("", encoding="utf-8")
+        field_names = list(EpisodeRawMetrics.model_fields.keys())
+        with file_path.open("w", encoding="utf-8", newline="") as handle:
+            csv.DictWriter(handle, fieldnames=field_names).writeheader()
         return
 
-    first_row = rows[0].model_dump(mode="json")
-    field_names = list(first_row.keys())
-
+    field_names = list(rows[0].model_dump(mode="json").keys())
     with file_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=field_names)
         writer.writeheader()

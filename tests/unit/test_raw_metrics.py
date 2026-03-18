@@ -106,6 +106,7 @@ def test_extract_episode_raw_metrics_with_step_level_llm_data() -> None:
     [
         (True, False, 1.0, True),
         (True, False, 0.0, False),
+        (True, True, 1.0, False),
         (False, True, 1.0, False),
         (False, False, 0.0, False),
     ],

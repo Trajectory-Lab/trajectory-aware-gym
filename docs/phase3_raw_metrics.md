@@ -49,13 +49,16 @@ Coverage metrics are critical in N1 because some environments and wrappers curre
 
 ## Extraction strategy
 
-The extractor reads known keys from each step `info` payload using tolerant aliases. For example:
+The extractor checks two data sources per step, in order:
 
-- Cost aliases: `cost_usd`, `llm_cost_usd`, `usage.cost_usd`
-- Token aliases: `prompt_tokens`, `completion_tokens`, `total_tokens`, and nested `usage.*`
-- Latency aliases: `latency_seconds`, `llm_latency_seconds`, `duration_seconds`
+1. **`step.info` dict** — reads known key aliases (backward compat with external trajectory formats):
+   - Cost: `cost_usd`, `llm_cost_usd`, `usage.cost_usd`
+   - Tokens: `prompt_tokens`, `completion_tokens`, `total_tokens`, and nested `usage.*`
+   - Latency: `latency_seconds`, `llm_latency_seconds`, `duration_seconds`
 
-If `total_tokens` is missing but prompt and completion tokens exist, it is derived as their sum.
+2. **`step.llm_calls`** (fallback) — aggregates from `LLMCallMetadata` objects when the info dict has no data. This is the primary path for trajectories produced by `GEMEpisodeRunner`.
+
+The info dict takes precedence to avoid double-counting. If `total_tokens` is missing but prompt and completion tokens exist, it is derived as their sum.
 
 ## Run collection
 

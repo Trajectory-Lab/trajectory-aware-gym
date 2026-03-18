@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from collections.abc import Iterable, Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from trajectory_aware_gym.adapters.trajectory_logger import TrajectoryLog
 
@@ -63,6 +64,48 @@ def _repeat_action_rate(actions: list[str]) -> float:
         return 0.0
     repeats = sum(1 for left, right in zip(actions, actions[1:], strict=False) if left == right)
     return repeats / (len(actions) - 1)
+
+
+# Known aliases for step-level instrumentation fields in step.info dicts.
+# Checked in order; first match wins.
+_COST_PATHS = (
+    ("cost_usd",),
+    ("llm_cost_usd",),
+    ("cost",),
+    ("metrics", "cost_usd"),
+    ("usage", "cost_usd"),
+    ("usage", "cost"),
+)
+_PROMPT_TOKEN_PATHS = (
+    ("prompt_tokens",),
+    ("input_tokens",),
+    ("usage", "prompt_tokens"),
+    ("usage", "input_tokens"),
+    ("token_usage", "prompt_tokens"),
+    ("metrics", "prompt_tokens"),
+)
+_COMPLETION_TOKEN_PATHS = (
+    ("completion_tokens",),
+    ("output_tokens",),
+    ("usage", "completion_tokens"),
+    ("usage", "output_tokens"),
+    ("token_usage", "completion_tokens"),
+    ("metrics", "completion_tokens"),
+)
+_TOTAL_TOKEN_PATHS = (
+    ("total_tokens",),
+    ("usage", "total_tokens"),
+    ("token_usage", "total_tokens"),
+    ("metrics", "total_tokens"),
+)
+_LATENCY_PATHS = (
+    ("latency_seconds",),
+    ("llm_latency_seconds",),
+    ("duration_seconds",),
+    ("elapsed_seconds",),
+    ("metrics", "latency_seconds"),
+    ("metrics", "llm_latency_seconds"),
+)
 
 
 class EpisodeRawMetrics(BaseModel):
@@ -121,7 +164,7 @@ def extract_episode_raw_metrics(trajectory: TrajectoryLog) -> EpisodeRawMetrics:
 
     terminated = trajectory.steps[-1].terminated if trajectory.steps else False
     truncated = trajectory.steps[-1].truncated if trajectory.steps else False
-    success = terminated and trajectory.total_reward > 0
+    success = terminated and not truncated and trajectory.total_reward > 0
 
     cost_values: list[float] = []
     prompt_token_values: list[int] = []
@@ -133,55 +176,15 @@ def extract_episode_raw_metrics(trajectory: TrajectoryLog) -> EpisodeRawMetrics:
     token_seen_steps = 0
     latency_seen_steps = 0
 
-    # Known aliases for step-level instrumentation fields.
-    cost_paths = (
-        ("cost_usd",),
-        ("llm_cost_usd",),
-        ("cost",),
-        ("metrics", "cost_usd"),
-        ("usage", "cost_usd"),
-        ("usage", "cost"),
-    )
-    prompt_token_paths = (
-        ("prompt_tokens",),
-        ("input_tokens",),
-        ("usage", "prompt_tokens"),
-        ("usage", "input_tokens"),
-        ("token_usage", "prompt_tokens"),
-        ("metrics", "prompt_tokens"),
-    )
-    completion_token_paths = (
-        ("completion_tokens",),
-        ("output_tokens",),
-        ("usage", "completion_tokens"),
-        ("usage", "output_tokens"),
-        ("token_usage", "completion_tokens"),
-        ("metrics", "completion_tokens"),
-    )
-    total_token_paths = (
-        ("total_tokens",),
-        ("usage", "total_tokens"),
-        ("token_usage", "total_tokens"),
-        ("metrics", "total_tokens"),
-    )
-    latency_paths = (
-        ("latency_seconds",),
-        ("llm_latency_seconds",),
-        ("duration_seconds",),
-        ("elapsed_seconds",),
-        ("metrics", "latency_seconds"),
-        ("metrics", "llm_latency_seconds"),
-    )
-
     for step in trajectory.steps:
         info: Mapping[str, Any] = step.info if isinstance(step.info, Mapping) else {}
 
         # Try info dict first (backward compat with external trajectory formats).
-        step_cost = _extract_numeric(info, cost_paths)
-        step_prompt_tokens = _extract_int(info, prompt_token_paths)
-        step_completion_tokens = _extract_int(info, completion_token_paths)
-        step_total_tokens = _extract_int(info, total_token_paths)
-        step_llm_latency = _extract_numeric(info, latency_paths)
+        step_cost = _extract_numeric(info, _COST_PATHS)
+        step_prompt_tokens = _extract_int(info, _PROMPT_TOKEN_PATHS)
+        step_completion_tokens = _extract_int(info, _COMPLETION_TOKEN_PATHS)
+        step_total_tokens = _extract_int(info, _TOTAL_TOKEN_PATHS)
+        step_llm_latency = _extract_numeric(info, _LATENCY_PATHS)
 
         # Fall back to step.llm_calls when info dict has no data.
         if step.llm_calls and step_total_tokens is None and step_prompt_tokens is None:
@@ -197,6 +200,7 @@ def extract_episode_raw_metrics(trajectory: TrajectoryLog) -> EpisodeRawMetrics:
         if step.llm_calls and step_llm_latency is None:
             calls_with_latency = [c.latency_ms for c in step.llm_calls if c.latency_ms is not None]
             if calls_with_latency:
+                # Sum gives total LLM wall-clock per step (calls are sequential).
                 step_llm_latency = sum(calls_with_latency) / 1000.0
 
         if step_cost is not None:
@@ -253,6 +257,8 @@ def extract_episode_raw_metrics(trajectory: TrajectoryLog) -> EpisodeRawMetrics:
     tokens_per_step = total_tokens / step_count if total_tokens is not None and step_count else None
 
     # Coverage keeps missing instrumentation explicit for N2/N3.
+    # Zero-step trajectories use denominator=1 to produce 0.0 coverage
+    # (indistinguishable from all-uninstrumented, which is acceptable).
     denominator = step_count if step_count else 1
 
     return EpisodeRawMetrics(
@@ -291,10 +297,20 @@ def load_trajectory_log(file_path: Path) -> TrajectoryLog:
     return TrajectoryLog.model_validate_json(file_path.read_text(encoding="utf-8"))
 
 
+_logger = logging.getLogger(__name__)
+
+
 def collect_raw_metrics(log_paths: Iterable[Path]) -> list[EpisodeRawMetrics]:
-    """Load trajectory logs and return extracted per-episode metrics."""
+    """Load trajectory logs and return extracted per-episode metrics.
+
+    Malformed or unreadable files are logged as warnings and skipped.
+    """
     metrics: list[EpisodeRawMetrics] = []
     for path in sorted(log_paths):
-        trajectory = load_trajectory_log(path)
+        try:
+            trajectory = load_trajectory_log(path)
+        except (ValidationError, ValueError, OSError) as exc:
+            _logger.warning("Skipping %s: %s", path, exc)
+            continue
         metrics.append(extract_episode_raw_metrics(trajectory))
     return metrics

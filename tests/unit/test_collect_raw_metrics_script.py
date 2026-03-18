@@ -82,10 +82,12 @@ def test_parse_args_with_custom_values(script_module, monkeypatch: pytest.Monkey
 
 
 def test_write_csv_handles_empty_rows(script_module, tmp_path: Path) -> None:
-    """CSV writer should emit an empty file when no rows are available."""
+    """CSV writer should emit a header-only file when no rows are available."""
     output_path = tmp_path / "empty.csv"
     script_module._write_csv(output_path, [])
-    assert output_path.read_text(encoding="utf-8") == ""
+    content = output_path.read_text(encoding="utf-8")
+    assert content.startswith("run_id,")
+    assert content.strip().count("\n") == 0
 
 
 def test_write_csv_and_jsonl_with_rows(script_module, tmp_path: Path) -> None:
