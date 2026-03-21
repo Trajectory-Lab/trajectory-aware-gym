@@ -48,6 +48,17 @@ class TrajectoryFitnessMetric:
         self._fitness = fitness or CompositeFitness(self._config)
         self._return_feedback = return_feedback
 
+        # Pre-compute the theoretical score range from the known term ranges
+        # and configured weights so we can normalize to [0, 1].
+        #   DiscountedReturnTerm:      [0, 1]  weight = 1.0 (always)
+        #   LoopDetectionPenaltyTerm:  [-1, 0] weight = loop_penalty_weight
+        #   StepEfficiencyBonusTerm:   [0, 1]  weight = step_efficiency_weight
+        loop_w = self._config.loop_penalty_weight
+        eff_w = self._config.step_efficiency_weight
+        self._score_min = -loop_w  # worst case: 0 + loop_w*(-1) + 0
+        self._score_max = 1.0 + eff_w  # best case: 1 + 0 + eff_w*1
+        self._score_range = self._score_max - self._score_min
+
     def __call__(
         self,
         example: dspy.Example,
@@ -67,18 +78,23 @@ class TrajectoryFitnessMetric:
             return 0.0
 
         result = self._fitness.evaluate(trajectory)
-        bounded_score = self._bound_score(result.score)
+        score = self._normalize(result.score)
 
         if self._return_feedback:
-            feedback = self._format_feedback(result, bounded_score)
-            return ScoreWithFeedback(score=bounded_score, feedback=feedback)
+            feedback = self._format_feedback(result, score)
+            return ScoreWithFeedback(score=score, feedback=feedback)
 
-        return bounded_score
+        return score
 
-    def _format_feedback(self, result: FitnessResult, bounded_score: float) -> str:
+    def _normalize(self, raw_score: float) -> float:
+        """Linearly rescale the raw composite to [0, 1]."""
+        if self._score_range <= 0:
+            return 0.0
+        return (raw_score - self._score_min) / self._score_range
+
+    def _format_feedback(self, result: FitnessResult, normalized_score: float) -> str:
         lines = [
-            f"Fitness score: {bounded_score:.4f}",
-            f"Raw composite score: {result.score:.4f}",
+            f"Fitness score: {normalized_score:.4f} (raw composite: {result.score:.4f})",
         ]
         lines.append(f"Trajectory length: {result.trajectory_length} steps")
         for item in result.breakdown:
@@ -87,7 +103,3 @@ class TrajectoryFitnessMetric:
                 f"(weight={item.weight:.2f}, contribution={item.weighted_value:.4f})"
             )
         return "\n".join(lines)
-
-    @staticmethod
-    def _bound_score(score: float) -> float:
-        return max(0.0, min(1.0, score))

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import dspy
 import pytest
@@ -42,18 +42,9 @@ def mock_runner():
     return runner
 
 
-def _stub_predict(module: GEMSolverModule) -> MagicMock:
-    instructions = module.predict.signature.instructions
-    predict_mock = MagicMock(return_value=dspy.Prediction(answer="ignored"))
-    predict_mock.signature.instructions = instructions
-    module.predict = predict_mock
-    return predict_mock
-
-
 class TestGEMSolverModule:
     def test_forward_returns_prediction_with_trajectory(self, mock_runner):
         module = GEMSolverModule(mock_runner, default_instructions="Solve math problems.")
-        _stub_predict(module)
         result = module(problem="Solve: 6*7", seed=42)
 
         assert isinstance(result, dspy.Prediction)
@@ -62,7 +53,6 @@ class TestGEMSolverModule:
 
     def test_forward_passes_instructions_as_system_prompt(self, mock_runner):
         module = GEMSolverModule(mock_runner, default_instructions="Be precise.")
-        _stub_predict(module)
         module(problem="test", seed=42)
 
         mock_runner.run.assert_called_once_with(
@@ -77,7 +67,6 @@ class TestGEMSolverModule:
 
     def test_default_instructions_uses_signature_docstring(self, mock_runner):
         module = GEMSolverModule(mock_runner)
-        _stub_predict(module)
         module(problem="test", seed=42)
 
         # No explicit instructions -> uses the Signature docstring
@@ -87,7 +76,6 @@ class TestGEMSolverModule:
 
     def test_forward_without_seed_uses_expected_observation_only(self, mock_runner):
         module = GEMSolverModule(mock_runner, default_instructions="Be precise.")
-        _stub_predict(module)
         module(problem="test")
 
         mock_runner.run.assert_called_once_with(
@@ -96,14 +84,44 @@ class TestGEMSolverModule:
             expected_observation="test",
         )
 
-    def test_forward_invokes_predictor_for_gepa_trace(self, mock_runner, monkeypatch):
+    def test_forward_invokes_predictor_for_gepa_trace(self, mock_runner):
+        """The predict call populates DSPy's trace for GEPA reflection."""
         module = GEMSolverModule(mock_runner, default_instructions="Be precise.")
-        predict_mock = MagicMock(return_value=dspy.Prediction(answer="ignored"))
-        monkeypatch.setattr(module, "predict", predict_mock)
 
-        module(problem="test", seed=42)
+        with dspy.context(trace=[]):
+            module(problem="test", seed=42)
+            trace = dspy.settings.trace
 
-        predict_mock.assert_called_once_with(problem="test", seed=42)
+        assert len(trace) == 1
+        predictor, inputs, prediction = trace[0]
+        assert inputs["problem"] == "test"
+        assert inputs["seed"] == 42
+
+    def test_trace_predict_uses_dummy_lm_not_real(self, mock_runner):
+        """The predict call must use DummyLM, never a real LLM."""
+        module = GEMSolverModule(mock_runner, default_instructions="test")
+
+        with patch("trajectory_aware_gym.adapters.gem_solver_module.DummyLM") as mock_dummy:
+            mock_predict = MagicMock(return_value=dspy.Prediction(answer="x"))
+            mock_predict.signature = module.predict.signature
+            module.predict = mock_predict
+            mock_dummy.return_value = "sentinel_lm"
+
+            module(problem="test", seed=1)
+
+            mock_dummy.assert_called_once()
+
+    def test_trace_contains_real_answer_not_placeholder(self, mock_runner):
+        """Trace prediction should carry the runner's actual answer."""
+        module = GEMSolverModule(mock_runner, default_instructions="test")
+
+        with dspy.context(trace=[]):
+            module(problem="Solve: 6*7", seed=42)
+            trace = dspy.settings.trace
+
+        assert len(trace) == 1
+        _predictor, _inputs, prediction = trace[0]
+        assert prediction.answer == "\\boxed{42}"
 
     def test_has_predict_for_gepa(self, mock_runner):
         module = GEMSolverModule(mock_runner, default_instructions="test")
