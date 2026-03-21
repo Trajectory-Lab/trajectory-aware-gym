@@ -168,3 +168,11 @@ help = "Run tests"
 [tool.poe.tasks.test-cov]
 cmd = "pytest --cov=src/trajectory_aware_gym --cov-report=html"
 help = "Run tests with coverage"
+
+[tool.poe.tasks.dry-run-math]
+cmd = "python scripts/run_gem_episode.py --smoke --experiment-config experiments/math-dry-run/config.yaml --max-steps 1"
+help = "Run the minimal real-infrastructure Orz57K dry-run against the configured task model"
+
+[tool.poe.tasks.dry-run-gepa]
+cmd = "python scripts/run_gepa_dry_run.py --config experiments/math-dry-run/config.yaml"
+help = "Run the full GEPA + DSPy + GEM dry-run pipeline (K4 deliverable)"

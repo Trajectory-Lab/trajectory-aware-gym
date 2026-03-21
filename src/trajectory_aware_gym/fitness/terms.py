@@ -6,6 +6,15 @@ from trajectory_aware_gym.adapters.trajectory_logger import TrajectoryLog
 from trajectory_aware_gym.config.core import FitnessModel
 
 
+def _geometric_sum(gamma: float, n: int) -> float:
+    """Compute Σ γ^k for k=0..n-1."""
+    if n <= 0:
+        return 0.0
+    if gamma == 1.0:
+        return float(n)
+    return (1.0 - gamma**n) / (1.0 - gamma)
+
+
 class DiscountedReturnTerm:
     """Reverse-time discounted return (Equation 3.1).
 
@@ -44,7 +53,16 @@ class DiscountedReturnTerm:
 
         auxiliary_term = sum(step.reward for step in steps)
 
-        return main_term + lam * auxiliary_term
+        raw = main_term + lam * auxiliary_term
+
+        # Normalize to [0, 1] by dividing by the theoretical maximum
+        # (all-success trajectory of the same length).
+        max_main = _geometric_sum(gamma, total_steps)
+        max_auxiliary = total_steps * 1.0
+        max_raw = max_main + lam * max_auxiliary
+        if max_raw <= 0:
+            return 0.0
+        return raw / max_raw
 
 
 class LoopDetectionPenaltyTerm:

@@ -30,6 +30,7 @@ def make_args(**overrides):
         "mode": "eval",
         "max_steps": None,
         "temperature": None,
+        "max_response_tokens": None,
         "show_log": False,
     }
     base.update(overrides)
@@ -48,7 +49,9 @@ def test_build_smoke_run_spec_from_experiment_config():
     assert spec.experiment_name == "quick-test"
     assert spec.model_id == "bedrock/test-qwen-profile"
     assert spec.seed == 42
-    assert spec.max_steps == 1
+    assert spec.episode_count == 1
+    assert spec.episode_max_steps == 10
+    assert spec.max_response_tokens == 4096
     assert spec.temperature == pytest.approx(0.0)
 
 
@@ -61,6 +64,7 @@ def test_build_smoke_run_spec_respects_overrides():
         mode="train",
         max_steps=2,
         temperature=0.3,
+        max_response_tokens=1536,
         system_prompt="custom prompt",
     )
 
@@ -69,7 +73,9 @@ def test_build_smoke_run_spec_respects_overrides():
     assert spec.environment_id == "qa:HotpotQA"
     assert spec.model_id == "bedrock/custom-qwen"
     assert spec.seed == 999
-    assert spec.max_steps == 2
+    assert spec.episode_count == 2
+    assert spec.episode_max_steps == 10
+    assert spec.max_response_tokens == 1536
     assert spec.temperature == pytest.approx(0.3)
     assert spec.system_prompt == "custom prompt"
 

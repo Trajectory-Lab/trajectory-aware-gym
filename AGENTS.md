@@ -99,14 +99,14 @@ The project evaluates two optimization paradigms:
 - Composite metrics include loop detection penalty and step efficiency bonus
 
 **GEPA Integration** (`src/trajectory_aware_gym/optimizers/`):
-- Uses Claude Sonnet 4.5 as reflection model (distinct from task model)
+- Uses a Bedrock-hosted reflection model (currently GPT OSS 120B in the dry-run path, distinct from the task model)
 - Maintains **Pareto frontier** of prompts (not single best) to preserve diversity
 - Budget modes: light/medium/heavy controlling iteration count and population size
 
 **AWS/LLM Infrastructure** (`src/trajectory_aware_gym/config/`):
 - All LLM calls route through **LiteLLM** for unified provider interface
-- Task models: Qwen3 (1.7B, 4B) via AWS Bedrock for fair comparison with GEM's RL baselines
-- Reflection model: Claude Sonnet 4.5 via Bedrock for GEPA mutations
+- Task models: Qwen3 (1.7B, 4B) via Ollama and Llama 1B/3B/8B via AWS Bedrock
+- Reflection model: configurable Bedrock model, with GPT OSS 120B currently used in the dry-run path
 - Configuration via YAML (`src/trajectory_aware_gym/config/trajectory-aware-gym.yaml`) with `.env` overrides (see Configuration Management)
 
 ### Environments
@@ -377,11 +377,13 @@ if is_admin(user):
 
 ## Project Timeline (16 weeks)
 
-- **Weeks 1-2** (Phase 1): Environment setup ← **Currently here**
+- **Weeks 1-2** (Phase 1): Environment setup
 - **Weeks 3-7** (Phase 2): GEM-DSPy-GEPA integration
 - **Weeks 8-11** (Phase 3): Primary experiments
 - **Weeks 12-13** (Phase 4): Generalization & ablations
 - **Weeks 14-16** (Phase 5): Analysis & writing
+
+**Current status:** K4 dry-run integration is functionally closed. The repository now has a working end-to-end GEPA + DSPy + GEM smoke path, but prompt-improvement quality, multi-step tool use, and experiment-grade evaluation remain active work.
 
 ## Key Research Hypotheses
 

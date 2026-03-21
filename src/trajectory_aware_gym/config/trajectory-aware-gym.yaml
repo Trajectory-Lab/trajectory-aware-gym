@@ -1,6 +1,8 @@
 aws:
   region: us-east-1
-  bedrock_claude_sonnet_4_5: "anthropic.claude-sonnet-4-5-v2:0"
+  # Legacy field name; value will revert to Claude Sonnet once Bedrock access
+  # is approved. Keep in sync with gepa.reflection_model.
+  bedrock_claude_sonnet_4_5: "openai.gpt-oss-120b-1:0"
   bedrock_llama_1b: "us.meta.llama3-2-1b-instruct-v1:0"
   bedrock_llama_3b: "us.meta.llama3-2-3b-instruct-v1:0"
   bedrock_llama_8b: "us.meta.llama3-1-8b-instruct-v1:0"
@@ -30,7 +32,10 @@ gepa:
   budget: medium
   population_size: 6
   iterations: 75
-  reflection_model: "anthropic.claude-sonnet-4-5-v2:0"
+  num_threads: 16
+  # Must match aws.bedrock_claude_sonnet_4_5 — both change together
+  # when the reflection model provider changes.
+  reflection_model: "openai.gpt-oss-120b-1:0"
 
 experiment:
   name: baseline_experiment

@@ -330,6 +330,7 @@ class TestGEPABudget:
             budget=budget,
             population_size=6,
             iterations=75,
+            num_threads=4,
             reflection_model="test",
         )
         assert model.budget == budget
@@ -340,6 +341,7 @@ class TestGEPABudget:
                 budget="invalid",
                 population_size=6,
                 iterations=75,
+                num_threads=4,
                 reflection_model="test",
             )
 
