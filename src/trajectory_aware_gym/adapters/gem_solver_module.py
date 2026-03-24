@@ -12,6 +12,7 @@ import copy
 from typing import Any, cast
 
 import dspy  # type: ignore[import-untyped]
+from dspy.utils.dummies import DummyLM  # type: ignore[import-untyped]
 
 from trajectory_aware_gym.adapters.gem_episode_runner import GEMEpisodeRunner
 from trajectory_aware_gym.adapters.trajectory_logger import TrajectoryLog
@@ -67,10 +68,6 @@ class GEMSolverModule(dspy.Module):
         return cast(str, getattr(self.predict.signature, "instructions", ""))
 
     def forward(self, *, problem: str, seed: int | None = None, **kwargs: Any) -> dspy.Prediction:
-        # GEPA needs an actual DSPy predictor invocation in the module trace so it
-        # can build reflective examples for instruction mutation.
-        self.predict(problem=problem, seed=seed)
-
         system_prompt = self.instructions or "You are a helpful assistant."
         trajectory = self._runner.run(
             system_prompt,
@@ -78,6 +75,15 @@ class GEMSolverModule(dspy.Module):
             expected_observation=problem,
         )
         answer = _extract_final_answer(trajectory)
+
+        # GEPA needs a Predict invocation in the DSPy trace to build reflective
+        # examples for instruction mutation.  We use a DummyLM so this populates
+        # the trace at zero cost (no real LLM call), then patch the trace entry
+        # with the runner's actual answer so reflection sees consistent data.
+        trace_lm = DummyLM([{"answer": answer}])
+        with dspy.context(lm=trace_lm):
+            self.predict(problem=problem, seed=seed)
+
         return dspy.Prediction(answer=answer, trajectory=trajectory)
 
 

@@ -349,7 +349,7 @@ class GEMEpisodeRunner:
                 action = response_text
                 step_history.extend(
                     [
-                        {"role": "user", "content": observation},
+                        {"role": "user", "content": current_observation},
                         {"role": "assistant", "content": action},
                     ]
                 )
@@ -367,7 +367,7 @@ class GEMEpisodeRunner:
             )
             step_history.extend(
                 [
-                    {"role": "user", "content": observation},
+                    {"role": "user", "content": current_observation},
                     {"role": "assistant", "content": response_text},
                 ]
             )
