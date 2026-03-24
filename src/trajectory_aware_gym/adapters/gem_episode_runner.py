@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
-from litellm import completion, completion_cost  # type: ignore[import-untyped]
+from litellm import acompletion, completion_cost  # type: ignore[import-untyped]
 
 from trajectory_aware_gym.adapters.tool_runtime import ToolRuntime
 from trajectory_aware_gym.adapters.trajectory_logger import (
@@ -105,7 +105,7 @@ def _build_completion_kwargs(
     return kwargs
 
 
-def generate_smoke_action(
+async def generate_smoke_action(
     *,
     model_id: str,
     messages: list[ChatMessage],
@@ -116,7 +116,7 @@ def generate_smoke_action(
     if model_id.startswith("bedrock/"):
         settings.validate_aws()
 
-    response = completion(
+    response = await acompletion(
         messages=messages,
         **_build_completion_kwargs(
             model_id,
@@ -218,7 +218,7 @@ class GEMEpisodeRunner:
         self._tool_runtime = tool_runtime or ToolRuntime()
         self._max_tool_rounds = max_tool_rounds
 
-    def run(
+    async def run(
         self,
         prompt: str,
         *,
@@ -227,14 +227,15 @@ class GEMEpisodeRunner:
         expected_observation: str | None = None,
     ) -> TrajectoryLog:
         """Run one episode and return the validated trajectory log."""
-        return self.run_episode(
+        result = await self.run_episode(
             prompt,
             episode_index=episode_index,
             seed_override=seed_override,
             expected_observation=expected_observation,
-        ).trajectory
+        )
+        return result.trajectory
 
-    def run_episode(
+    async def run_episode(
         self,
         prompt: str,
         *,
@@ -279,7 +280,7 @@ class GEMEpisodeRunner:
         try:
             current_observation = str(observation)
             for _ in range(self._max_steps):
-                agent_step = self._run_agent_step(
+                agent_step = await self._run_agent_step(
                     observation=current_observation,
                     system_prompt=prompt,
                     history=conversation,
@@ -317,7 +318,7 @@ class GEMEpisodeRunner:
             if hasattr(env, "close"):
                 env.close()
 
-    def _run_agent_step(
+    async def _run_agent_step(
         self,
         *,
         observation: str,
@@ -336,7 +337,7 @@ class GEMEpisodeRunner:
                 system_prompt=self._compose_system_prompt(system_prompt),
                 history=step_history,
             )
-            response_text, llm_call = generate_smoke_action(
+            response_text, llm_call = await generate_smoke_action(
                 model_id=self._model_id,
                 messages=messages,
                 temperature=self._temperature,
@@ -356,7 +357,7 @@ class GEMEpisodeRunner:
                 break
 
             tool_name = parsed_tool_call["tool"]
-            tool_result = self._tool_runtime.execute(parsed_tool_call)
+            tool_result = await self._tool_runtime.execute(parsed_tool_call)
             tool_calls.append(
                 ToolCall(
                     tool_name=tool_name,

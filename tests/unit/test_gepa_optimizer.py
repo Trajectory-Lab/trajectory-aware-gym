@@ -14,7 +14,15 @@ from trajectory_aware_gym.optimizers import (
 )
 
 
-def test_optimizer_rejects_blank_seed_prompt():
+@pytest.mark.parametrize(
+    "seed_prompt",
+    [
+        "",
+        "   ",
+        "\t\n",
+    ],
+)
+def test_optimizer_rejects_blank_seed_prompt(seed_prompt):
     optimizer = GEPAOptimizer(
         evaluator=lambda prompt: float(len(prompt)),
         mutator=lambda prompt, iteration, candidate_index: (
@@ -25,7 +33,7 @@ def test_optimizer_rejects_blank_seed_prompt():
     )
 
     with pytest.raises(ValueError, match="seed_prompt"):
-        optimizer.optimize("   ")
+        optimizer.optimize(seed_prompt)
 
 
 def test_optimizer_runs_mutation_selection_loop():
@@ -53,7 +61,7 @@ def test_optimizer_runs_mutation_selection_loop():
 
 def test_build_trajectory_evaluator_connects_to_fitness():
     class Runner:
-        def run(self, prompt: str) -> TrajectoryLog:
+        async def run(self, prompt: str) -> TrajectoryLog:
             started = datetime.now(UTC)
             success = "win" in prompt
             steps = [
@@ -79,6 +87,40 @@ def test_build_trajectory_evaluator_connects_to_fitness():
     evaluator = build_trajectory_evaluator(Runner())
 
     assert evaluator("please win") > evaluator("please lose")
+
+
+@pytest.mark.parametrize(
+    ("population_size", "iterations", "elite_count", "match"),
+    [
+        (1, 2, 1, "population_size"),
+        (0, 2, 1, "population_size"),
+        (5, 0, 2, "iterations"),
+        (5, -1, 2, "iterations"),
+        (5, 2, 0, "elite_count"),
+        (5, 2, 5, "elite_count"),
+        (5, 2, 6, "elite_count"),
+    ],
+)
+def test_optimizer_rejects_invalid_constructor_args(
+    population_size, iterations, elite_count, match
+):
+    with pytest.raises(ValueError, match=match):
+        GEPAOptimizer(
+            evaluator=lambda prompt: 1.0,
+            mutator=lambda prompt, iteration, candidate_index: prompt,
+            population_size=population_size,
+            iterations=iterations,
+            elite_count=elite_count,
+        )
+
+
+def test_validate_optimization_trend_empty_history():
+    trend = validate_optimization_trend([], min_expected_improvement=1.0)
+
+    assert not trend.is_improving
+    assert trend.improvement == 0.0
+    assert trend.first_best_fitness == 0.0
+    assert trend.last_best_fitness == 0.0
 
 
 def test_validate_optimization_trend_flags_improvement():

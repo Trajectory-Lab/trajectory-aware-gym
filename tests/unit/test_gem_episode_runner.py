@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
-from trajectory_aware_gym.adapters.gem_episode_runner import GEMEpisodeRunner
+from trajectory_aware_gym.adapters.gem_episode_runner import (
+    GEMEpisodeRunner,
+    _extract_json_payload,
+    _extract_text_content,
+    build_smoke_messages,
+)
 
 
 class _FakeGemModule:
@@ -41,7 +47,162 @@ def _make_response(text: str, *, prompt_tokens: int = 7, completion_tokens: int 
     return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=usage)
 
 
-def test_run_episode_records_trajectory_and_cost(monkeypatch):
+# ---------------------------------------------------------------------------
+# Constructor validation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"max_steps": 0}, "max_steps"),
+        ({"max_steps": -1}, "max_steps"),
+        ({"max_response_tokens": 0}, "max_response_tokens"),
+        ({"max_tool_rounds": 0}, "max_tool_rounds"),
+    ],
+)
+def test_constructor_rejects_invalid_params(kwargs, match):
+    defaults = {
+        "environment_id": "math:Orz57K",
+        "model_id": "ollama_chat/qwen3:1.7b",
+        "temperature": 0.0,
+        "max_steps": 3,
+    }
+    with pytest.raises(ValueError, match=match):
+        GEMEpisodeRunner(**{**defaults, **kwargs})
+
+
+# ---------------------------------------------------------------------------
+# _extract_text_content
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ("hello", "hello"),
+        ("  spaced  ", "spaced"),
+        ("", ""),
+        (
+            [{"type": "text", "text": "chunk1"}, {"type": "text", "text": "chunk2"}],
+            "chunk1\nchunk2",
+        ),
+        ([{"type": "image", "url": "x"}, {"type": "text", "text": "only text"}], "only text"),
+        (["raw_string"], "raw_string"),
+        ([], ""),
+        (42, "42"),
+        (None, "None"),
+    ],
+)
+def test_extract_text_content(content, expected):
+    assert _extract_text_content(content) == expected
+
+
+# ---------------------------------------------------------------------------
+# _extract_json_payload
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ('{"tool": "python_exec", "arguments": {}}', {"tool": "python_exec", "arguments": {}}),
+        ('```json\n{"key": "val"}\n```', {"key": "val"}),
+        ("not json at all", None),
+        ("", None),
+        ("   ", None),
+        ("{malformed", None),
+        ("[1, 2, 3]", None),
+    ],
+)
+def test_extract_json_payload(text, expected):
+    assert _extract_json_payload(text) == expected
+
+
+# ---------------------------------------------------------------------------
+# build_smoke_messages
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("observation", "system_prompt", "history", "expected_len"),
+    [
+        ("obs", "sys", None, 2),
+        ("obs", "sys", [{"role": "user", "content": "prev"}], 3),
+        ("obs", "sys", [], 2),
+    ],
+)
+def test_build_smoke_messages(observation, system_prompt, history, expected_len):
+    msgs = build_smoke_messages(
+        observation=observation, system_prompt=system_prompt, history=history
+    )
+    assert len(msgs) == expected_len
+    assert msgs[0] == {"role": "system", "content": system_prompt}
+    assert msgs[-1] == {"role": "user", "content": observation}
+
+
+# ---------------------------------------------------------------------------
+# Episode runner integration
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def patch_gem(monkeypatch):
+    """Shared monkeypatch wiring for GEM imports and LLM calls.
+
+    Yields a dict the test can populate with 'env', 'responses', and 'cost'.
+    """
+    config: dict = {"cost": 0.0}
+
+    def _setup(env, responses, *, cost=0.0):
+        config["cost"] = cost
+        monkeypatch.setattr(
+            "trajectory_aware_gym.adapters.gem_episode_runner.importlib.import_module",
+            _fake_import_module_factory(env),
+        )
+        if callable(responses):
+            monkeypatch.setattr(
+                "trajectory_aware_gym.adapters.gem_episode_runner.acompletion",
+                AsyncMock(side_effect=responses),
+            )
+        else:
+            monkeypatch.setattr(
+                "trajectory_aware_gym.adapters.gem_episode_runner.acompletion",
+                AsyncMock(return_value=responses),
+            )
+        monkeypatch.setattr(
+            "trajectory_aware_gym.adapters.gem_episode_runner.completion_cost",
+            lambda *, completion_response: config["cost"],
+        )
+
+    return _setup
+
+
+async def test_run_episode_rejects_blank_prompt(patch_gem):
+    class FakeEnv:
+        def reset(self, **kwargs):
+            return "obs", {}
+
+        def step(self, action):
+            return "", 0.0, True, False, {}
+
+        def close(self):
+            return None
+
+    patch_gem(FakeEnv(), _make_response("x"))
+
+    runner = GEMEpisodeRunner(
+        environment_id="math:Orz57K",
+        model_id="ollama_chat/qwen3:1.7b",
+        temperature=0.0,
+        max_steps=1,
+    )
+
+    with pytest.raises(ValueError, match="prompt must not be blank"):
+        await runner.run_episode("   ", persist=False)
+
+
+async def test_run_episode_records_trajectory_and_cost(patch_gem):
     class FakeEnv:
         def reset(self, **kwargs):
             assert kwargs == {"seed": 42}
@@ -54,18 +215,7 @@ def test_run_episode_records_trajectory_and_cost(monkeypatch):
         def close(self):
             return None
 
-    monkeypatch.setattr(
-        "trajectory_aware_gym.adapters.gem_episode_runner.importlib.import_module",
-        _fake_import_module_factory(FakeEnv()),
-    )
-    monkeypatch.setattr(
-        "trajectory_aware_gym.adapters.gem_episode_runner.completion",
-        lambda **kwargs: _make_response("\\boxed{4}"),
-    )
-    monkeypatch.setattr(
-        "trajectory_aware_gym.adapters.gem_episode_runner.completion_cost",
-        lambda *, completion_response: 0.0123,
-    )
+    patch_gem(FakeEnv(), _make_response("\\boxed{4}"), cost=0.0123)
 
     runner = GEMEpisodeRunner(
         environment_id="math:Orz57K",
@@ -76,7 +226,7 @@ def test_run_episode_records_trajectory_and_cost(monkeypatch):
         experiment_name="quick-test",
     )
 
-    result = runner.run_episode("Solve carefully.", persist=False)
+    result = await runner.run_episode("Solve carefully.", persist=False)
     trajectory = result.trajectory
     metrics = result.raw_metrics
 
@@ -104,7 +254,7 @@ def test_run_episode_records_trajectory_and_cost(monkeypatch):
     assert metrics.llm_cost_usd == pytest.approx(0.0123)
 
 
-def test_run_episode_executes_tool_call_before_final_action(monkeypatch):
+async def test_run_episode_executes_tool_call_before_final_action(patch_gem):
     class FakeEnv:
         def reset(self, **kwargs):
             assert kwargs == {}
@@ -121,7 +271,7 @@ def test_run_episode_executes_tool_call_before_final_action(monkeypatch):
         def __init__(self):
             self.calls: list[dict[str, object]] = []
 
-        def execute(self, tool_call: dict[str, object]):
+        async def execute(self, tool_call: dict[str, object]):
             self.calls.append(tool_call)
             return {"status": "success", "output": "4"}
 
@@ -132,18 +282,7 @@ def test_run_episode_executes_tool_call_before_final_action(monkeypatch):
         ]
     )
 
-    monkeypatch.setattr(
-        "trajectory_aware_gym.adapters.gem_episode_runner.importlib.import_module",
-        _fake_import_module_factory(FakeEnv()),
-    )
-    monkeypatch.setattr(
-        "trajectory_aware_gym.adapters.gem_episode_runner.completion",
-        lambda **kwargs: next(responses),
-    )
-    monkeypatch.setattr(
-        "trajectory_aware_gym.adapters.gem_episode_runner.completion_cost",
-        lambda *, completion_response: 0.001,
-    )
+    patch_gem(FakeEnv(), lambda **kwargs: next(responses), cost=0.001)
 
     runtime = FakeToolRuntime()
     runner = GEMEpisodeRunner(
@@ -156,7 +295,7 @@ def test_run_episode_executes_tool_call_before_final_action(monkeypatch):
         max_tool_rounds=2,
     )
 
-    result = runner.run_episode("Use tools when needed.", persist=False)
+    result = await runner.run_episode("Use tools when needed.", persist=False)
     trajectory = result.trajectory
     metrics = result.raw_metrics
     step = trajectory.steps[0]

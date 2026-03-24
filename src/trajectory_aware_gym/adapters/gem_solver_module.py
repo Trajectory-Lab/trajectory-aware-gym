@@ -8,6 +8,7 @@ to the returned Prediction so the GEPA metric can score it.
 
 from __future__ import annotations
 
+import asyncio
 import copy
 from typing import Any, cast
 
@@ -67,9 +68,11 @@ class GEMSolverModule(dspy.Module):
     def instructions(self) -> str:
         return cast(str, getattr(self.predict.signature, "instructions", ""))
 
-    def forward(self, *, problem: str, seed: int | None = None, **kwargs: Any) -> dspy.Prediction:
+    async def aforward(
+        self, *, problem: str, seed: int | None = None, **kwargs: Any
+    ) -> dspy.Prediction:
         system_prompt = self.instructions or "You are a helpful assistant."
-        trajectory = self._runner.run(
+        trajectory = await self._runner.run(
             system_prompt,
             seed_override=seed,
             expected_observation=problem,
@@ -85,6 +88,9 @@ class GEMSolverModule(dspy.Module):
             self.predict(problem=problem, seed=seed)
 
         return dspy.Prediction(answer=answer, trajectory=trajectory)
+
+    def forward(self, *, problem: str, seed: int | None = None, **kwargs: Any) -> dspy.Prediction:
+        return asyncio.run(self.aforward(problem=problem, seed=seed, **kwargs))
 
 
 def _extract_final_answer(trajectory: TrajectoryLog) -> str:

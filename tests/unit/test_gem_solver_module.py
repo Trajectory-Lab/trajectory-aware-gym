@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import dspy
 import pytest
@@ -38,7 +38,7 @@ def _make_trajectory(*, action: str = "\\boxed{42}", reward: float = 1.0) -> Tra
 @pytest.fixture
 def mock_runner():
     runner = MagicMock()
-    runner.run.return_value = _make_trajectory()
+    runner.run = AsyncMock(return_value=_make_trajectory())
     return runner
 
 
@@ -46,6 +46,14 @@ class TestGEMSolverModule:
     def test_forward_returns_prediction_with_trajectory(self, mock_runner):
         module = GEMSolverModule(mock_runner, default_instructions="Solve math problems.")
         result = module(problem="Solve: 6*7", seed=42)
+
+        assert isinstance(result, dspy.Prediction)
+        assert isinstance(result.trajectory, TrajectoryLog)
+        assert result.answer == "\\boxed{42}"
+
+    async def test_aforward_returns_prediction_with_trajectory(self, mock_runner):
+        module = GEMSolverModule(mock_runner, default_instructions="Solve math problems.")
+        result = await module.aforward(problem="Solve: 6*7", seed=42)
 
         assert isinstance(result, dspy.Prediction)
         assert isinstance(result.trajectory, TrajectoryLog)
@@ -73,6 +81,15 @@ class TestGEMSolverModule:
         called_prompt = mock_runner.run.call_args[0][0]
         assert isinstance(called_prompt, str)
         assert len(called_prompt) > 0
+
+    async def test_aforward_uses_async_runner_without_sync_boundary(self, mock_runner, monkeypatch):
+        module = GEMSolverModule(mock_runner, default_instructions="Be precise.")
+        run_spy = MagicMock(side_effect=AssertionError("forward() should not call asyncio.run"))
+        monkeypatch.setattr("trajectory_aware_gym.adapters.gem_solver_module.asyncio.run", run_spy)
+
+        await module.aforward(problem="test", seed=42)
+
+        run_spy.assert_not_called()
 
     def test_forward_without_seed_uses_expected_observation_only(self, mock_runner):
         module = GEMSolverModule(mock_runner, default_instructions="Be precise.")
@@ -135,9 +152,17 @@ class TestGEMSolverModule:
 
 
 class TestExtractFinalAnswer:
-    def test_extracts_last_step_action(self):
-        trajectory = _make_trajectory(action="\\boxed{99}")
-        assert _extract_final_answer(trajectory) == "\\boxed{99}"
+    @pytest.mark.parametrize(
+        ("action", "expected"),
+        [
+            ("\\boxed{99}", "\\boxed{99}"),
+            ("\\boxed{0}", "\\boxed{0}"),
+            ("plain text answer", "plain text answer"),
+        ],
+    )
+    def test_extracts_last_step_action(self, action, expected):
+        trajectory = _make_trajectory(action=action)
+        assert _extract_final_answer(trajectory) == expected
 
     def test_empty_steps_returns_sentinel(self):
         now = datetime.now(UTC)

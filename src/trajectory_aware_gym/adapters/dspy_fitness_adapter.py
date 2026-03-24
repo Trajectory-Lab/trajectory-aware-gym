@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Awaitable
 from dataclasses import dataclass
-from typing import Protocol
+from inspect import isawaitable
+from typing import Protocol, cast
 
 from trajectory_aware_gym.adapters.trajectory_logger import TrajectoryLog
 from trajectory_aware_gym.fitness.objective_profile import (
@@ -16,7 +19,7 @@ from trajectory_aware_gym.fitness.objective_profile import (
 class PromptEpisodeRunner(Protocol):
     """Runner protocol for prompt-conditioned episode execution."""
 
-    def run(self, prompt: str) -> TrajectoryLog: ...
+    def run(self, prompt: str) -> TrajectoryLog | Awaitable[TrajectoryLog]: ...
 
 
 @dataclass(frozen=True)
@@ -43,7 +46,13 @@ class DSPyTrajectoryFitnessAdapter:
 
     def evaluate_prompt(self, prompt: str) -> DSPyFitnessEvaluation:
         """Evaluate one prompt candidate and return structured fitness output."""
-        trajectory = self._runner.run(prompt)
+        trajectory_or_awaitable = self._runner.run(prompt)
+        if isawaitable(trajectory_or_awaitable):
+            trajectory = asyncio.run(
+                _await_trajectory(cast(Awaitable[TrajectoryLog], trajectory_or_awaitable))
+            )
+        else:
+            trajectory = trajectory_or_awaitable
         result = score_trajectory_profile(
             trajectory,
             weights=self._weights,
@@ -58,3 +67,7 @@ class DSPyTrajectoryFitnessAdapter:
     def scalar_metric(self, prompt: str) -> float:
         """Return scalar score for optimizer integrations expecting a float metric."""
         return self.evaluate_prompt(prompt).fitness.score
+
+
+async def _await_trajectory(awaitable: Awaitable[TrajectoryLog]) -> TrajectoryLog:
+    return await awaitable

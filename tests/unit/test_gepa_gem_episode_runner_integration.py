@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from trajectory_aware_gym.adapters.gem_episode_runner import GEMEpisodeRunner
 from trajectory_aware_gym.optimizers import GEPAOptimizer, build_trajectory_evaluator
@@ -36,7 +37,7 @@ def test_gepa_optimizer_improves_prompt_with_gem_episode_runner(monkeypatch):
             return SimpleNamespace()
         raise AssertionError(f"unexpected import: {name}")
 
-    def fake_completion(*, messages, **kwargs):
+    async def fake_completion(*, messages, **kwargs):
         system_prompt = messages[0]["content"]
         action = "\\boxed{4}" if "better" in system_prompt else "\\boxed{0}"
         usage = SimpleNamespace(prompt_tokens=5, completion_tokens=3, total_tokens=8)
@@ -48,8 +49,8 @@ def test_gepa_optimizer_improves_prompt_with_gem_episode_runner(monkeypatch):
         fake_import_module,
     )
     monkeypatch.setattr(
-        "trajectory_aware_gym.adapters.gem_episode_runner.completion",
-        fake_completion,
+        "trajectory_aware_gym.adapters.gem_episode_runner.acompletion",
+        AsyncMock(side_effect=fake_completion),
     )
     monkeypatch.setattr(
         "trajectory_aware_gym.adapters.gem_episode_runner.completion_cost",

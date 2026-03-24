@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
+from inspect import isawaitable
 from random import Random
 from statistics import mean
 from typing import Protocol
@@ -26,7 +28,7 @@ class PromptEvaluator(Protocol):
 class TrajectoryProgramRunner(Protocol):
     """Minimal interface to run a prompt-conditioned episode/program."""
 
-    def run(self, prompt: str) -> TrajectoryLog: ...
+    async def run(self, prompt: str) -> TrajectoryLog: ...
 
 
 @dataclass
@@ -73,7 +75,11 @@ def build_trajectory_evaluator(
     """Adapt a trajectory-producing runner into a scalar prompt evaluator."""
 
     def evaluate(prompt: str) -> float:
-        trajectory = runner.run(prompt)
+        trajectory_or_awaitable = runner.run(prompt)
+        if isawaitable(trajectory_or_awaitable):
+            trajectory = asyncio.run(trajectory_or_awaitable)
+        else:
+            trajectory = trajectory_or_awaitable
         return score_trajectory(trajectory).final_fitness
 
     return evaluate

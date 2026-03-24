@@ -1,7 +1,7 @@
 from trajectory_aware_gym.adapters.tool_runtime import ToolRuntime
 
 
-def test_tool_runtime():
+async def test_tool_runtime():
     runtime = ToolRuntime()
 
     call = {
@@ -9,6 +9,6 @@ def test_tool_runtime():
         "arguments": {"code": "print(10*10)"},
     }
 
-    result = runtime.execute(call)
+    result = await runtime.execute(call)
 
     assert result["status"] == "success"
