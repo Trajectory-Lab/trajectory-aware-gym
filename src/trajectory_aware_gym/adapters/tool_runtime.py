@@ -1,4 +1,6 @@
 import asyncio
+from collections.abc import Coroutine
+from threading import Thread
 from typing import Any
 
 import trajectory_aware_gym.mcp.tools  # noqa: F401
@@ -15,6 +17,35 @@ class ToolRuntime:
     def __init__(self, log_path: str = "logs/tool_calls.jsonl"):
         self.log_path = log_path
         self._server = mcp
+
+    def _run_sync(self, coroutine: Coroutine[Any, Any, Any]) -> Any:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(coroutine)
+
+        result: Any = None
+        error: BaseException | None = None
+
+        def runner() -> None:
+            nonlocal result, error
+            try:
+                result = asyncio.run(coroutine)
+            except BaseException as exc:  # pragma: no cover - defensive path
+                error = exc
+
+        thread = Thread(target=runner)
+        thread.start()
+        timeout = settings.gem.tool_timeout
+        thread.join(timeout=timeout)
+
+        if thread.is_alive():
+            raise TimeoutError(f"Tool execution timed out after {timeout}s")
+
+        if error is not None:
+            raise error
+
+        return result
 
     def _normalize_result(self, raw_result: Any) -> dict[str, Any]:
         if isinstance(raw_result, dict):
@@ -36,24 +67,19 @@ class ToolRuntime:
 
         return {"status": "success", "result": raw_result}
 
-    async def execute(self, tool_call: dict[str, Any]) -> dict[str, Any]:
+    def execute(self, tool_call: dict[str, Any]) -> dict[str, Any]:
         name = tool_call["tool"]
         args = tool_call.get("arguments", {})
 
         try:
-            tool = await self._server.get_tool(name)
+            tool = self._run_sync(self._server.get_tool(name))
         except (KeyError, ValueError) as exc:
             raw_result = {"status": "error", "error": f"Tool '{name}' not found: {exc}"}
             result = self._normalize_result(raw_result)
             log_tool_call(self.log_path, name, args, result)
             return result
-        if tool is None:  # pragma: no cover - defensive guard for MCP typing surface
-            raw_result = {"status": "error", "error": f"Tool '{name}' not found"}
-            result = self._normalize_result(raw_result)
-            log_tool_call(self.log_path, name, args, result)
-            return result
 
-        raw_result = await asyncio.wait_for(tool.run(args), timeout=settings.gem.tool_timeout)
+        raw_result = self._run_sync(tool.run(args))
 
         result = self._normalize_result(raw_result)
 
@@ -61,8 +87,8 @@ class ToolRuntime:
 
         return result
 
-    async def list_schemas(self) -> list[dict[str, Any]]:
-        tools = await self._server.get_tools()  # pyright: ignore[reportAttributeAccessIssue]
+    def list_schemas(self) -> list[dict[str, Any]]:
+        tools = self._run_sync(self._server.get_tools())  # pyright: ignore[reportAttributeAccessIssue]
 
         return [
             {

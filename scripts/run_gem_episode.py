@@ -14,7 +14,6 @@ Also supports a lightweight experiment smoke mode that:
 from __future__ import annotations
 
 import argparse
-import asyncio
 import importlib
 import json
 import textwrap
@@ -177,7 +176,7 @@ def build_smoke_run_spec(args: argparse.Namespace) -> SmokeRunSpec:
     )
 
 
-async def run_episode(
+def run_episode(
     environment_id: str,
     seed: int | None = None,
     system_prompt: str | None = None,
@@ -216,7 +215,7 @@ async def run_episode(
             },
         }
 
-        tool_result = await tool_runtime.execute(tool_call)
+        tool_result = tool_runtime.execute(tool_call)
 
         logged_tool_call = ToolCall(
             tool_name=tool_call["tool"],
@@ -253,7 +252,7 @@ async def run_episode(
     return total_reward, len(logger.steps), str(log_path)
 
 
-async def run_smoke_episode(spec: SmokeRunSpec) -> SmokeRunResult:
+def run_smoke_episode(spec: SmokeRunSpec) -> SmokeRunResult:
     """Run N independent prompt-conditioned GEM episodes."""
     runner = GEMEpisodeRunner(
         environment_id=spec.environment_id,
@@ -271,7 +270,7 @@ async def run_smoke_episode(spec: SmokeRunSpec) -> SmokeRunResult:
     correct_count = 0
 
     for ep in range(spec.episode_count):
-        result = await runner.run_episode(spec.system_prompt, episode_index=ep)
+        result = runner.run_episode(spec.system_prompt, episode_index=ep)
         trajectory = result.trajectory
 
         is_correct = trajectory.episode_outcome == "success"
@@ -366,7 +365,7 @@ def main() -> None:
     args = parse_args()
     if args.smoke or args.experiment_config is not None or args.task_model_id is not None:
         spec = build_smoke_run_spec(args)
-        result = asyncio.run(run_smoke_episode(spec))
+        result = run_smoke_episode(spec)
 
         print(f"\n{'=' * 70}")
         print(f"Experiment:  {result.experiment_name or '(ad hoc smoke run)'}")
@@ -394,12 +393,10 @@ def main() -> None:
     else:
         environment_id = args.environment or DEFAULT_ENVIRONMENT_ID
         seed = args.seed if args.seed is not None else DEFAULT_GUESS_SEED
-        total_reward, steps, log_path = asyncio.run(
-            run_episode(
-                environment_id,
-                seed,
-                args.system_prompt,
-            )
+        total_reward, steps, log_path = run_episode(
+            environment_id,
+            seed,
+            args.system_prompt,
         )
         print(f"Environment:    {environment_id}")
         print(f"Steps:          {steps}")
