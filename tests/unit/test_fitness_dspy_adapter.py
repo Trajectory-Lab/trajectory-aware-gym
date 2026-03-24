@@ -217,10 +217,8 @@ class TestTrajectoryFitnessMetric:
 
         loopy_score = metric(example, dspy.Prediction(answer="a", trajectory=loopy))
 
-        # Loopy failure should get a score > 0 (it's normalized, not clamped)
-        # but lower than a successful trajectory
-        assert loopy_score >= 0.0
-        assert loopy_score < 0.5
+        # Failed trajectory (reward=0) clamps to 0 regardless of loop penalty
+        assert loopy_score == 0.0
 
     def test_gepa_five_arg_signature_introspection(self):
         """GEPA validates metric signature by binding 5 positional args."""

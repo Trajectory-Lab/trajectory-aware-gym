@@ -28,6 +28,7 @@ from trajectory_aware_gym.config.llm_provider import (
     get_task_model_id,
 )
 from trajectory_aware_gym.models.experiment import ExperimentConfig
+from trajectory_aware_gym.models.gepa_result import GEPARunResult
 
 DEFAULT_SEED_PROMPT = (
     "You are a math problem solver. "
@@ -81,20 +82,6 @@ def build_runner(config: ExperimentConfig) -> GEMEpisodeRunner:
         experiment_name=config.name,
         tools=tools,
     )
-
-
-def _evaluate_accuracy(
-    runner: GEMEpisodeRunner,
-    prompt: str,
-    valset: list[dspy.Example],
-) -> float:
-    """Run the prompt on each valset example and return fraction with reward > 0."""
-    correct = 0
-    for ex in valset:
-        traj = runner.run(prompt, seed_override=ex.seed, expected_observation=str(ex.problem))
-        if traj.total_reward > 0:
-            correct += 1
-    return correct / len(valset)
 
 
 def run_dry_run(
@@ -200,35 +187,22 @@ def run_dry_run(
     elapsed = time.monotonic() - start_time
 
     # Extract results
-    optimized_instructions = optimized_module.instructions
-    detailed = getattr(optimized_module, "detailed_results", None)
-
-    baseline_fitness = None
-    final_fitness = None
-    baseline_accuracy = None
-    final_accuracy = None
-    best_idx = 0
-    if detailed is not None:
-        baseline_fitness = detailed.val_aggregate_scores[0]
-        best_idx = detailed.best_idx
-        final_fitness = detailed.val_aggregate_scores[best_idx]
-
-    # Compute accuracy by running baseline and best prompts on the valset.
-    print("\nEvaluating accuracy on valset...")
-    baseline_accuracy = _evaluate_accuracy(runner, seed_prompt, valset)
-    final_accuracy = _evaluate_accuracy(runner, optimized_instructions, valset)
+    result = GEPARunResult.from_module(optimized_module, seed_prompt)
 
     print(f"\nGEPA compile completed in {elapsed:.1f}s")
-    if baseline_fitness is not None and final_fitness is not None:
+    if result is not None:
         print(
-            f"  Baseline fitness: {baseline_fitness:.4f}  |  Final fitness: {final_fitness:.4f} (program {best_idx})"
+            f"  Baseline fitness: {result.baseline_fitness:.4f}  |  "
+            f"Final fitness: {result.final_fitness:.4f} (program {result.best_program_index})"
         )
-    if baseline_accuracy is not None and final_accuracy is not None:
         print(
-            f"  Baseline accuracy: {baseline_accuracy:.2%}  |  Final accuracy: {final_accuracy:.2%}"
+            f"  Baseline accuracy: {result.baseline_accuracy:.2%}  |  "
+            f"Final accuracy: {result.final_accuracy:.2%}"
         )
-    print(f"  Optimized instructions ({len(optimized_instructions)} chars):")
-    print(f"    {optimized_instructions[:200]}{'...' if len(optimized_instructions) > 200 else ''}")
+        print(f"  Optimized instructions ({len(result.optimized_instructions)} chars):")
+        preview = result.optimized_instructions[:200]
+        ellipsis = "..." if len(result.optimized_instructions) > 200 else ""
+        print(f"    {preview}{ellipsis}")
 
     # Save summary
     summary = {
@@ -242,13 +216,19 @@ def run_dry_run(
         },
         "train_size": len(trainset),
         "val_size": len(valset),
-        "baseline_fitness": baseline_fitness,
-        "final_fitness": final_fitness,
-        "baseline_accuracy": baseline_accuracy,
-        "final_accuracy": final_accuracy,
         "seed_prompt": seed_prompt,
-        "optimized_instructions": optimized_instructions,
         "elapsed_seconds": round(elapsed, 2),
+        **(
+            {
+                "baseline_fitness": result.baseline_fitness,
+                "final_fitness": result.final_fitness,
+                "baseline_accuracy": result.baseline_accuracy,
+                "final_accuracy": result.final_accuracy,
+                "optimized_instructions": result.optimized_instructions,
+            }
+            if result is not None
+            else {}
+        ),
     }
     summary_path = LOG_DIR / "dry_run_summary.json"
     summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False))
