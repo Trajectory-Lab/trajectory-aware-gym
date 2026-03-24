@@ -19,6 +19,7 @@ from trajectory_aware_gym.adapters.trajectory_logger import (
     load_trajectory,
 )
 from trajectory_aware_gym.config import settings
+from trajectory_aware_gym.metrics import EpisodeRawMetrics, extract_episode_raw_metrics
 
 DEFAULT_MAX_RESPONSE_TOKENS = 4096
 DEFAULT_MAX_TOOL_ROUNDS = 3
@@ -37,6 +38,7 @@ class GEMEpisodeResult:
 
     trajectory: TrajectoryLog
     log_path: Path | None
+    raw_metrics: EpisodeRawMetrics
 
 
 @dataclass(frozen=True)
@@ -307,7 +309,10 @@ class GEMEpisodeRunner:
 
             log_path = logger.save() if persist else None
             trajectory = load_trajectory(log_path) if log_path is not None else logger.build_log()
-            return GEMEpisodeResult(trajectory=trajectory, log_path=log_path)
+            raw_metrics = extract_episode_raw_metrics(trajectory)
+            return GEMEpisodeResult(
+                trajectory=trajectory, log_path=log_path, raw_metrics=raw_metrics
+            )
         finally:
             if hasattr(env, "close"):
                 env.close()

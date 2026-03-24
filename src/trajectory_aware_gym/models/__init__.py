@@ -19,8 +19,14 @@ from trajectory_aware_gym.models.experiment import (
     TaskModelConfig,
     ToolType,
 )
+from trajectory_aware_gym.models.gepa_result import (
+    GEPARunResult,
+    accuracy_from_subscores,
+)
 
 __all__ = [
+    "GEPARunResult",
+    "accuracy_from_subscores",
     "ComparisonProtocol",
     "CostBudget",
     "DatasetSplit",

@@ -48,16 +48,13 @@ class TrajectoryFitnessMetric:
         self._fitness = fitness or CompositeFitness(self._config)
         self._return_feedback = return_feedback
 
-        # Pre-compute the theoretical score range from the known term ranges
-        # and configured weights so we can normalize to [0, 1].
+        # Normalization range: [0, max] so that failed trajectories (raw ≤ 0)
+        # always map to 0.  Only successful episodes earn positive fitness.
         #   DiscountedReturnTerm:      [0, 1]  weight = 1.0 (always)
         #   LoopDetectionPenaltyTerm:  [-1, 0] weight = loop_penalty_weight
         #   StepEfficiencyBonusTerm:   [0, 1]  weight = step_efficiency_weight
-        loop_w = self._config.loop_penalty_weight
         eff_w = self._config.step_efficiency_weight
-        self._score_min = -loop_w  # worst case: 0 + loop_w*(-1) + 0
         self._score_max = 1.0 + eff_w  # best case: 1 + 0 + eff_w*1
-        self._score_range = self._score_max - self._score_min
 
     def __call__(
         self,
@@ -87,10 +84,10 @@ class TrajectoryFitnessMetric:
         return score
 
     def _normalize(self, raw_score: float) -> float:
-        """Linearly rescale the raw composite to [0, 1]."""
-        if self._score_range <= 0:
+        """Clamp negative raw scores to 0 then rescale to [0, 1]."""
+        if self._score_max <= 0:
             return 0.0
-        return (raw_score - self._score_min) / self._score_range
+        return max(0.0, raw_score) / self._score_max
 
     def _format_feedback(self, result: FitnessResult, normalized_score: float) -> str:
         lines = [
