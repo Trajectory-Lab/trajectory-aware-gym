@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -7,7 +7,7 @@ def log_tool_call(path: str, tool: str, args: dict, result: dict):
     Path(path).parent.mkdir(parents=True, exist_ok=True)
 
     entry = {
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "tool": tool,
         "args": args,
         "result": result,

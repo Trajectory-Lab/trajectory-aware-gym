@@ -8,6 +8,12 @@ This file provides comprehensive guidance for AI coding assistants (Claude Code,
 
 This is a Harvard Extension School capstone project comparing **token-space prompt optimization** (GEPA) against **weight-space reinforcement learning** (PPO, GRPO) for agentic LLM tasks. The core contribution is the **GEM-DSPy adapter**, which bridges OpenAI Gym-style RL environments with prompt optimization frameworks.
 
+### Reference Documents
+
+- **[docs/Capstone_proposal.md](docs/Capstone_proposal.md)**: Full capstone proposal — hypotheses, methodology, theoretical framework, timeline, budget
+- **[docs/GEM_paper.md](docs/GEM_paper.md)**: GEM paper (Liu et al., 2025) — gym framework, RL baselines, environment specs, hyperparameters
+- **[docs/GEPA_paper.md](docs/GEPA_paper.md)**: GEPA paper (Agrawal et al., 2025) — reflective prompt evolution, Pareto-aware selection
+
 ## Package Management
 
 **Use `uv` for all Python operations:**
@@ -93,22 +99,21 @@ The project evaluates two optimization paradigms:
 - Composite metrics include loop detection penalty and step efficiency bonus
 
 **GEPA Integration** (`src/trajectory_aware_gym/optimizers/`):
-- Uses Claude Sonnet 4.5 as reflection model (distinct from task model)
+- Uses a Bedrock-hosted reflection model (currently GPT OSS 120B in the dry-run path, distinct from the task model)
 - Maintains **Pareto frontier** of prompts (not single best) to preserve diversity
 - Budget modes: light/medium/heavy controlling iteration count and population size
 
 **AWS/LLM Infrastructure** (`src/trajectory_aware_gym/config/`):
 - All LLM calls route through **LiteLLM** for unified provider interface
-- Task models: Qwen3 (1.7B, 4B) via AWS Bedrock for fair comparison with GEM's RL baselines
-- Reflection model: Claude Sonnet 4.5 via Bedrock for GEPA mutations
+- Task models: Qwen3 (1.7B, 4B) via Ollama and Llama 1B/3B/8B via AWS Bedrock
+- Reflection model: configurable Bedrock model, with GPT OSS 120B currently used in the dry-run path
 - Configuration via YAML (`src/trajectory_aware_gym/config/trajectory-aware-gym.yaml`) with `.env` overrides (see Configuration Management)
 
 ### Environments
 
-Three GEM environments from the proposal:
-1. **Math12K**: Chain-of-thought mathematical reasoning (single-turn)
-2. **CodeContest**: Competitive programming with test execution (multi-turn, tool-using)
-3. **HotpotQA**: Multi-hop question answering (multi-turn, retrieval-heavy)
+Two GEM environments with published RL baselines:
+1. **Orz57K**: Mathematical reasoning with Python tool (multi-turn, tool-using) — RL baseline 71.0% on MATH500
+2. **HotpotQA**: Multi-hop question answering with search tool (multi-turn, retrieval-heavy) — RL baseline 43.2%
 
 ## Development Commands
 
@@ -191,21 +196,12 @@ uv run bandit -r src
 - Standard checks (trailing whitespace, YAML/TOML/JSON validation, etc.)
 
 ### Running Experiments
-```bash
-# Activate environment first (if needed for interactive work)
-source .venv/bin/activate
+Primary experiment configs:
+- `experiments/orz57k/config.yaml`
+- `experiments/hotpotqa/config.yaml`
+- `experiments/quick-test/config.yaml`
 
-# Run GEPA optimization on Math12K
-uv run python examples/run_gepa_math12k.py
-
-# Compare against RL baselines
-uv run python scripts/compare_baselines.py --environment math12k
-
-# Run with specific configuration
-uv run python scripts/run_experiment.py \
-  --config experiments/configs/baseline.yaml \
-  --replications 3
-```
+Use these YAMLs as the source of truth for environment selection, dataset splits, and RL comparison targets.
 
 ## Configuration Management
 
@@ -381,11 +377,13 @@ if is_admin(user):
 
 ## Project Timeline (16 weeks)
 
-- **Weeks 1-2** (Phase 1): Environment setup ← **Currently here**
+- **Weeks 1-2** (Phase 1): Environment setup
 - **Weeks 3-7** (Phase 2): GEM-DSPy-GEPA integration
 - **Weeks 8-11** (Phase 3): Primary experiments
 - **Weeks 12-13** (Phase 4): Generalization & ablations
 - **Weeks 14-16** (Phase 5): Analysis & writing
+
+**Current status:** K4 dry-run integration is functionally closed. The repository now has a working end-to-end GEPA + DSPy + GEM smoke path, but prompt-improvement quality, multi-step tool use, and experiment-grade evaluation remain active work.
 
 ## Key Research Hypotheses
 

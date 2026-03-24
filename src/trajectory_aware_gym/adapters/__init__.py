@@ -1,6 +1,8 @@
 """Adapter modules for GEM integration and trajectory handling."""
 
 from trajectory_aware_gym.adapters.dspy_adapter import TrajectoryFitnessMetric
+from trajectory_aware_gym.adapters.gem_episode_runner import GEMEpisodeRunner
+from trajectory_aware_gym.adapters.gem_solver_module import GEMSolverModule
 from trajectory_aware_gym.adapters.trajectory_logger import (
     LLMCallMetadata,
     ToolCall,
@@ -14,6 +16,8 @@ from trajectory_aware_gym.adapters.trajectory_logger import (
 )
 
 __all__ = [
+    "GEMEpisodeRunner",
+    "GEMSolverModule",
     "LLMCallMetadata",
     "ToolCall",
     "TrajectoryFitnessMetric",

@@ -95,27 +95,24 @@ class TestDiscountedReturnTerm:
     @pytest.mark.parametrize(
         ("rewards", "gamma", "lam", "expected"),
         [
-            # Single successful step: γ^0 * 1.0 + 0.1 * 1.0 = 1.1
-            ([1.0], 0.99, 0.1, 1.1),
-            # Single failed step: 0.0 + 0.1 * 0.0 = 0.0
+            # Single successful step: raw=1.1, max=1.1 → 1.0
+            ([1.0], 0.99, 0.1, 1.0),
+            # Single failed step: raw=0.0 → 0.0
             ([0.0], 0.99, 0.1, 0.0),
-            # Two steps, success: (γ^1 + γ^0) * 1.0 + λ * (0.0 + 1.0)
-            # = (0.5 + 1.0) + 0.1 * 1.0 = 1.6
-            ([0.0, 1.0], 0.5, 0.1, 1.6),
-            # γ=0: only final step counts: 0^1 + 0^0 = 0 + 1 = 1.0
+            # Two steps, success: raw=1.6, max=1.7 → 0.9412
+            ([0.0, 1.0], 0.5, 0.1, 0.9411764705882354),
+            # γ=0: only final step counts: raw=1.0, max=1.0 → 1.0
             ([0.0, 1.0], 0.0, 0.0, 1.0),
-            # γ=1: uniform weighting: 1^1 + 1^0 = 1 + 1 = 2.0
-            ([0.0, 1.0], 1.0, 0.0, 2.0),
-            # Negative final reward (failure): main=0, aux=λ*(0.5 + -1.0)=-0.05
-            ([0.5, -1.0], 0.99, 0.1, -0.05),
-            # Three steps success, γ=0.5, λ=0:
-            # 0.5^2 + 0.5^1 + 0.5^0 = 0.25 + 0.5 + 1.0 = 1.75
-            ([0.0, 0.0, 1.0], 0.5, 0.0, 1.75),
-            # λ=0 disables auxiliary term
-            ([0.0, 1.0], 0.5, 0.0, 1.5),
-            # Only auxiliary term (γ=0, two steps, success):
-            # main = 0^1 * 1 + 0^0 * 1 = 0 + 1 = 1.0, aux = 0.5 * (0.0+1.0) = 0.5
-            ([0.0, 1.0], 0.0, 0.5, 1.5),
+            # γ=1: uniform weighting: raw=2.0, max=2.0 → 1.0
+            ([0.0, 1.0], 1.0, 0.0, 1.0),
+            # Negative final reward (failure): raw=-0.05, max=2.19 → -0.0228
+            ([0.5, -1.0], 0.99, 0.1, -0.02283105022831049),
+            # Three steps success, γ=0.5, λ=0: raw=1.75, max=1.75 → 1.0
+            ([0.0, 0.0, 1.0], 0.5, 0.0, 1.0),
+            # λ=0 disables auxiliary term: raw=1.5, max=1.5 → 1.0
+            ([0.0, 1.0], 0.5, 0.0, 1.0),
+            # Only auxiliary term (γ=0): raw=1.5, max=2.0 → 0.75
+            ([0.0, 1.0], 0.0, 0.5, 0.75),
         ],
     )
     def test_computation(self, make_trajectory, rewards, gamma, lam, expected):

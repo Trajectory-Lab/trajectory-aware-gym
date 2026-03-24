@@ -207,10 +207,11 @@ marimo/_lsp/
 __marimo__/
 
 # Project-specific
-# Experiment data and logs
+# Experiment outputs (but keep config YAMLs)
 logs/
 results/
-experiments/
+experiments/*/results/
+experiments/*/logs/
 data/trajectories/
 data/checkpoints/
 
@@ -219,8 +220,8 @@ data/checkpoints/
 credentials
 /config
 
-# Model artifacts
-models/
+# Model weight artifacts (not src/trajectory_aware_gym/models/)
+*.bin
 *.pkl
 *.pth
 *.ckpt
