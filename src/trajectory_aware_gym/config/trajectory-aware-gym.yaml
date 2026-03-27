@@ -14,6 +14,16 @@ ollama:
   task_model_1_7b: "ollama_chat/qwen3:1.7b"
   task_model_4b: "ollama_chat/qwen3:4b"
 
+sagemaker:
+  region: us-east-1
+  role_arn: "arn:aws:iam::914246603077:role/capstone-sagemaker-role"
+  instance_type: "ml.g5.xlarge"
+  tgi_image_uri: "763104351884.dkr.ecr.us-east-1.amazonaws.com/huggingface-pytorch-tgi-inference:2.7.0-tgi3.3.6-gpu-py311-cu124-ubuntu22.04-v1.1"
+  endpoint_1_7b: "qwen3-1-7b-base"
+  endpoint_4b: "qwen3-4b-base"
+  model_id_1_7b: "Qwen/Qwen3-1.7B-Base"
+  model_id_4b: "Qwen/Qwen3-4B-Base"
+
 gem:
   max_steps: 50
   temperature_train: 1.0

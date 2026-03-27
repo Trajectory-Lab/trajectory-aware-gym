@@ -63,6 +63,19 @@ class OllamaModel(BaseModel):
     task_model_4b: str
 
 
+class SageMakerModel(BaseModel):
+    """SageMaker endpoint configuration for custom-deployed models."""
+
+    region: str
+    role_arn: str
+    instance_type: str
+    tgi_image_uri: str
+    endpoint_1_7b: str
+    endpoint_4b: str
+    model_id_1_7b: str
+    model_id_4b: str
+
+
 class GEMModel(BaseModel):
     """GEM environment configuration."""
 
@@ -122,6 +135,7 @@ class FitnessModel(BaseModel):
 _SECTION_MAP: list[tuple[str, str, type[BaseModel]]] = [
     ("aws", "AWS", AWSModel),
     ("ollama", "OLLAMA", OllamaModel),
+    ("sagemaker", "SAGEMAKER", SageMakerModel),
     ("gem", "GEM", GEMModel),
     ("gepa", "GEPA", GEPAModel),
     ("experiment", "EXPERIMENT", ExperimentModel),
@@ -143,6 +157,7 @@ class Settings:
 
     _aws: AWSModel
     _ollama: OllamaModel
+    _sagemaker: SageMakerModel
     _gem: GEMModel
     _gepa: GEPAModel
     _experiment: ExperimentModel
@@ -199,6 +214,10 @@ class Settings:
     @property
     def ollama(self) -> OllamaModel:
         return self._ollama
+
+    @property
+    def sagemaker(self) -> SageMakerModel:
+        return self._sagemaker
 
     @property
     def gem(self) -> GEMModel:

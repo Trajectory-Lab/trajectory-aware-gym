@@ -121,6 +121,7 @@ src/trajectory_aware_gym/
 ├── fitness/     # Trajectory-aware fitness functions
 ├── optimizers/  # GEPA configuration
 ├── config/      # Centralized settings (YAML + env var loading)
+├── sagemaker/   # SageMaker deploy/inference for custom-hosted models
 └── utils/       # Utilities
 ```
 

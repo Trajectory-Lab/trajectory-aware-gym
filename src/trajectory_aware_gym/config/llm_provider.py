@@ -10,6 +10,8 @@ from trajectory_aware_gym.config import settings
 TaskModelName: TypeAlias = Literal[  # noqa: UP040
     "qwen3:1.7b",
     "qwen3:4b",
+    "qwen3-base:1.7b",
+    "qwen3-base:4b",
     "llama:1b",
     "llama:3b",
     "llama:8b",
@@ -25,6 +27,10 @@ def get_task_model_id(model: TaskModelName = "qwen3:1.7b") -> str | None:
             return settings.ollama.task_model_1_7b
         case "qwen3:4b":
             return settings.ollama.task_model_4b
+        case "qwen3-base:1.7b":
+            return f"sagemaker/{settings.sagemaker.endpoint_1_7b}"
+        case "qwen3-base:4b":
+            return f"sagemaker/{settings.sagemaker.endpoint_4b}"
         case "llama:1b":
             return f"bedrock/{settings.aws.bedrock_llama_1b}"
         case "llama:3b":
@@ -57,7 +63,7 @@ def get_task_lm(
         "temperature": temperature,
         "max_tokens": 4096,
     }
-    if model_id.startswith("bedrock/"):
+    if model_id.startswith(("bedrock/", "sagemaker/")):
         aws_region = getattr(settings.aws, "region", None)
         if aws_region is not None:
             kwargs["aws_region_name"] = aws_region

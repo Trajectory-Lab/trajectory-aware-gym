@@ -108,6 +108,12 @@ def mock_settings(monkeypatch):
             self.bedrock_llama_3b = "us.meta.llama3-2-3b-instruct-v1:0"
             self.bedrock_llama_8b = "us.meta.llama3-1-8b-instruct-v1:0"
 
+    class MockSageMaker:
+        def __init__(self):
+            self.region = "us-east-1"
+            self.endpoint_1_7b = "qwen3-1-7b-base"
+            self.endpoint_4b = "qwen3-4b-base"
+
     class MockGEPA:
         def __init__(self):
             self.reflection_model = "openai.gpt-oss-120b-1:0"
@@ -116,6 +122,7 @@ def mock_settings(monkeypatch):
     mock_settings_module = types.ModuleType("mock_settings")
     mock_settings_module.gem = MockGem()
     mock_settings_module.ollama = MockOllama()
+    mock_settings_module.sagemaker = MockSageMaker()
     mock_settings_module.aws = MockAWS()
     mock_settings_module.gepa = MockGEPA()
 
@@ -167,6 +174,22 @@ def mock_settings(monkeypatch):
             0.9,
             None,
             id="bedrock-llama-8b-train",
+        ),
+        pytest.param(
+            "qwen3-base:1.7b",
+            "train",
+            "sagemaker/qwen3-1-7b-base",
+            0.9,
+            None,
+            id="sagemaker-qwen3-base-1.7b-train",
+        ),
+        pytest.param(
+            "qwen3-base:4b",
+            "eval",
+            "sagemaker/qwen3-4b-base",
+            0.1,
+            None,
+            id="sagemaker-qwen3-base-4b-eval",
         ),
     ],
 )

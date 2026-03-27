@@ -70,7 +70,7 @@ def build_runner(config: ExperimentConfig) -> GEMEpisodeRunner:
     task_model = config.task_models[0]
     tools = [t.value for t in config.environment.tools if t.value != "none"]
     model_id = task_model.model_id
-    if task_model.provider == "bedrock":
+    if task_model.provider in ("bedrock", "sagemaker"):
         model_id = get_task_model_id(cast(TaskModelName, task_model.name))
     return GEMEpisodeRunner(
         environment_id=config.environment.gem_env_id,
@@ -125,7 +125,7 @@ def run_dry_run(
     # Configure DSPy LM for the task model
     task_model_cfg = config.task_models[0]
 
-    if task_model_cfg.provider == "bedrock":
+    if task_model_cfg.provider in ("bedrock", "sagemaker"):
         task_lm = get_task_lm(
             model=cast(TaskModelName, task_model_cfg.name),
             mode="train",
