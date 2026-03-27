@@ -14,7 +14,7 @@ class ToolRuntime:
     Executes tool calls emitted by the agent via FastMCP.
     """
 
-    def __init__(self, log_path: str = "logs/tool_calls.jsonl"):
+    def __init__(self, log_path: str = "logs/trajectories.db"):
         self.log_path = log_path
         self._server = mcp
 

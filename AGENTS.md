@@ -103,6 +103,15 @@ The project evaluates two optimization paradigms:
 - Maintains **Pareto frontier** of prompts (not single best) to preserve diversity
 - Budget modes: light/medium/heavy controlling iteration count and population size
 
+**Trajectory Storage** (`src/trajectory_aware_gym/storage/`):
+- SQLite-backed persistence for trajectory logs and tool call records (`trajectories.db`)
+- Replaces per-episode JSON files and append-only `tool_calls.jsonl` with a single database
+- WAL mode enabled for concurrent read access during writes
+- Stores episodes, per-step data, LLM call metadata (tokens, cost, latency), and tool calls in normalized tables
+- Thread-safe connection management (singleton per db path)
+- Public API: `save_trajectory`, `load_trajectory_by_id`, `load_all_trajectories`, `query_trajectories`, `save_tool_call_entry`, `episode_exists`
+- Data models (`TrajectoryLog`, `TrajectoryStep`, `ToolCall`, `LLMCallMetadata`) defined in `adapters/trajectory_logger.py`
+
 **AWS/LLM Infrastructure** (`src/trajectory_aware_gym/config/`):
 - All LLM calls route through **LiteLLM** for unified provider interface
 - Task models: Qwen3 (1.7B, 4B) via Ollama and Llama 1B/3B/8B via AWS Bedrock
