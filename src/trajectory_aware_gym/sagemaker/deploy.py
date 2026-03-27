@@ -140,8 +140,8 @@ def delete_model(model_key: str) -> None:
     try:
         resp = sm.describe_endpoint(EndpointName=name)
         config_name = resp.get("EndpointConfigName")
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        print(f"  Could not describe endpoint (may not exist): {exc}")
 
     try:
         sm.delete_endpoint(EndpointName=name)
@@ -153,16 +153,16 @@ def delete_model(model_key: str) -> None:
         try:
             sm.delete_endpoint_config(EndpointConfigName=config_name)
             print("  Endpoint config deleted.")
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            print(f"  Could not delete endpoint config: {exc}")
 
     try:
         models = sm.list_models(NameContains=name, MaxResults=10)["Models"]
         for m in models:
             sm.delete_model(ModelName=m["ModelName"])
             print(f"  Model '{m['ModelName']}' deleted.")
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        print(f"  Could not clean up models: {exc}")
 
     print(f"  [OK] {model_id} shut down. Billing stopped.")
 
