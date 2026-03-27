@@ -105,7 +105,7 @@ The project evaluates two optimization paradigms:
 
 **AWS/LLM Infrastructure** (`src/trajectory_aware_gym/config/`):
 - All LLM calls route through **LiteLLM** for unified provider interface
-- Task models: Qwen3 (1.7B, 4B) via Ollama, Qwen3 Base (1.7B, 4B) via SageMaker, and Llama 1B/3B/8B via AWS Bedrock
+- Task models: Qwen3 Base (1.7B, 4B) via Ollama (local) or SageMaker (AWS), and Llama 1B/3B/8B via AWS Bedrock
 - Reflection model: configurable Bedrock model, with GPT OSS 120B currently used in the dry-run path
 - Configuration via YAML (`src/trajectory_aware_gym/config/trajectory-aware-gym.yaml`) with `.env` overrides (see Configuration Management)
 

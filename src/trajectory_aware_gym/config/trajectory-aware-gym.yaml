@@ -11,8 +11,8 @@ aws:
 
 ollama:
   api_base: "http://localhost:11434"
-  task_model_1_7b: "ollama_chat/qwen3:1.7b"
-  task_model_4b: "ollama_chat/qwen3:4b"
+  task_model_1_7b: "ollama/qwen3-1.7b-base"
+  task_model_4b: "ollama/qwen3-4b-base"
 
 sagemaker:
   region: us-east-1

@@ -91,17 +91,29 @@ def _build_completion_kwargs(
     temperature: float,
     max_tokens: int = DEFAULT_MAX_RESPONSE_TOKENS,
 ) -> dict[str, Any]:
+    """Build LiteLLM ``completion()`` kwargs for a given provider.
+
+    LiteLLM routes to different providers based on the model_id prefix:
+      - ``ollama/``    → local Ollama server (base/completion models, /api/generate)
+      - ``bedrock/``   → AWS Bedrock (managed inference)
+      - ``sagemaker/`` → AWS SageMaker (custom TGI endpoints)
+    """
     kwargs: dict[str, Any] = {
         "model": model_id,
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
-    if model_id.startswith("bedrock/"):
+    # AWS providers need explicit region for LiteLLM's boto3 calls
+    if model_id.startswith(("bedrock/", "sagemaker/")):
         aws_region = getattr(settings.aws, "region", None)
         if aws_region is not None:
             kwargs["aws_region_name"] = aws_region
-    if model_id.startswith("ollama_chat/"):
+    # Ollama models need the local server URL
+    if model_id.startswith("ollama/"):
         kwargs["api_base"] = settings.ollama.api_base
+        # Base (completion) models don't have a built-in stop condition;
+        # without these, they repeat the prompt/answer indefinitely.
+        kwargs["stop"] = ["<|endoftext|>", "<|im_end|>", "\n### User:", "\nHuman:"]
     return kwargs
 
 
@@ -130,6 +142,16 @@ def generate_smoke_action(
     if not action:
         reasoning = getattr(msg, "reasoning_content", None) or ""
         action = _extract_text_content(reasoning) if reasoning else "[empty-action]"
+
+    # LiteLLM converts chat messages into a text prompt for base models
+    # (ollama/ prefix → /api/generate). The response often starts with
+    # "### Assistant:" from the auto-generated prompt template — strip it
+    # so the GEM environment sees only the model's actual answer.
+    if model_id.startswith("ollama/"):
+        for prefix in ("### Assistant:\n", "### Assistant: ", "Assistant:\n", "Assistant: "):
+            if action.startswith(prefix):
+                action = action[len(prefix) :].strip()
+                break
 
     usage = getattr(response, "usage", None)
     prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)

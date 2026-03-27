@@ -47,9 +47,9 @@ settings.fitness.lambda_         # 0.1
 from trajectory_aware_gym.config.llm_provider import get_task_lm, get_reflection_lm
 
 # Task models (routed by name to Ollama, Bedrock, or SageMaker)
-task_lm = get_task_lm("qwen3:1.7b", "train")       # Ollama, temp=1.0
-eval_lm = get_task_lm("llama:8b", "eval")           # Bedrock, temp=0.0
-sage_lm = get_task_lm("qwen3-base:1.7b", "train")   # SageMaker, temp=1.0
+task_lm = get_task_lm("qwen3:1.7b", "train")            # Ollama, temp=1.0
+eval_lm = get_task_lm("llama:8b", "eval")               # Bedrock, temp=0.0
+sage_lm = get_task_lm("qwen3-sagemaker:1.7b", "train")  # SageMaker, temp=1.0
 
 # Reflection model (Claude Sonnet 4.5 via Bedrock)
 reflection_lm = get_reflection_lm()
@@ -63,21 +63,22 @@ dspy.configure(lm=get_task_lm("qwen3:1.7b", "train"))
 
 | Name | Provider | Model |
 |------|----------|-------|
-| `qwen3:1.7b` | Ollama (local) | Qwen3 1.7B |
-| `qwen3:4b` | Ollama (local) | Qwen3 4B |
-| `qwen3-base:1.7b` | SageMaker (AWS) | Qwen3 1.7B Base |
-| `qwen3-base:4b` | SageMaker (AWS) | Qwen3 4B Base |
+| `qwen3:1.7b` | Ollama (local) | Qwen3 1.7B Base |
+| `qwen3:4b` | Ollama (local) | Qwen3 4B Base |
+| `qwen3-sagemaker:1.7b` | SageMaker (AWS) | Qwen3 1.7B Base |
+| `qwen3-sagemaker:4b` | SageMaker (AWS) | Qwen3 4B Base |
 | `llama:1b` | Bedrock (AWS) | Llama 3.2 1B |
 | `llama:3b` | Bedrock (AWS) | Llama 3.2 3B |
 | `llama:8b` | Bedrock (AWS) | Llama 3.1 8B |
 
+Ollama models require local setup. See [docs/ollama_setup.md](ollama_setup.md) for installation.
 SageMaker models require a running endpoint. See [SageMaker Endpoints](#sagemaker-endpoints) below for deploy/teardown instructions.
 
 ### Model Roles
 
 | Role | Purpose | Current Models |
 |------|---------|----------------|
-| **Task model** | Runs in GEM environments, optimized by GEPA | Qwen3 1.7B/4B (Ollama), Qwen3 1.7B/4B Base (SageMaker), Llama 1B/3B/8B (Bedrock) |
+| **Task model** | Runs in GEM environments, optimized by GEPA | Qwen3 1.7B/4B Base (Ollama or SageMaker), Llama 1B/3B/8B (Bedrock) |
 | **Reflection model** | GEPA prompt mutation and reflection | GPT OSS 120B (Bedrock) |
 
 ## Env Var Override Convention
@@ -307,9 +308,9 @@ models. Just pass a different model name:
 from trajectory_aware_gym.config.llm_provider import get_task_lm
 
 # These all return dspy.LM — same interface, different backends
-ollama_lm    = get_task_lm("qwen3:1.7b", "train")       # Ollama
-bedrock_lm   = get_task_lm("llama:8b", "eval")           # Bedrock
-sagemaker_lm = get_task_lm("qwen3-base:1.7b", "train")   # SageMaker
+ollama_lm    = get_task_lm("qwen3:1.7b", "train")            # Ollama
+bedrock_lm   = get_task_lm("llama:8b", "eval")               # Bedrock
+sagemaker_lm = get_task_lm("qwen3-sagemaker:1.7b", "train")  # SageMaker
 
 # Use with DSPy exactly as before
 import dspy

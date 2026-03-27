@@ -172,7 +172,7 @@ class TestLLMCallMetadata:
     def test_thinking_tokens_accepted(self):
         """total_tokens may exceed prompt + completion (e.g. Qwen3 thinking tokens)."""
         meta = LLMCallMetadata(
-            model_id="ollama_chat/qwen3:4b",
+            model_id="ollama/qwen3-4b-base",
             prompt_tokens=100,
             completion_tokens=50,
             total_tokens=300,

@@ -2,7 +2,7 @@
 
 Useful for quick endpoint health checks and standalone inference
 outside the DSPy pipeline.  For DSPy-integrated inference, use
-``get_task_lm("qwen3-base:1.7b")`` from ``config.llm_provider`` instead.
+``get_task_lm("qwen3-sagemaker:1.7b")`` from ``config.llm_provider`` instead.
 
 Usage::
 

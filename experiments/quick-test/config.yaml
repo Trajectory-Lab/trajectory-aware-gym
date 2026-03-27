@@ -36,8 +36,8 @@ eval_protocol:
   bootstrap_iterations: 100
 
 task_models:
-  - name: Qwen3-1.7B
-    model_id: "ollama_chat/qwen3:1.7b"
+  - name: Qwen3-1.7B-Base
+    model_id: "ollama/qwen3-1.7b-base"
     provider: ollama
     parameter_count: "1.7B"
 

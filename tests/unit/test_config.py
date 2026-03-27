@@ -50,7 +50,7 @@ class TestSettingsLoad:
     def test_loads_ollama_section(self):
         s = _load_settings()
         assert s.ollama.api_base == "http://localhost:11434"
-        assert s.ollama.task_model_1_7b == "ollama_chat/qwen3:1.7b"
+        assert s.ollama.task_model_1_7b == "ollama/qwen3-1.7b-base"
 
     def test_loads_sagemaker_section(self):
         s = _load_settings()
