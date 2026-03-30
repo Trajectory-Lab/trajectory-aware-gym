@@ -4,7 +4,7 @@ This document captures the testing handoff artifacts for Phase 2 integration wor
 
 ## Delivered Artifacts
 
-- Integration test matrix: `docs/integration_test_matrix.md`
+- Integration test matrix: `docs/04-testing/integration_test_matrix.md`
 - Integration pipeline tests: `tests/integration/test_system_pipeline.py`
 - Additional AWS config branch tests: `tests/unit/test_aws_config_clients.py`
 
