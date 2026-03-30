@@ -142,7 +142,7 @@ class StepEfficiencyBonusTerm:
 # These are disabled by default and not included in CompositeFitness.
 # Enable by adding to the composite's term list with a non-zero weight
 # once validated in ablation experiments.
-# See also: docs/fitness_objective_profile.md
+# See also: docs/02-architecture/fitness_objective_profile.md
 # ---------------------------------------------------------------------------
 
 
