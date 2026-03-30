@@ -69,7 +69,7 @@ def test_run_episode_records_trajectory_and_cost(monkeypatch):
 
     runner = GEMEpisodeRunner(
         environment_id="math:Orz57K",
-        model_id="ollama_chat/qwen3:1.7b",
+        model_id="ollama/qwen3-1.7b-base",
         temperature=0.0,
         max_steps=3,
         seed=42,
@@ -86,7 +86,7 @@ def test_run_episode_records_trajectory_and_cost(monkeypatch):
     assert trajectory.initial_observation == "Solve 2 + 2"
     assert trajectory.initial_info["source"] == "unit"
     assert trajectory.initial_info["experiment_name"] == "quick-test"
-    assert trajectory.initial_info["task_model_id"] == "ollama_chat/qwen3:1.7b"
+    assert trajectory.initial_info["task_model_id"] == "ollama/qwen3-1.7b-base"
     assert trajectory.initial_info["episode_index"] == 0
     assert trajectory.total_reward == 1.0
     assert trajectory.total_tokens == 12
@@ -148,7 +148,7 @@ def test_run_episode_executes_tool_call_before_final_action(monkeypatch):
     runtime = FakeToolRuntime()
     runner = GEMEpisodeRunner(
         environment_id="math:Orz57K",
-        model_id="ollama_chat/qwen3:1.7b",
+        model_id="ollama/qwen3-1.7b-base",
         temperature=0.0,
         max_steps=2,
         tools=["python_exec"],

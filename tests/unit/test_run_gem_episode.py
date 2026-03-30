@@ -100,13 +100,14 @@ def test_build_smoke_messages_include_observation():
 
 
 @pytest.mark.parametrize(
-    ("model_id", "expected_api_base"),
+    ("model_id", "expected_api_base", "expect_stop", "expect_aws_region"),
     [
-        ("ollama_chat/qwen3:1.7b", "http://localhost:11434"),
-        ("bedrock/test-qwen-profile", None),
+        ("ollama/qwen3-1.7b-base", "http://localhost:11434", True, False),
+        ("bedrock/test-qwen-profile", None, False, True),
+        ("sagemaker/qwen3-1-7b-base", None, False, True),
     ],
 )
-def test_build_completion_kwargs(model_id, expected_api_base):
+def test_build_completion_kwargs(model_id, expected_api_base, expect_stop, expect_aws_region):
     kwargs = run_gem_episode._build_completion_kwargs(model_id, temperature=0.0)
 
     assert kwargs["model"] == model_id
@@ -116,3 +117,12 @@ def test_build_completion_kwargs(model_id, expected_api_base):
         assert "api_base" not in kwargs
     else:
         assert kwargs["api_base"] == expected_api_base
+    if expect_stop:
+        assert "stop" in kwargs
+        assert len(kwargs["stop"]) > 0
+    else:
+        assert "stop" not in kwargs
+    if expect_aws_region:
+        assert kwargs["aws_region_name"] == "us-east-1"
+    else:
+        assert "aws_region_name" not in kwargs

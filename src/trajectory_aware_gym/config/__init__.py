@@ -9,6 +9,7 @@ from trajectory_aware_gym.config.core import (
     GEPAModel,
     LoggingModel,
     OllamaModel,
+    SageMakerModel,
     Settings,
 )
 from trajectory_aware_gym.config.settings import ProjectPaths
@@ -25,6 +26,7 @@ __all__ = [
     "LoggingModel",
     "OllamaModel",
     "ProjectPaths",
+    "SageMakerModel",
     "Settings",
     "settings",
 ]

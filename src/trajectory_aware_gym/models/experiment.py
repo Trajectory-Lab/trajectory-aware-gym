@@ -161,8 +161,8 @@ class TaskModelConfig(BaseModel):
     model_config = {"frozen": True}
 
     name: str = Field(description="Human-readable name, e.g. 'Qwen3-1.7B'")
-    model_id: str = Field(description="LiteLLM routing ID, e.g. 'ollama_chat/qwen3:1.7b'")
-    provider: Literal["ollama", "bedrock"]
+    model_id: str = Field(description="LiteLLM routing ID, e.g. 'ollama/qwen3-1.7b-base'")
+    provider: Literal["ollama", "bedrock", "sagemaker"]
     parameter_count: str = Field(description="For reporting, e.g. '1.7B'")
 
 

@@ -39,7 +39,7 @@ produces a visible answer. The reasoning text lands in
    thinking chain is still submitted to the environment as the action.
 
 **Affected components:** `scripts/run_gem_episode.py` (`generate_smoke_action`),
-any future code calling Qwen3 via LiteLLM's `ollama_chat/` provider.
+any future code calling Qwen3 via LiteLLM's `ollama/` provider.
 
 ---
 
