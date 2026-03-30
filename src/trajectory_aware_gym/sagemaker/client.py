@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import boto3
 
@@ -93,28 +94,35 @@ class QwenClient:
         prompts: list[str],
         max_tokens: int = 256,
         temperature: float = 0.7,
+        max_workers: int = 4,
     ) -> list[str]:
-        """Generate text for multiple prompts sequentially.
+        """Generate text for multiple prompts in parallel.
 
         Args:
             prompts: List of input prompts.
             max_tokens: Maximum tokens per response.
             temperature: Sampling temperature.
+            max_workers: Maximum concurrent requests to SageMaker.
 
         Returns:
-            List of generated texts.
+            List of generated texts, in the same order as *prompts*.
         """
-        results: list[str] = []
-        for i, prompt in enumerate(prompts):
-            if (i + 1) % 50 == 0:
-                print(f"  [{self.model}] Processing {i + 1}/{len(prompts)}...")
-            result = self.generate(
-                prompt=prompt,
-                max_tokens=max_tokens,
-                temperature=temperature,
-            )
-            results.append(result)
-        return results
+        results: list[str | None] = [None] * len(prompts)
+
+        def _invoke(idx: int, prompt: str) -> tuple[int, str]:
+            return idx, self.generate(prompt=prompt, max_tokens=max_tokens, temperature=temperature)
+
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {pool.submit(_invoke, i, p): i for i, p in enumerate(prompts)}
+            done_count = 0
+            for future in as_completed(futures):
+                idx, text = future.result()
+                results[idx] = text
+                done_count += 1
+                if done_count % 50 == 0:
+                    print(f"  [{self.model}] Completed {done_count}/{len(prompts)}...")
+
+        return [r if r is not None else "" for r in results]
 
     def is_available(self) -> bool:
         """Check if the endpoint is running and responding."""

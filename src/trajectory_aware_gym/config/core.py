@@ -74,6 +74,7 @@ class SageMakerModel(BaseModel):
     endpoint_4b: str
     model_id_1_7b: str
     model_id_4b: str
+    deploy_timeout: int = Field(ge=60)
 
 
 class GEMModel(BaseModel):

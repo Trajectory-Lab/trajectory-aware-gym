@@ -29,30 +29,36 @@ from trajectory_aware_gym.config import settings
 
 _sm_cfg = settings.sagemaker
 
-MODELS = {
-    "1.7b": {
-        "endpoint_name": "qwen3-1-7b-base",
-        "model_id": "Qwen/Qwen3-1.7B-Base",
-        "env": {
-            "HF_MODEL_ID": "Qwen/Qwen3-1.7B-Base",
-            "HF_TASK": "text-generation",
-            "SM_NUM_GPUS": "1",
-            "MAX_INPUT_LENGTH": "2048",
-            "MAX_TOTAL_TOKENS": "4096",
+
+def _build_models() -> dict[str, dict[str, str | dict[str, str]]]:
+    """Build the MODELS registry from centralised YAML/env config."""
+    return {
+        "1.7b": {
+            "endpoint_name": _sm_cfg.endpoint_1_7b,
+            "model_id": _sm_cfg.model_id_1_7b,
+            "env": {
+                "HF_MODEL_ID": _sm_cfg.model_id_1_7b,
+                "HF_TASK": "text-generation",
+                "SM_NUM_GPUS": "1",
+                "MAX_INPUT_LENGTH": "2048",
+                "MAX_TOTAL_TOKENS": "4096",
+            },
         },
-    },
-    "4b": {
-        "endpoint_name": "qwen3-4b-base",
-        "model_id": "Qwen/Qwen3-4B-Base",
-        "env": {
-            "HF_MODEL_ID": "Qwen/Qwen3-4B-Base",
-            "HF_TASK": "text-generation",
-            "SM_NUM_GPUS": "1",
-            "MAX_INPUT_LENGTH": "2048",
-            "MAX_TOTAL_TOKENS": "4096",
+        "4b": {
+            "endpoint_name": _sm_cfg.endpoint_4b,
+            "model_id": _sm_cfg.model_id_4b,
+            "env": {
+                "HF_MODEL_ID": _sm_cfg.model_id_4b,
+                "HF_TASK": "text-generation",
+                "SM_NUM_GPUS": "1",
+                "MAX_INPUT_LENGTH": "2048",
+                "MAX_TOTAL_TOKENS": "4096",
+            },
         },
-    },
-}
+    }
+
+
+MODELS = _build_models()
 
 COST_PER_HOUR = 1.41  # approximate for ml.g5.xlarge
 
@@ -113,7 +119,9 @@ def deploy_model(model_key: str) -> None:
             raise
 
     print("  Waiting for endpoint to be ready...")
-    while True:
+    poll_interval = 30
+    deadline = time.monotonic() + _sm_cfg.deploy_timeout
+    while time.monotonic() < deadline:
         resp = sm.describe_endpoint(EndpointName=name)
         ep_status = resp["EndpointStatus"]
         if ep_status == "InService":
@@ -123,8 +131,14 @@ def deploy_model(model_key: str) -> None:
             reason = resp.get("FailureReason", "Unknown")
             print(f"\n  [FAILED] {reason}")
             return
-        print(f"  Status: {ep_status}... (waiting 30s)")
-        time.sleep(30)
+        remaining = int(deadline - time.monotonic())
+        print(f"  Status: {ep_status}... (waiting {poll_interval}s, {remaining}s left)")
+        time.sleep(poll_interval)
+
+    raise TimeoutError(
+        f"Endpoint '{name}' did not become InService within "
+        f"{_sm_cfg.deploy_timeout}s. Check the SageMaker console."
+    )
 
 
 def delete_model(model_key: str) -> None:

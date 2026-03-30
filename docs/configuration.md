@@ -129,8 +129,9 @@ Type coercion is automatic: `"42"` → `int`, `"3.14"` → `float`, `"true"` →
 | Field | Type | Description |
 |-------|------|-------------|
 | `region` | `str` | AWS region for SageMaker endpoints |
-| `role_arn` | `str` | IAM execution role ARN for SageMaker |
+| `role_arn` | `str` | IAM execution role ARN (set via `SAGEMAKER_ROLE_ARN` in `.env`) |
 | `instance_type` | `str` | EC2 instance type (e.g. `ml.g5.xlarge`) |
+| `deploy_timeout` | `int` | Max seconds to wait for endpoint deployment (default 1200) |
 | `tgi_image_uri` | `str` | HuggingFace TGI container image URI |
 | `endpoint_1_7b` | `str` | SageMaker endpoint name for Qwen3 1.7B Base |
 | `endpoint_4b` | `str` | SageMaker endpoint name for Qwen3 4B Base |
