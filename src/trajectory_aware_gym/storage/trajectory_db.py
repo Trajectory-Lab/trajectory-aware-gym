@@ -4,6 +4,9 @@ Replaces per-episode JSON files and the append-only tool_calls.jsonl with a
 single ``trajectories.db`` database.  WAL mode is enabled for concurrent
 read access during writes.
 
+Threading model: each thread gets its own connection via ``threading.local()``.
+WAL mode handles concurrent file access across threads/processes at the OS level.
+
 Public API
 ----------
 - ``get_connection``           -- open (or reuse) a WAL-mode connection
@@ -103,35 +106,46 @@ CREATE INDEX IF NOT EXISTS idx_llm_calls_step   ON llm_calls(run_id, step_index)
 CREATE INDEX IF NOT EXISTS idx_tool_calls_step  ON tool_calls(run_id, step_index);
 """
 
+_SQLITE_CONNECT_TIMEOUT_SECONDS = 10
+
 # ---------------------------------------------------------------------------
-# Connection management (thread-safe singleton per db path)
+# Connection management (one connection per thread via threading.local)
 # ---------------------------------------------------------------------------
 
-_connections: dict[str, sqlite3.Connection] = {}
-_lock = threading.Lock()
+_local = threading.local()
+
+
+def _thread_connections() -> dict[str, sqlite3.Connection]:
+    """Return the per-thread connection cache, initializing it if needed."""
+    if not hasattr(_local, "connections"):
+        _local.connections = {}
+    return _local.connections
 
 
 def get_connection(db_path: Path) -> sqlite3.Connection:
-    """Return a WAL-mode connection, creating the schema on first access."""
-    key = str(db_path.resolve())
-    with _lock:
-        if key in _connections:
-            return _connections[key]
+    """Return a WAL-mode connection for the current thread.
 
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(db_path), timeout=10, check_same_thread=False)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
-        conn.executescript(_SCHEMA_SQL)
-        _connections[key] = conn
-        return conn
+    Creates the database schema on first access per thread.
+    """
+    key = str(db_path.resolve())
+    connections = _thread_connections()
+    if key in connections:
+        return connections[key]
+
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path), timeout=_SQLITE_CONNECT_TIMEOUT_SECONDS)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.executescript(_SCHEMA_SQL)
+    connections[key] = conn
+    return conn
 
 
 def close_connection(db_path: Path) -> None:
-    """Close and remove a cached connection (useful in tests)."""
+    """Close and remove the current thread's cached connection (useful in tests)."""
     key = str(db_path.resolve())
-    with _lock:
-        conn = _connections.pop(key, None)
+    conn = _thread_connections().pop(key, None)
     if conn is not None:
         conn.close()
 
@@ -158,97 +172,103 @@ def _iso_to_dt(s: str) -> datetime:
 
 
 def save_trajectory(db_path: Path, log: TrajectoryLog) -> None:
-    """Insert one episode atomically (single transaction)."""
-    conn = get_connection(db_path)
-    with conn:
-        conn.execute(
-            """
-            INSERT INTO episodes
-                (run_id, schema_version, environment_id, seed, system_prompt,
-                 started_at, finished_at, initial_observation, initial_info,
-                 total_reward, episode_outcome)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                log.run_id,
-                log.schema_version,
-                log.environment_id,
-                log.seed,
-                log.system_prompt,
-                _dt_to_iso(log.started_at),
-                _dt_to_iso(log.finished_at),
-                log.initial_observation,
-                json.dumps(log.initial_info),
-                log.total_reward,
-                log.episode_outcome,
-            ),
-        )
+    """Insert one episode atomically (single transaction).
 
-        for step in log.steps:
+    Raises ``ValueError`` if a trajectory with the same ``run_id`` already exists.
+    """
+    conn = get_connection(db_path)
+    try:
+        with conn:
             conn.execute(
                 """
-                INSERT INTO steps
-                    (run_id, step_index, action, observation, reward,
-                     terminated, truncated, info, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO episodes
+                    (run_id, schema_version, environment_id, seed, system_prompt,
+                     started_at, finished_at, initial_observation, initial_info,
+                     total_reward, episode_outcome)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     log.run_id,
-                    step.step_index,
-                    step.action,
-                    step.observation,
-                    step.reward,
-                    int(step.terminated),
-                    int(step.truncated),
-                    json.dumps(step.info),
-                    _dt_to_iso(step.timestamp) if step.timestamp else None,
+                    log.schema_version,
+                    log.environment_id,
+                    log.seed,
+                    log.system_prompt,
+                    _dt_to_iso(log.started_at),
+                    _dt_to_iso(log.finished_at),
+                    log.initial_observation,
+                    json.dumps(log.initial_info),
+                    log.total_reward,
+                    log.episode_outcome,
                 ),
             )
 
-            if step.tool_calls:
-                conn.executemany(
+            for step in log.steps:
+                conn.execute(
                     """
-                    INSERT INTO tool_calls
-                        (run_id, step_index, tool_name, tool_input,
-                         tool_output, success, duration_ms)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO steps
+                        (run_id, step_index, action, observation, reward,
+                         terminated, truncated, info, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    [
-                        (
-                            log.run_id,
-                            step.step_index,
-                            tc.tool_name,
-                            tc.tool_input,
-                            tc.tool_output,
-                            int(tc.success),
-                            tc.duration_ms,
-                        )
-                        for tc in step.tool_calls
-                    ],
+                    (
+                        log.run_id,
+                        step.step_index,
+                        step.action,
+                        step.observation,
+                        step.reward,
+                        int(step.terminated),
+                        int(step.truncated),
+                        json.dumps(step.info),
+                        _dt_to_iso(step.timestamp) if step.timestamp else None,
+                    ),
                 )
 
-            if step.llm_calls:
-                conn.executemany(
-                    """
-                    INSERT INTO llm_calls
-                        (run_id, step_index, model_id, prompt_tokens,
-                         completion_tokens, total_tokens, cost_usd, latency_ms)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    [
-                        (
-                            log.run_id,
-                            step.step_index,
-                            lc.model_id,
-                            lc.prompt_tokens,
-                            lc.completion_tokens,
-                            lc.total_tokens,
-                            lc.cost_usd,
-                            lc.latency_ms,
-                        )
-                        for lc in step.llm_calls
-                    ],
-                )
+                if step.tool_calls:
+                    conn.executemany(
+                        """
+                        INSERT INTO tool_calls
+                            (run_id, step_index, tool_name, tool_input,
+                             tool_output, success, duration_ms)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        [
+                            (
+                                log.run_id,
+                                step.step_index,
+                                tc.tool_name,
+                                tc.tool_input,
+                                tc.tool_output,
+                                int(tc.success),
+                                tc.duration_ms,
+                            )
+                            for tc in step.tool_calls
+                        ],
+                    )
+
+                if step.llm_calls:
+                    conn.executemany(
+                        """
+                        INSERT INTO llm_calls
+                            (run_id, step_index, model_id, prompt_tokens,
+                             completion_tokens, total_tokens, cost_usd, latency_ms)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        [
+                            (
+                                log.run_id,
+                                step.step_index,
+                                lc.model_id,
+                                lc.prompt_tokens,
+                                lc.completion_tokens,
+                                lc.total_tokens,
+                                lc.cost_usd,
+                                lc.latency_ms,
+                            )
+                            for lc in step.llm_calls
+                        ],
+                    )
+    except sqlite3.IntegrityError as exc:
+        raise ValueError(f"Episode {log.run_id!r} already exists in {db_path}") from exc
 
 
 def save_tool_call_entry(
@@ -281,97 +301,125 @@ def episode_exists(db_path: Path, run_id: str) -> bool:
 
 
 def _build_trajectory(
-    episode_row: tuple,
-    step_rows: list[tuple],
-    tool_call_rows: list[tuple],
-    llm_call_rows: list[tuple],
+    episode_row: sqlite3.Row,
+    step_rows: list[sqlite3.Row],
+    tool_call_rows: list[sqlite3.Row],
+    llm_call_rows: list[sqlite3.Row],
 ) -> TrajectoryLog:
-    """Reconstruct a TrajectoryLog from raw SQL rows."""
-    (
-        run_id,
-        schema_version,
-        environment_id,
-        seed,
-        system_prompt,
-        started_at,
-        finished_at,
-        initial_observation,
-        initial_info_json,
-        total_reward,
-        episode_outcome,
-    ) = episode_row
-
-    # Index child rows by step_index for efficient lookup.
+    """Reconstruct a TrajectoryLog from sqlite3.Row objects."""
     tc_by_step: dict[int, list[ToolCall]] = {}
     for row in tool_call_rows:
-        # row: (id, run_id, step_index, tool_name, tool_input, tool_output, success, duration_ms)
-        idx = row[2]
+        idx = row["step_index"]
         tc_by_step.setdefault(idx, []).append(
             ToolCall(
-                tool_name=row[3],
-                tool_input=row[4],
-                tool_output=row[5],
-                success=bool(row[6]),
-                duration_ms=row[7],
+                tool_name=row["tool_name"],
+                tool_input=row["tool_input"],
+                tool_output=row["tool_output"],
+                success=bool(row["success"]),
+                duration_ms=row["duration_ms"],
             )
         )
 
     lc_by_step: dict[int, list[LLMCallMetadata]] = {}
     for row in llm_call_rows:
-        # row: (id, run_id, step_index, model_id, prompt, completion, total, cost, latency)
-        idx = row[2]
+        idx = row["step_index"]
         lc_by_step.setdefault(idx, []).append(
             LLMCallMetadata(
-                model_id=row[3],
-                prompt_tokens=row[4],
-                completion_tokens=row[5],
-                total_tokens=row[6],
-                cost_usd=row[7],
-                latency_ms=row[8],
+                model_id=row["model_id"],
+                prompt_tokens=row["prompt_tokens"],
+                completion_tokens=row["completion_tokens"],
+                total_tokens=row["total_tokens"],
+                cost_usd=row["cost_usd"],
+                latency_ms=row["latency_ms"],
             )
         )
 
     steps: list[TrajectoryStep] = []
     for srow in step_rows:
-        # srow: (run_id, step_index, action, observation, reward, terminated, truncated, info, timestamp)
-        si = srow[1]
+        si = srow["step_index"]
         steps.append(
             TrajectoryStep(
                 step_index=si,
-                action=srow[2],
-                observation=srow[3],
-                reward=srow[4],
-                terminated=bool(srow[5]),
-                truncated=bool(srow[6]),
-                info=json.loads(srow[7]),
-                timestamp=_iso_to_dt(srow[8]) if srow[8] else None,
+                action=srow["action"],
+                observation=srow["observation"],
+                reward=srow["reward"],
+                terminated=bool(srow["terminated"]),
+                truncated=bool(srow["truncated"]),
+                info=json.loads(srow["info"]),
+                timestamp=_iso_to_dt(srow["timestamp"]) if srow["timestamp"] else None,
                 tool_calls=tc_by_step.get(si, []),
                 llm_calls=lc_by_step.get(si, []),
             )
         )
 
     return TrajectoryLog(
-        schema_version=schema_version,
-        run_id=run_id,
-        environment_id=environment_id,
-        seed=seed,
-        system_prompt=system_prompt,
-        started_at=_iso_to_dt(started_at),
-        finished_at=_iso_to_dt(finished_at),
-        initial_observation=initial_observation,
-        initial_info=json.loads(initial_info_json),
+        schema_version=episode_row["schema_version"],
+        run_id=episode_row["run_id"],
+        environment_id=episode_row["environment_id"],
+        seed=episode_row["seed"],
+        system_prompt=episode_row["system_prompt"],
+        started_at=_iso_to_dt(episode_row["started_at"]),
+        finished_at=_iso_to_dt(episode_row["finished_at"]),
+        initial_observation=episode_row["initial_observation"],
+        initial_info=json.loads(episode_row["initial_info"]),
         steps=steps,
-        total_reward=total_reward,
-        episode_outcome=episode_outcome,
+        total_reward=episode_row["total_reward"],
+        episode_outcome=episode_row["episode_outcome"],
     )
 
 
+def _load_trajectories_for_episodes(
+    conn: sqlite3.Connection,
+    episode_rows: list[sqlite3.Row],
+) -> list[TrajectoryLog]:
+    """Fetch all child rows for the given episode rows and reconstruct TrajectoryLogs."""
+    if not episode_rows:
+        return []
+
+    run_ids = [r["run_id"] for r in episode_rows]
+    # placeholders are "?,?,?..." computed from len(run_ids) — no user input interpolated
+    placeholders = ",".join("?" for _ in run_ids)
+
+    step_rows = conn.execute(
+        f"SELECT * FROM steps WHERE run_id IN ({placeholders}) ORDER BY run_id, step_index",  # noqa: S608  # nosec B608
+        run_ids,
+    ).fetchall()
+    tc_rows = conn.execute(
+        f"SELECT * FROM tool_calls WHERE run_id IN ({placeholders}) ORDER BY run_id, step_index",  # noqa: S608  # nosec B608
+        run_ids,
+    ).fetchall()
+    lc_rows = conn.execute(
+        f"SELECT * FROM llm_calls WHERE run_id IN ({placeholders}) ORDER BY run_id, step_index",  # noqa: S608  # nosec B608
+        run_ids,
+    ).fetchall()
+
+    steps_by_run: dict[str, list[sqlite3.Row]] = {rid: [] for rid in run_ids}
+    for row in step_rows:
+        steps_by_run[row["run_id"]].append(row)
+    tc_by_run: dict[str, list[sqlite3.Row]] = {rid: [] for rid in run_ids}
+    for row in tc_rows:
+        tc_by_run[row["run_id"]].append(row)
+    lc_by_run: dict[str, list[sqlite3.Row]] = {rid: [] for rid in run_ids}
+    for row in lc_rows:
+        lc_by_run[row["run_id"]].append(row)
+
+    return [
+        _build_trajectory(
+            ep, steps_by_run[ep["run_id"]], tc_by_run[ep["run_id"]], lc_by_run[ep["run_id"]]
+        )
+        for ep in episode_rows
+    ]
+
+
 def load_trajectory_by_id(db_path: Path, run_id: str) -> TrajectoryLog:
-    """Load a single trajectory by its ``run_id``."""
+    """Load a single trajectory by its ``run_id``.
+
+    Raises ``KeyError`` if no episode with that ``run_id`` exists.
+    """
     conn = get_connection(db_path)
     episode_row = conn.execute("SELECT * FROM episodes WHERE run_id = ?", (run_id,)).fetchone()
     if episode_row is None:
-        raise FileNotFoundError(f"No episode with run_id={run_id!r} in {db_path}")
+        raise KeyError(f"No episode with run_id={run_id!r} in {db_path}")
 
     step_rows = conn.execute(
         "SELECT * FROM steps WHERE run_id = ? ORDER BY step_index", (run_id,)
@@ -390,40 +438,7 @@ def load_all_trajectories(db_path: Path) -> list[TrajectoryLog]:
     """Load every stored trajectory, ordered by ``started_at``."""
     conn = get_connection(db_path)
     episode_rows = conn.execute("SELECT * FROM episodes ORDER BY started_at").fetchall()
-    if not episode_rows:
-        return []
-
-    run_ids = [r[0] for r in episode_rows]
-    placeholders = ",".join("?" for _ in run_ids)
-
-    step_rows = conn.execute(
-        f"SELECT * FROM steps WHERE run_id IN ({placeholders}) ORDER BY run_id, step_index",  # noqa: S608  # nosec B608 — placeholders are ? params, not user input
-        run_ids,
-    ).fetchall()
-    tc_rows = conn.execute(
-        f"SELECT * FROM tool_calls WHERE run_id IN ({placeholders}) ORDER BY run_id, step_index",  # noqa: S608  # nosec B608
-        run_ids,
-    ).fetchall()
-    lc_rows = conn.execute(
-        f"SELECT * FROM llm_calls WHERE run_id IN ({placeholders}) ORDER BY run_id, step_index",  # noqa: S608  # nosec B608
-        run_ids,
-    ).fetchall()
-
-    # Partition child rows by run_id.
-    steps_by_run: dict[str, list[tuple]] = {rid: [] for rid in run_ids}
-    for row in step_rows:
-        steps_by_run[row[0]].append(row)
-    tc_by_run: dict[str, list[tuple]] = {rid: [] for rid in run_ids}
-    for row in tc_rows:
-        tc_by_run[row[1]].append(row)
-    lc_by_run: dict[str, list[tuple]] = {rid: [] for rid in run_ids}
-    for row in lc_rows:
-        lc_by_run[row[1]].append(row)
-
-    return [
-        _build_trajectory(ep, steps_by_run[ep[0]], tc_by_run[ep[0]], lc_by_run[ep[0]])
-        for ep in episode_rows
-    ]
+    return _load_trajectories_for_episodes(conn, episode_rows)
 
 
 def query_trajectories(
@@ -432,7 +447,11 @@ def query_trajectories(
     outcome: str | None = None,
     environment_id: str | None = None,
 ) -> list[TrajectoryLog]:
-    """Load trajectories with optional SQL-level filtering."""
+    """Load trajectories with optional SQL-level filtering.
+
+    Both ``outcome`` and ``environment_id`` are exact-match filters combined with AND.
+    Pass neither to return all trajectories (equivalent to ``load_all_trajectories``).
+    """
     conn = get_connection(db_path)
 
     clauses: list[str] = []
@@ -446,39 +465,7 @@ def query_trajectories(
 
     where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
     episode_rows = conn.execute(
-        f"SELECT * FROM episodes{where} ORDER BY started_at",  # nosec B608
+        f"SELECT * FROM episodes{where} ORDER BY started_at",  # noqa: S608  # nosec B608 — clauses contain only hardcoded literals; values are ? params
         params,
     ).fetchall()
-    if not episode_rows:
-        return []
-
-    run_ids = [r[0] for r in episode_rows]
-    placeholders = ",".join("?" for _ in run_ids)
-
-    step_rows = conn.execute(
-        f"SELECT * FROM steps WHERE run_id IN ({placeholders}) ORDER BY run_id, step_index",  # noqa: S608  # nosec B608
-        run_ids,
-    ).fetchall()
-    tc_rows = conn.execute(
-        f"SELECT * FROM tool_calls WHERE run_id IN ({placeholders}) ORDER BY run_id, step_index",  # noqa: S608  # nosec B608
-        run_ids,
-    ).fetchall()
-    lc_rows = conn.execute(
-        f"SELECT * FROM llm_calls WHERE run_id IN ({placeholders}) ORDER BY run_id, step_index",  # noqa: S608  # nosec B608
-        run_ids,
-    ).fetchall()
-
-    steps_by_run: dict[str, list[tuple]] = {rid: [] for rid in run_ids}
-    for row in step_rows:
-        steps_by_run[row[0]].append(row)
-    tc_by_run: dict[str, list[tuple]] = {rid: [] for rid in run_ids}
-    for row in tc_rows:
-        tc_by_run[row[1]].append(row)
-    lc_by_run: dict[str, list[tuple]] = {rid: [] for rid in run_ids}
-    for row in lc_rows:
-        lc_by_run[row[1]].append(row)
-
-    return [
-        _build_trajectory(ep, steps_by_run[ep[0]], tc_by_run[ep[0]], lc_by_run[ep[0]])
-        for ep in episode_rows
-    ]
+    return _load_trajectories_for_episodes(conn, episode_rows)

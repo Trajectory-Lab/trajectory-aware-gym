@@ -237,6 +237,7 @@ class TrajectoryLogger:
         self.initial_observation: str | None = None
         self.initial_info: dict[str, Any] = {}
         self.steps: list[TrajectoryStep] = []
+        self._last_run_id: str | None = None
 
     def set_initial_state(self, observation: str, info: dict[str, Any] | None = None) -> None:
         if self.initial_observation is not None:
@@ -301,6 +302,7 @@ class TrajectoryLogger:
         Returns the path to the database file.  The ``run_id`` of the saved
         episode is available via :attr:`last_run_id` after this call.
         """
+        # Deferred to avoid circular import: storage.trajectory_db imports from this module.
         from trajectory_aware_gym.storage import save_trajectory
 
         trajectory_log = self.build_log()
@@ -314,7 +316,7 @@ class TrajectoryLogger:
     @property
     def last_run_id(self) -> str | None:
         """The ``run_id`` of the most recently saved trajectory, or None."""
-        return getattr(self, "_last_run_id", None)
+        return self._last_run_id
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +334,7 @@ def load_trajectory(path: Path | str, *, run_id: str | None = None) -> Trajector
     if p.suffix == ".db":
         if run_id is None:
             raise ValueError("run_id is required when loading from a .db file")
+        # Deferred to avoid circular import: storage.trajectory_db imports from this module.
         from trajectory_aware_gym.storage import load_trajectory_by_id
 
         return load_trajectory_by_id(p, run_id)
@@ -347,6 +350,7 @@ def load_all_trajectories(directory: Path | str) -> list[TrajectoryLog]:
     d = Path(directory)
     db_path = d / "trajectories.db"
     if db_path.exists():
+        # Deferred to avoid circular import: storage.trajectory_db imports from this module.
         from trajectory_aware_gym.storage import (
             load_all_trajectories as load_all_from_db,
         )

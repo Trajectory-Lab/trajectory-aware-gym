@@ -270,7 +270,7 @@ class TestToolCallLog:
         conn = get_connection(db_path)
         rows = conn.execute("SELECT * FROM tool_call_log").fetchall()
         assert len(rows) == 1
-        assert rows[0][2] == "python_exec"
+        assert rows[0]["tool"] == "python_exec"
 
 
 # ===========================================================================
@@ -299,7 +299,7 @@ class TestLoadTrajectoryDispatch:
     def test_missing_run_id_raises(self, db_path):
         # Ensure the DB exists so it doesn't fail on connection
         save_trajectory(db_path, _make_log())
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(KeyError):
             load_trajectory(db_path, run_id="nonexistent")
 
 
@@ -384,3 +384,272 @@ class TestTrajectoryLoggerSave:
         all_logs = db_load_all(db)
         assert len(all_logs) == 3
         close_connection(db)
+
+
+# ===========================================================================
+# Duplicate run_id
+# ===========================================================================
+
+
+class TestDuplicateRunId:
+    def test_save_duplicate_raises_value_error(self, db_path):
+        log = _make_log()
+        save_trajectory(db_path, log)
+        with pytest.raises(ValueError, match=log.run_id):
+            save_trajectory(db_path, log)
+
+    def test_duplicate_does_not_corrupt_existing(self, db_path):
+        log = _make_log(steps=[_make_step(reward=1.0, terminated=True)])
+        save_trajectory(db_path, log)
+        try:
+            save_trajectory(db_path, log)
+        except ValueError:
+            pass
+        loaded = load_trajectory_by_id(db_path, log.run_id)
+        assert loaded.run_id == log.run_id
+        assert loaded.total_reward == 1.0
+
+
+# ===========================================================================
+# None timestamp on step
+# ===========================================================================
+
+
+class TestNoneTimestamp:
+    def test_step_with_none_timestamp_round_trips(self, db_path):
+        step = TrajectoryStep(
+            step_index=1,
+            action="act",
+            observation="obs",
+            reward=0.0,
+            terminated=False,
+            truncated=False,
+            info={},
+            timestamp=None,
+            tool_calls=[],
+            llm_calls=[],
+        )
+        log = _make_log(steps=[step])
+        save_trajectory(db_path, log)
+        loaded = load_trajectory_by_id(db_path, log.run_id)
+        assert loaded.steps[0].timestamp is None
+
+
+# ===========================================================================
+# query_trajectories edge cases
+# ===========================================================================
+
+
+class TestQueryEdgeCases:
+    def test_query_no_filters_returns_all(self, db_path):
+        """query_trajectories with no filters behaves like load_all_trajectories."""
+        save_trajectory(db_path, _make_log(episode_outcome="success"))
+        save_trajectory(db_path, _make_log(episode_outcome="failure"))
+        results = query_trajectories(db_path)
+        assert len(results) == 2
+
+    def test_query_filter_no_matches_returns_empty(self, db_path):
+        save_trajectory(db_path, _make_log(episode_outcome="success"))
+        results = query_trajectories(db_path, outcome="failure")
+        assert results == []
+
+
+# ===========================================================================
+# Concurrent WAL access
+# ===========================================================================
+
+
+class TestConcurrentAccess:
+    def test_concurrent_write_and_read(self, db_path):
+        """Two threads can write and read simultaneously under WAL mode."""
+        import threading
+
+        errors: list[Exception] = []
+        written_ids: list[str] = []
+
+        def writer() -> None:
+            try:
+                for _ in range(5):
+                    log = _make_log()
+                    save_trajectory(db_path, log)
+                    written_ids.append(log.run_id)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+            finally:
+                close_connection(db_path)
+
+        def reader() -> None:
+            try:
+                for _ in range(5):
+                    db_load_all(db_path)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+            finally:
+                close_connection(db_path)
+
+        writer_thread = threading.Thread(target=writer)
+        reader_thread = threading.Thread(target=reader)
+        writer_thread.start()
+        reader_thread.start()
+        writer_thread.join()
+        reader_thread.join()
+
+        assert errors == [], f"Concurrent access errors: {errors}"
+        assert len(written_ids) == 5
+
+
+# ===========================================================================
+# Migration script
+# ===========================================================================
+
+
+class TestMigrateTrajectories:
+    def test_migrates_json_files(self, tmp_path):
+        from scripts.migrate_json_to_sqlite import migrate_trajectories
+
+        log = _make_log()
+        json_path = tmp_path / f"trajectory_{log.run_id}.json"
+        json_path.write_text(log.model_dump_json(), encoding="utf-8")
+
+        db = tmp_path / "trajectories.db"
+        migrated, skipped, migrated_files = migrate_trajectories(tmp_path, db)
+
+        assert migrated == 1
+        assert skipped == 0
+        assert len(migrated_files) == 1
+        assert episode_exists(db, log.run_id)
+        close_connection(db)
+
+    def test_skips_already_in_db(self, tmp_path):
+        from scripts.migrate_json_to_sqlite import migrate_trajectories
+
+        log = _make_log()
+        json_path = tmp_path / f"trajectory_{log.run_id}.json"
+        json_path.write_text(log.model_dump_json(), encoding="utf-8")
+        db = tmp_path / "trajectories.db"
+        save_trajectory(db, log)  # pre-populate
+
+        migrated, skipped, migrated_files = migrate_trajectories(tmp_path, db)
+
+        assert migrated == 0
+        assert skipped == 1
+        assert len(migrated_files) == 1  # still included for potential cleanup
+        close_connection(db)
+
+    def test_skips_corrupt_json(self, tmp_path):
+        from scripts.migrate_json_to_sqlite import migrate_trajectories
+
+        corrupt = tmp_path / "trajectory_bad.json"
+        corrupt.write_text("{not valid json", encoding="utf-8")
+        db = tmp_path / "trajectories.db"
+
+        migrated, skipped, migrated_files = migrate_trajectories(tmp_path, db)
+
+        assert migrated == 0
+        assert skipped == 1
+        assert migrated_files == []
+        close_connection(db)
+
+
+class TestMigrateToolCalls:
+    def test_migrates_valid_lines(self, tmp_path):
+        import json as _json
+
+        from scripts.migrate_json_to_sqlite import migrate_tool_calls
+
+        jsonl = tmp_path / "tool_calls.jsonl"
+        entry = {
+            "timestamp": "2026-01-01T00:00:00Z",
+            "tool": "python_exec",
+            "args": {},
+            "result": {},
+        }
+        jsonl.write_text(_json.dumps(entry) + "\n", encoding="utf-8")
+        db = tmp_path / "trajectories.db"
+
+        migrated, skipped = migrate_tool_calls(jsonl, db)
+        assert migrated == 1
+        assert skipped == 0
+        close_connection(db)
+
+    def test_skips_corrupt_lines(self, tmp_path):
+        from scripts.migrate_json_to_sqlite import migrate_tool_calls
+
+        jsonl = tmp_path / "tool_calls.jsonl"
+        jsonl.write_text("{corrupt\n", encoding="utf-8")
+        db = tmp_path / "trajectories.db"
+
+        migrated, skipped = migrate_tool_calls(jsonl, db)
+        assert migrated == 0
+        assert skipped == 1
+        close_connection(db)
+
+    def test_returns_zero_when_file_absent(self, tmp_path):
+        from scripts.migrate_json_to_sqlite import migrate_tool_calls
+
+        db = tmp_path / "trajectories.db"
+        migrated, skipped = migrate_tool_calls(tmp_path / "tool_calls.jsonl", db)
+        assert migrated == 0
+        assert skipped == 0
+
+
+class TestVerifyAndClean:
+    def test_deletes_verified_files(self, tmp_path):
+        from scripts.migrate_json_to_sqlite import verify_and_clean
+
+        log = _make_log()
+        db = tmp_path / "trajectories.db"
+        save_trajectory(db, log)
+
+        json_path = tmp_path / f"trajectory_{log.run_id}.json"
+        json_path.write_text(log.model_dump_json(), encoding="utf-8")
+
+        deleted, failed = verify_and_clean(
+            db, [(json_path, log.run_id)], tmp_path / "tool_calls.jsonl", tmp_path
+        )
+
+        assert deleted == 1
+        assert failed == 0
+        assert not json_path.exists()
+        close_connection(db)
+
+    def test_keeps_file_not_in_db(self, tmp_path):
+        from scripts.migrate_json_to_sqlite import verify_and_clean
+
+        db = tmp_path / "trajectories.db"
+        # Create the DB (empty)
+        save_trajectory(db, _make_log())  # need at least one row so DB is initialized
+        close_connection(db)
+
+        json_path = tmp_path / "trajectory_missing.json"
+        json_path.write_text("{}", encoding="utf-8")
+        db2 = tmp_path / "trajectories.db"
+
+        deleted, failed = verify_and_clean(
+            db2, [(json_path, "nonexistent-id")], tmp_path / "tool_calls.jsonl", tmp_path
+        )
+
+        assert deleted == 0
+        assert failed == 1
+        assert json_path.exists()
+        close_connection(db2)
+
+    def test_rejects_path_outside_input_dir(self, tmp_path):
+        from scripts.migrate_json_to_sqlite import verify_and_clean
+
+        other_dir = tmp_path / "other"
+        other_dir.mkdir()
+        outside_file = other_dir / "trajectory_x.json"
+        outside_file.write_text("{}", encoding="utf-8")
+
+        input_dir = tmp_path / "input"
+        input_dir.mkdir()
+        db = input_dir / "trajectories.db"
+
+        deleted, failed = verify_and_clean(
+            db, [(outside_file, "some-id")], input_dir / "tool_calls.jsonl", input_dir
+        )
+
+        assert deleted == 0
+        assert failed == 1
+        assert outside_file.exists()  # was not deleted

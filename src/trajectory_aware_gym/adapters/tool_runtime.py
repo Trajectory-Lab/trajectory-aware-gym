@@ -1,10 +1,11 @@
 import asyncio
 from collections.abc import Coroutine
+from pathlib import Path
 from threading import Thread
 from typing import Any
 
 import trajectory_aware_gym.mcp.tools  # noqa: F401
-from trajectory_aware_gym.config import settings
+from trajectory_aware_gym.config import ProjectPaths, settings
 from trajectory_aware_gym.mcp.server import mcp
 from trajectory_aware_gym.utils.tool_logging import log_tool_call
 
@@ -14,8 +15,10 @@ class ToolRuntime:
     Executes tool calls emitted by the agent via FastMCP.
     """
 
-    def __init__(self, log_path: str = "logs/trajectories.db"):
-        self.log_path = log_path
+    def __init__(self, log_path: Path | str | None = None):
+        self.log_path = str(
+            Path(log_path) if log_path is not None else ProjectPaths().logs / "trajectories.db"
+        )
         self._server = mcp
 
     def _run_sync(self, coroutine: Coroutine[Any, Any, Any]) -> Any:

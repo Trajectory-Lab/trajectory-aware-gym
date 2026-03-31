@@ -56,22 +56,27 @@ def migrate_trajectories(input_dir: Path, db_path: Path) -> tuple[int, int, list
     return migrated, skipped, migrated_files
 
 
-def migrate_tool_calls(jsonl_path: Path, db_path: Path) -> int:
+def migrate_tool_calls(jsonl_path: Path, db_path: Path) -> tuple[int, int]:
     """Ingest tool_calls.jsonl entries into SQLite.
 
-    Returns the number of entries migrated.
+    Returns (migrated_count, skipped_count).
     """
     if not jsonl_path.exists():
-        return 0
+        return 0, 0
 
-    count = 0
-    for line in jsonl_path.read_text(encoding="utf-8").splitlines():
+    migrated = 0
+    skipped = 0
+    for line_number, line in enumerate(
+        jsonl_path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
         line = line.strip()
         if not line:
             continue
         try:
             entry = json.loads(line)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
+            print(f"  SKIP (corrupt line {line_number}): {exc}")
+            skipped += 1
             continue
         save_tool_call_entry(
             db_path,
@@ -80,34 +85,41 @@ def migrate_tool_calls(jsonl_path: Path, db_path: Path) -> int:
             args=entry.get("args", {}),
             result=entry.get("result", {}),
         )
-        count += 1
+        migrated += 1
 
-    return count
+    return migrated, skipped
 
 
 def verify_and_clean(
     db_path: Path,
     migrated_files: list[tuple[Path, str]],
     jsonl_path: Path,
+    input_dir: Path,
 ) -> tuple[int, int]:
     """Verify each migrated file exists in the DB, then delete the source.
 
     Returns (deleted_count, failed_count).
+    Only deletes files that are confirmed children of *input_dir*.
     """
+    resolved_input_dir = input_dir.resolve()
     deleted = 0
     failed = 0
 
     for path, run_id in migrated_files:
+        if not path.resolve().is_relative_to(resolved_input_dir):
+            print(f"  SKIP (outside input dir): {path}")
+            failed += 1
+            continue
         try:
             load_trajectory_by_id(db_path, run_id)
-        except FileNotFoundError:
+        except KeyError:
             print(f"  KEEP (not in DB): {path.name}")
             failed += 1
             continue
         path.unlink()
         deleted += 1
 
-    if jsonl_path.exists():
+    if jsonl_path.exists() and jsonl_path.resolve().is_relative_to(resolved_input_dir):
         jsonl_path.unlink()
         print(f"  Deleted: {jsonl_path.name}")
 
@@ -144,12 +156,12 @@ def main() -> None:
     print(f"\nTrajectories: {migrated} migrated, {skipped} skipped")
 
     jsonl_path = args.input_dir / "tool_calls.jsonl"
-    tool_count = migrate_tool_calls(jsonl_path, db_path)
-    print(f"Tool calls:   {tool_count} migrated")
+    tool_migrated, tool_skipped = migrate_tool_calls(jsonl_path, db_path)
+    print(f"Tool calls:   {tool_migrated} migrated, {tool_skipped} skipped")
 
     if args.clean and migrated_files:
         print(f"\nVerifying and cleaning {len(migrated_files)} source files...")
-        deleted, failed = verify_and_clean(db_path, migrated_files, jsonl_path)
+        deleted, failed = verify_and_clean(db_path, migrated_files, jsonl_path, args.input_dir)
         print(f"Cleaned: {deleted} deleted, {failed} kept (verification failed)")
 
     print(f"\nDone. Database at: {db_path}")

@@ -12,6 +12,7 @@ from trajectory_aware_gym.metrics import (
     collect_raw_metrics,
     extract_episode_raw_metrics,
 )
+from trajectory_aware_gym.storage import load_all_trajectories
 
 
 def parse_args() -> argparse.Namespace:
@@ -102,8 +103,6 @@ def _load_rows(args: argparse.Namespace) -> tuple[list[EpisodeRawMetrics], int]:
     """
     db_path = args.input_dir / "trajectories.db"
     if db_path.exists():
-        from trajectory_aware_gym.storage import load_all_trajectories
-
         trajectories = load_all_trajectories(db_path)
         return [extract_episode_raw_metrics(t) for t in trajectories], len(trajectories)
 
