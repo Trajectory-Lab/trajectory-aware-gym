@@ -96,8 +96,8 @@ def mock_settings(monkeypatch):
     class MockOllama:
         def __init__(self):
             self.api_base = "http://fake-ollama"
-            self.task_model_1_7b = "ollama_chat/qwen3:1.7b"
-            self.task_model_4b = "ollama_chat/qwen3:4b"
+            self.task_model_1_7b = "ollama/qwen3-1.7b-base"
+            self.task_model_4b = "ollama/qwen3-4b-base"
 
     class MockAWS:
         def __init__(self):
@@ -105,6 +105,12 @@ def mock_settings(monkeypatch):
             self.bedrock_llama_1b = "us.meta.llama3-2-1b-instruct-v1:0"
             self.bedrock_llama_3b = "us.meta.llama3-2-3b-instruct-v1:0"
             self.bedrock_llama_8b = "us.meta.llama3-1-8b-instruct-v1:0"
+
+    class MockSageMaker:
+        def __init__(self):
+            self.region = "us-east-1"
+            self.endpoint_1_7b = "qwen3-1-7b-base"
+            self.endpoint_4b = "qwen3-4b-base"
 
     class MockGEPA:
         def __init__(self):
@@ -114,6 +120,7 @@ def mock_settings(monkeypatch):
     mock_settings_module = types.ModuleType("mock_settings")
     mock_settings_module.gem = MockGem()
     mock_settings_module.ollama = MockOllama()
+    mock_settings_module.sagemaker = MockSageMaker()
     mock_settings_module.aws = MockAWS()
     mock_settings_module.gepa = MockGEPA()
 
@@ -129,7 +136,7 @@ def mock_settings(monkeypatch):
         pytest.param(
             "qwen3:1.7b",
             "train",
-            "ollama_chat/qwen3:1.7b",
+            "ollama/qwen3-1.7b-base",
             0.9,
             "http://fake-ollama",
             id="ollama-1.7b-train",
@@ -137,7 +144,7 @@ def mock_settings(monkeypatch):
         pytest.param(
             "qwen3:4b",
             "eval",
-            "ollama_chat/qwen3:4b",
+            "ollama/qwen3-4b-base",
             0.1,
             "http://fake-ollama",
             id="ollama-4b-eval",
@@ -165,6 +172,22 @@ def mock_settings(monkeypatch):
             0.9,
             None,
             id="bedrock-llama-8b-train",
+        ),
+        pytest.param(
+            "qwen3-sagemaker:1.7b",
+            "train",
+            "sagemaker/qwen3-1-7b-base",
+            0.9,
+            None,
+            id="sagemaker-qwen3-1.7b-train",
+        ),
+        pytest.param(
+            "qwen3-sagemaker:4b",
+            "eval",
+            "sagemaker/qwen3-4b-base",
+            0.1,
+            None,
+            id="sagemaker-qwen3-4b-eval",
         ),
     ],
 )
@@ -246,7 +269,7 @@ def test_episode_trajectory_produces_valid_raw_metrics(tmp_path):
         info={"correct": True},
         llm_calls=[
             LLMCallMetadata(
-                model_id="ollama_chat/qwen3:1.7b",
+                model_id="ollama/qwen3-1.7b-base",
                 prompt_tokens=50,
                 completion_tokens=10,
                 total_tokens=60,

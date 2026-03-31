@@ -46,7 +46,7 @@ def _minimal_experiment(**overrides) -> dict:
         "task_models": [
             {
                 "name": "Qwen3-1.7B",
-                "model_id": "ollama_chat/qwen3:1.7b",
+                "model_id": "ollama/qwen3-1.7b-base",
                 "provider": "ollama",
                 "parameter_count": "1.7B",
             },

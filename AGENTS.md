@@ -114,7 +114,7 @@ The project evaluates two optimization paradigms:
 
 **AWS/LLM Infrastructure** (`src/trajectory_aware_gym/config/`):
 - All LLM calls route through **LiteLLM** for unified provider interface
-- Task models: Qwen3 (1.7B, 4B) via Ollama and Llama 1B/3B/8B via AWS Bedrock
+- Task models: Qwen3 Base (1.7B, 4B) via Ollama (local) or SageMaker (AWS), and Llama 1B/3B/8B via AWS Bedrock
 - Reflection model: configurable Bedrock model, with GPT OSS 120B currently used in the dry-run path
 - Configuration via YAML (`src/trajectory_aware_gym/config/trajectory-aware-gym.yaml`) with `.env` overrides (see Configuration Management)
 
@@ -236,7 +236,7 @@ Env vars use `PREFIX_FIELD` naming (e.g., `AWS_REGION`, `GEM_MAX_STEPS`):
 - **GEM_TEMPERATURE_TRAIN**: 1.0 for exploration, **GEM_TEMPERATURE_EVAL**: 0.0 for determinism
 
 Any YAML value can be overridden via env var using its section prefix:
-`{SECTION_PREFIX}_{FIELD_NAME}` (e.g., `OLLAMA_API_BASE`, `LOG_LEVEL`)
+`{SECTION_PREFIX}_{FIELD_NAME}` (e.g., `OLLAMA_API_BASE`, `SAGEMAKER_REGION`, `LOG_LEVEL`)
 
 ### Programmatic Access
 
@@ -248,6 +248,7 @@ settings.aws.region
 settings.gem.max_steps
 settings.gepa.budget
 settings.ollama.api_base
+settings.sagemaker.endpoint_1_7b
 ```
 
 ## Cost and Token Tracking
@@ -412,7 +413,7 @@ if is_admin(user):
 When adding new features or deprecating existing ones, update the relevant documentation:
 
 - **[README.md](README.md)**: Project overview, setup instructions, project structure
-- **[docs/configuration.md](docs/configuration.md)**: Configuration schema, env var conventions, adding models/sections
+- **[docs/02-architecture/configuration.md](docs/02-architecture/configuration.md)**: Configuration schema, env var conventions, adding models/sections
 - **[AGENTS.md](AGENTS.md)**: This file — agent guidelines, architecture, development commands
 - **[.env.example](.env.example)**: Keep in sync with any new secret/override env vars
 
