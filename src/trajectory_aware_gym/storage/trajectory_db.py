@@ -113,7 +113,8 @@ _SQLITE_CONNECT_TIMEOUT_SECONDS = 10
 # ---------------------------------------------------------------------------
 
 _local = threading.local()
-_schema_init_lock = threading.Lock()
+_initialized_dbs: set[str] = set()
+_initialized_dbs_lock = threading.Lock()
 
 
 def _thread_connections() -> dict[str, sqlite3.Connection]:
@@ -126,7 +127,11 @@ def _thread_connections() -> dict[str, sqlite3.Connection]:
 def get_connection(db_path: Path) -> sqlite3.Connection:
     """Return a WAL-mode connection for the current thread.
 
-    Creates the database schema on first access per thread.
+    Creates the database schema on first access per db_path (not per thread).
+    executescript() uses sqlite3_exec() internally and does not honour the
+    connection busy-timeout, so running it from multiple threads against the
+    same file causes spurious "database is locked" errors even under WAL mode.
+    Tracking initialised paths ensures DDL runs exactly once.
     """
     key = str(db_path.resolve())
     connections = _thread_connections()
@@ -138,8 +143,10 @@ def get_connection(db_path: Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
-    with _schema_init_lock:
-        conn.executescript(_SCHEMA_SQL)
+    with _initialized_dbs_lock:
+        if key not in _initialized_dbs:
+            conn.executescript(_SCHEMA_SQL)
+            _initialized_dbs.add(key)
     connections[key] = conn
     return conn
 
