@@ -113,6 +113,7 @@ _SQLITE_CONNECT_TIMEOUT_SECONDS = 10
 # ---------------------------------------------------------------------------
 
 _local = threading.local()
+_schema_init_lock = threading.Lock()
 
 
 def _thread_connections() -> dict[str, sqlite3.Connection]:
@@ -137,7 +138,8 @@ def get_connection(db_path: Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
-    conn.executescript(_SCHEMA_SQL)
+    with _schema_init_lock:
+        conn.executescript(_SCHEMA_SQL)
     connections[key] = conn
     return conn
 
