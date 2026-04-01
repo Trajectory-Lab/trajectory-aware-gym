@@ -239,6 +239,16 @@ class GEMEpisodeRunner:
         self._tools = [_normalize_tool_name(tool_name) for tool_name in (tools or [])]
         self._tool_runtime = tool_runtime or ToolRuntime()
         self._max_tool_rounds = max_tool_rounds
+        self._episode_history: list[GEMEpisodeResult] = []
+
+    @property
+    def episode_history(self) -> tuple[GEMEpisodeResult, ...]:
+        """Immutable view of all episodes executed by this runner instance."""
+        return tuple(self._episode_history)
+
+    def clear_episode_history(self) -> None:
+        """Reset in-memory episode history."""
+        self._episode_history.clear()
 
     def run(
         self,
@@ -254,6 +264,7 @@ class GEMEpisodeRunner:
             episode_index=episode_index,
             seed_override=seed_override,
             expected_observation=expected_observation,
+            persist=False,
         ).trajectory
 
     def run_episode(
@@ -332,9 +343,11 @@ class GEMEpisodeRunner:
             log_path = logger.save() if persist else None
             trajectory = load_trajectory(log_path) if log_path is not None else logger.build_log()
             raw_metrics = extract_episode_raw_metrics(trajectory)
-            return GEMEpisodeResult(
+            result = GEMEpisodeResult(
                 trajectory=trajectory, log_path=log_path, raw_metrics=raw_metrics
             )
+            self._episode_history.append(result)
+            return result
         finally:
             if hasattr(env, "close"):
                 env.close()

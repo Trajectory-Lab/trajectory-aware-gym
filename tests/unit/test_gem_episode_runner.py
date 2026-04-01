@@ -170,3 +170,41 @@ def test_run_episode_executes_tool_call_before_final_action(monkeypatch):
     assert trajectory.total_tokens == 24
     assert metrics.total_tokens == 24
     assert metrics.step_count == 1
+
+
+def test_runner_tracks_episode_history(monkeypatch):
+    class FakeEnv:
+        def reset(self, **kwargs):
+            return "Solve 2 + 2", {}
+
+        def step(self, action: str):
+            return "Correct", 1.0, True, False, {"correct": True}
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(
+        "trajectory_aware_gym.adapters.gem_episode_runner.importlib.import_module",
+        _fake_import_module_factory(FakeEnv()),
+    )
+    monkeypatch.setattr(
+        "trajectory_aware_gym.adapters.gem_episode_runner.completion",
+        lambda **kwargs: _make_response("\\boxed{4}"),
+    )
+    monkeypatch.setattr(
+        "trajectory_aware_gym.adapters.gem_episode_runner.completion_cost",
+        lambda *, completion_response: 0.01,
+    )
+
+    runner = GEMEpisodeRunner(
+        environment_id="math:Orz57K",
+        model_id="ollama/qwen3-1.7b-base",
+        temperature=0.0,
+        max_steps=1,
+    )
+
+    _ = runner.run("Solve carefully.")
+    assert len(runner.episode_history) == 1
+
+    runner.clear_episode_history()
+    assert runner.episode_history == ()
