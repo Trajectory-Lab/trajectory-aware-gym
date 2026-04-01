@@ -7,7 +7,6 @@ import hashlib
 import json
 import logging
 import shutil
-import subprocess
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -74,7 +73,9 @@ def derive_max_metric_calls(config: ExperimentConfig, override: int | None = Non
     return max(1, upper_bound)
 
 
-def select_task_models(config: ExperimentConfig, selected_names: tuple[str, ...] | None) -> list[TaskModelConfig]:
+def select_task_models(
+    config: ExperimentConfig, selected_names: tuple[str, ...] | None
+) -> list[TaskModelConfig]:
     """Filter configured task models by optional name allow-list."""
     if not selected_names:
         return list(config.task_models)
@@ -86,7 +87,9 @@ def select_task_models(config: ExperimentConfig, selected_names: tuple[str, ...]
     return models
 
 
-def select_replication_seeds(config: ExperimentConfig, selected_seeds: tuple[int, ...] | None) -> tuple[int, ...]:
+def select_replication_seeds(
+    config: ExperimentConfig, selected_seeds: tuple[int, ...] | None
+) -> tuple[int, ...]:
     """Filter configured replication seeds by optional subset."""
     configured = set(config.seeds.replication_seeds)
     if not selected_seeds:
@@ -122,17 +125,20 @@ def _config_hash(config: ExperimentConfig) -> str:
 
 
 def _git_commit_hash() -> str | None:
+    """Read the current git commit hash without spawning a subprocess."""
     try:
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True,
-            check=True,
-            text=True,
-            timeout=5,
-        )
-    except (FileNotFoundError, subprocess.SubprocessError):
+        head_file = Path(".git/HEAD")
+        if not head_file.exists():
+            return None
+        head_content = head_file.read_text(encoding="utf-8").strip()
+        if head_content.startswith("ref: "):
+            ref_path = Path(".git") / head_content[5:]
+            if not ref_path.exists():
+                return None
+            return ref_path.read_text(encoding="utf-8").strip() or None
+        return head_content or None
+    except OSError:
         return None
-    return result.stdout.strip() or None
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -570,7 +576,9 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                     )
 
                     fitness_history = _extract_fitness_history(optimized_module)
-                    _write_json(replication_dir / "fitness_history.json", {"history": fitness_history})
+                    _write_json(
+                        replication_dir / "fitness_history.json", {"history": fitness_history}
+                    )
                     _write_json(
                         replication_dir / "pareto_frontier.json",
                         {"pareto_frontier": _extract_pareto_frontier(optimized_module)},
@@ -636,7 +644,9 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                             config.cost_budget.effective_budget_usd,
                         )
                         if args.halt_on_budget_exceeded:
-                            raise RuntimeError("Cost budget exceeded and halt_on_budget_exceeded=True")
+                            raise RuntimeError(
+                                "Cost budget exceeded and halt_on_budget_exceeded=True"
+                            )
 
                     finished = _utc_now()
                     metadata.update(
@@ -644,7 +654,9 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                             "status": "completed",
                             "finished_at": _iso(finished),
                             "elapsed_seconds": round((finished - started_at).total_seconds(), 3),
-                            "result": result.model_dump(mode="json") if result is not None else None,
+                            "result": result.model_dump(mode="json")
+                            if result is not None
+                            else None,
                             "eval": eval_summary,
                         }
                     )

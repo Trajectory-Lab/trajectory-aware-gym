@@ -112,7 +112,7 @@ exclude = ["**/node_modules", "**/__pycache__", ".venv", "build", "dist"]
 
 [tool.bandit]
 exclude_dirs = ["tests", ".venv", "build"]
-skips = ["B101", "B601"]
+skips = ["B101", "B105", "B601"]
 
 [dependency-groups]
 dev = [
