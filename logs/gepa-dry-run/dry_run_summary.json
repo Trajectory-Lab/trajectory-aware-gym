@@ -1,0 +1,19 @@
+{
+  "config_name": "orz57k-l1.2-light",
+  "environment": "math:Orz57K",
+  "task_model": "ollama/qwen3-4b-base",
+  "gepa_budget": {
+    "config_mode": "light",
+    "max_metric_calls": 32,
+    "num_threads": 16
+  },
+  "train_size": 500,
+  "val_size": 50,
+  "seed_prompt": "You are a math problem solver. Solve the problem step by step, then give your final answer inside \\boxed{}.  For example: \\boxed{42}",
+  "elapsed_seconds": 123.23,
+  "baseline_fitness": 0.1386,
+  "final_fitness": 0.1386,
+  "baseline_accuracy": 0.14,
+  "final_accuracy": 0.14,
+  "optimized_instructions": "You are a math problem solver. Solve the problem step by step, then give your final answer inside \\boxed{}.  For example: \\boxed{42}"
+}

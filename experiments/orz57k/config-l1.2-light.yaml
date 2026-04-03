@@ -1,0 +1,99 @@
+# L1.2 first real-scale GEPA run — light budget, single task model & replication.
+# See project guide "L1.2 First Real-Scale GEPA Run".
+# For reflection: default matches full orz57k (Claude on Bedrock). If you use the
+# interim GPT OSS 120B model instead, set reflection_model.model_id to
+# "openai.gpt-oss-120b-1:0" and provider: bedrock.
+
+name: orz57k-l1.2-light
+description: >
+  GEPA prompt optimization on Orz57K (L1.2): light budget, Qwen3-4B only,
+  single replication. Same environment/eval/baselines as full orz57k.
+
+environment:
+  gem_env_id: "math:Orz57K"
+  env_type: math
+  dspy_module: react
+  train_size: 500
+  max_steps: 10
+  discount_gamma: 1.0
+  tools: [python_exec]
+  dataset:
+    hf_dataset_id: "axon-rl/ORZ-57k"
+    total_train_size: 57000
+    subsample_size: 500
+    subsample_strategy: uniform
+    eval_dataset_id: "axon-rl/math-eval"
+    eval_split: MATH500
+    eval_size: 500
+
+eval_protocol:
+  max_response_tokens: 4096
+  temperature_train: 1.0
+  temperature_eval: 0.0
+  top_p: 1.0
+  top_k: -1
+  rollouts_per_task: 5
+  tost_margin: 0.05
+  tost_alpha: 0.05
+  bootstrap_iterations: 1000
+
+task_models:
+  - name: Qwen3-4B-Base
+    model_id: "ollama/qwen3-4b-base"
+    provider: ollama
+    parameter_count: "4B"
+
+reflection_model:
+  model_id: "anthropic.claude-sonnet-4-5-v2:0"
+  provider: bedrock
+  temperature: 1.0
+  max_tokens: 4096
+
+gepa_budget:
+  mode: light
+  iterations: 25
+  population_size: 4
+  elite_count: 1
+  tasks_per_minibatch: 3
+
+seeds:
+  data_seed: 42
+  replication_seeds: [42]
+
+num_replications: 1
+
+rl_baselines:
+  - algorithm: "REINFORCE+ReBN"
+    environment: "math:Orz57K"
+    model_name: Qwen3-4B
+    model_size: "4B"
+    success_rate: 0.71
+    tool_augmented: true
+    training_condition: single
+    metric_name: pass@1
+    source: "GEM (Liu et al., 2025)"
+    source_detail: "Table 1, MATH500, Base+RL (with tool)"
+    estimated: false
+
+comparison_protocol:
+  primary_metric: success_rate
+  equivalence_test: TOST
+  primary_rl_baseline: "REINFORCE+ReBN (+tool)"
+  prompt_baselines:
+    - name: zero-shot
+      description: "Unoptimized DSPy agent with hand-written instructions"
+      optimizer:
+      requires_optimization: false
+    - name: miprov2
+      description: "DSPy's Bayesian prompt optimizer baseline"
+      optimizer: MIPROv2
+      requires_optimization: true
+
+fitness_override:
+  gamma: 1.0
+  max_steps: 10
+
+cost_budget:
+  estimated_tokens_per_experiment: 94000000
+  total_budget_usd: 2500.0
+  buffer_pct: 0.25
