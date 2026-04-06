@@ -330,7 +330,10 @@ class GEMEpisodeRunner:
                 current_observation = str(next_observation)
 
             log_path = logger.save() if persist else None
-            trajectory = load_trajectory(log_path) if log_path is not None else logger.build_log()
+            if log_path is not None:
+                trajectory = load_trajectory(log_path, run_id=logger.last_run_id)
+            else:
+                trajectory = logger.build_log()
             raw_metrics = extract_episode_raw_metrics(trajectory)
             return GEMEpisodeResult(
                 trajectory=trajectory, log_path=log_path, raw_metrics=raw_metrics

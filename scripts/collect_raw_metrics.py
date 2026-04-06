@@ -7,7 +7,12 @@ import csv
 import json
 from pathlib import Path
 
-from trajectory_aware_gym.metrics import EpisodeRawMetrics, collect_raw_metrics
+from trajectory_aware_gym.metrics import (
+    EpisodeRawMetrics,
+    collect_raw_metrics,
+    extract_episode_raw_metrics,
+)
+from trajectory_aware_gym.storage import load_all_trajectories
 
 
 def parse_args() -> argparse.Namespace:
@@ -90,12 +95,26 @@ def _summary(rows: list[EpisodeRawMetrics]) -> dict[str, float | int | None]:
     }
 
 
+def _load_rows(args: argparse.Namespace) -> tuple[list[EpisodeRawMetrics], int]:
+    """Load metrics from SQLite (preferred) or JSON files.
+
+    Returns (rows, source_count) where source_count is the number of
+    episodes/files found in the source.
+    """
+    db_path = args.input_dir / "trajectories.db"
+    if db_path.exists():
+        trajectories = load_all_trajectories(db_path)
+        return [extract_episode_raw_metrics(t) for t in trajectories], len(trajectories)
+
+    log_paths = sorted(args.input_dir.glob(args.glob))
+    return collect_raw_metrics(log_paths), len(log_paths)
+
+
 def main() -> None:
     """CLI entrypoint."""
     args = parse_args()
 
-    log_paths = sorted(args.input_dir.glob(args.glob))
-    rows = collect_raw_metrics(log_paths)
+    rows, source_count = _load_rows(args)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     csv_path = args.output_dir / f"{args.output_prefix}.csv"
@@ -107,7 +126,7 @@ def main() -> None:
     summary_payload = _summary(rows)
     summary_path.write_text(json.dumps(summary_payload, indent=2, sort_keys=True), encoding="utf-8")
 
-    print(f"Found logs: {len(log_paths)}")
+    print(f"Found logs: {source_count}")
     print(f"Metric rows: {len(rows)}")
     print(f"CSV output: {csv_path}")
     print(f"JSONL output: {jsonl_path}")

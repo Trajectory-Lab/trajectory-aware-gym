@@ -214,6 +214,8 @@ experiments/*/results/
 experiments/*/logs/
 data/trajectories/
 data/checkpoints/
+*.db-wal
+*.db-shm
 
 # AWS credentials (redundant but explicit)
 .aws/

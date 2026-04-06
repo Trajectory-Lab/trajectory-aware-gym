@@ -39,7 +39,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -238,6 +237,7 @@ class TrajectoryLogger:
         self.initial_observation: str | None = None
         self.initial_info: dict[str, Any] = {}
         self.steps: list[TrajectoryStep] = []
+        self._last_run_id: str | None = None
 
     def set_initial_state(self, observation: str, info: dict[str, Any] | None = None) -> None:
         if self.initial_observation is not None:
@@ -297,22 +297,26 @@ class TrajectoryLogger:
         )
 
     def save(self, project_paths: ProjectPaths | None = None) -> Path:
-        """Persist trajectory log as JSON under logs/ with timestamped filename.
-        Creates the logs directory if it doesn't exist.
-        Writes to a temporary file first and then atomically replaces the existing file.
-        This ensures the file is always in a valid state and avoids partial writes.
+        """Persist trajectory log to SQLite under ``logs/trajectories.db``.
+
+        Returns the path to the database file.  The ``run_id`` of the saved
+        episode is available via :attr:`last_run_id` after this call.
         """
+        # Deferred to avoid circular import: storage.trajectory_db imports from this module.
+        from trajectory_aware_gym.storage import save_trajectory
+
         trajectory_log = self.build_log()
         paths = project_paths or ProjectPaths()
 
-        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-        file_path = paths.logs / f"trajectory_{timestamp}_{trajectory_log.run_id}.json"
-        file_path.parent.mkdir(parents=True, exist_ok=True)
+        db_path = paths.logs / "trajectories.db"
+        save_trajectory(db_path, trajectory_log)
+        self._last_run_id = trajectory_log.run_id
+        return db_path
 
-        tmp_path = file_path.with_suffix(".json.tmp")
-        tmp_path.write_text(trajectory_log.model_dump_json(indent=2), encoding="utf-8")
-        os.replace(tmp_path, file_path)
-        return file_path
+    @property
+    def last_run_id(self) -> str | None:
+        """The ``run_id`` of the most recently saved trajectory, or None."""
+        return self._last_run_id
 
 
 # ---------------------------------------------------------------------------
@@ -320,15 +324,39 @@ class TrajectoryLogger:
 # ---------------------------------------------------------------------------
 
 
-def load_trajectory(path: Path | str) -> TrajectoryLog:
-    """Deserialize a trajectory log from a JSON file."""
+def load_trajectory(path: Path | str, *, run_id: str | None = None) -> TrajectoryLog:
+    """Load a trajectory from a JSON file or SQLite database.
+
+    When *path* points to a ``.db`` file, *run_id* is required.
+    When *path* points to a ``.json`` file, the JSON is deserialized directly.
+    """
     p = Path(path)
+    if p.suffix == ".db":
+        if run_id is None:
+            raise ValueError("run_id is required when loading from a .db file")
+        # Deferred to avoid circular import: storage.trajectory_db imports from this module.
+        from trajectory_aware_gym.storage import load_trajectory_by_id
+
+        return load_trajectory_by_id(p, run_id)
     return TrajectoryLog.model_validate_json(p.read_text(encoding="utf-8"))
 
 
 def load_all_trajectories(directory: Path | str) -> list[TrajectoryLog]:
-    """Load all trajectory JSON logs from a directory, sorted by started_at."""
+    """Load all trajectories from SQLite (preferred) or JSON files.
+
+    If ``trajectories.db`` exists in *directory*, loads from SQLite.
+    Otherwise falls back to globbing ``trajectory_*.json`` files.
+    """
     d = Path(directory)
+    db_path = d / "trajectories.db"
+    if db_path.exists():
+        # Deferred to avoid circular import: storage.trajectory_db imports from this module.
+        from trajectory_aware_gym.storage import (
+            load_all_trajectories as load_all_from_db,
+        )
+
+        return load_all_from_db(db_path)
+
     logs: list[TrajectoryLog] = []
     for p in d.glob("trajectory_*.json"):
         try:

@@ -34,7 +34,7 @@ from trajectory_aware_gym.adapters.gem_episode_runner import (
     generate_smoke_action as _runner_generate_smoke_action,
 )
 from trajectory_aware_gym.adapters.tool_runtime import ToolRuntime
-from trajectory_aware_gym.adapters.trajectory_logger import ToolCall
+from trajectory_aware_gym.adapters.trajectory_logger import ToolCall, load_trajectory
 from trajectory_aware_gym.config import settings
 from trajectory_aware_gym.models.experiment import ExperimentConfig
 
@@ -78,6 +78,7 @@ class SmokeEpisodeDetail:
     correct: bool
     tokens: int
     log_path: str
+    run_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -180,7 +181,7 @@ def run_episode(
     environment_id: str,
     seed: int | None = None,
     system_prompt: str | None = None,
-) -> tuple[float, int, str]:
+) -> tuple[float, int, str, str | None]:
     """Execute one episode and save a trajectory log to disk."""
     gem = importlib.import_module("gem")
     importlib.import_module("gem.envs")
@@ -244,12 +245,13 @@ def run_episode(
         if terminated or truncated:
             break
 
-    log_path = logger.save()
+    db_path = logger.save()
+    run_id = logger.last_run_id
 
     if hasattr(env, "close"):
         env.close()
 
-    return total_reward, len(logger.steps), str(log_path)
+    return total_reward, len(logger.steps), str(db_path), run_id
 
 
 def run_smoke_episode(spec: SmokeRunSpec) -> SmokeRunResult:
@@ -289,6 +291,7 @@ def run_smoke_episode(spec: SmokeRunSpec) -> SmokeRunResult:
                 correct=is_correct,
                 tokens=trajectory.total_tokens,
                 log_path=str(result.log_path) if result.log_path is not None else "",
+                run_id=trajectory.run_id,
             )
         )
 
@@ -388,12 +391,13 @@ def main() -> None:
         print(f"Total tokens: {result.total_tokens}  |  Total cost: ${result.total_cost_usd:.6f}")
         print(f"{'=' * 70}")
         log_path = result.details[-1].log_path if result.details else None
+        run_id = result.details[-1].run_id if result.details else None
         if log_path:
             print(f"Trajectory log: {log_path}")
     else:
         environment_id = args.environment or DEFAULT_ENVIRONMENT_ID
         seed = args.seed if args.seed is not None else DEFAULT_GUESS_SEED
-        total_reward, steps, log_path = run_episode(
+        total_reward, steps, log_path, run_id = run_episode(
             environment_id,
             seed,
             args.system_prompt,
@@ -404,10 +408,10 @@ def main() -> None:
         print(f"Trajectory log: {log_path}")
 
     if args.show_log and log_path:
-        payload = json.loads(Path(log_path).read_text(encoding="utf-8"))
-        print(f"\nSchema version: {payload['schema_version']}")
-        print(f"Outcome:        {payload['episode_outcome']}")
-        print(f"System prompt:  {payload.get('system_prompt', '(none)')}")
+        trajectory = load_trajectory(log_path, run_id=run_id)
+        print(f"\nSchema version: {trajectory.schema_version}")
+        print(f"Outcome:        {trajectory.episode_outcome}")
+        print(f"System prompt:  {trajectory.system_prompt or '(none)'}")
 
 
 if __name__ == "__main__":
