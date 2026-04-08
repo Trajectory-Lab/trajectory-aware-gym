@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-import json
 import types
 
 import pytest
 
 from trajectory_aware_gym.adapters.trajectory_logger import (
     LLMCallMetadata,
-    TrajectoryLog,
     TrajectoryLogger,
+    load_trajectory,
 )
 from trajectory_aware_gym.config.settings import ProjectPaths
 from trajectory_aware_gym.metrics import extract_episode_raw_metrics
@@ -38,14 +37,14 @@ def test_episode_trajectory_persists_to_logs(tmp_path):
         info={"suffix": "next"},
     )
 
-    output_file = logger.save(project_paths=paths)
+    db_path = logger.save(project_paths=paths)
 
-    assert output_file.exists()
-    assert output_file.parent == paths.logs
+    assert db_path.exists()
+    assert db_path.parent == paths.logs
 
-    payload = json.loads(output_file.read_text(encoding="utf-8"))
-    assert payload["total_reward"] == pytest.approx(1.0)
-    assert payload["steps"][-1]["terminated"] is True
+    loaded = load_trajectory(db_path, run_id=logger.last_run_id)
+    assert loaded.total_reward == pytest.approx(1.0)
+    assert loaded.steps[-1].terminated is True
 
 
 def test_saved_trajectory_round_trip_validation(tmp_path):
@@ -61,12 +60,11 @@ def test_saved_trajectory_round_trip_validation(tmp_path):
         truncated=False,
     )
 
-    output_file = logger.save(project_paths=paths)
-    loaded = json.loads(output_file.read_text(encoding="utf-8"))
-    reconstructed = TrajectoryLog(**loaded)
+    db_path = logger.save(project_paths=paths)
+    loaded = load_trajectory(db_path, run_id=logger.last_run_id)
 
-    assert reconstructed.environment_id == "toy-env"
-    assert reconstructed.total_reward == pytest.approx(0.5)
+    assert loaded.environment_id == "toy-env"
+    assert loaded.total_reward == pytest.approx(0.5)
 
 
 @pytest.fixture
@@ -280,8 +278,8 @@ def test_episode_trajectory_produces_valid_raw_metrics(tmp_path):
         ],
     )
 
-    output_file = logger.save(project_paths=paths)
-    loaded = TrajectoryLog.model_validate_json(output_file.read_text(encoding="utf-8"))
+    db_path = logger.save(project_paths=paths)
+    loaded = load_trajectory(db_path, run_id=logger.last_run_id)
     metrics = extract_episode_raw_metrics(loaded)
 
     assert metrics.environment_id == "math:Orz57K"
@@ -334,8 +332,8 @@ def test_multi_step_episode_metrics_aggregate_across_steps(tmp_path):
         ],
     )
 
-    output_file = logger.save(project_paths=paths)
-    loaded = TrajectoryLog.model_validate_json(output_file.read_text(encoding="utf-8"))
+    db_path = logger.save(project_paths=paths)
+    loaded = load_trajectory(db_path, run_id=logger.last_run_id)
     metrics = extract_episode_raw_metrics(loaded)
 
     assert metrics.step_count == 2
@@ -377,8 +375,8 @@ def test_partial_instrumentation_coverage_tracked(tmp_path):
         truncated=True,
     )
 
-    output_file = logger.save(project_paths=paths)
-    loaded = TrajectoryLog.model_validate_json(output_file.read_text(encoding="utf-8"))
+    db_path = logger.save(project_paths=paths)
+    loaded = load_trajectory(db_path, run_id=logger.last_run_id)
     metrics = extract_episode_raw_metrics(loaded)
 
     assert metrics.step_count == 2

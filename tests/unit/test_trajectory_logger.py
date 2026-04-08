@@ -516,7 +516,7 @@ class TestDeriveOutcome:
 class TestTrajectoryLogger:
     """Tests for logger collection and persistence."""
 
-    def test_save_writes_json_log(self, tmp_path):
+    def test_save_writes_to_sqlite(self, tmp_path):
         paths = ProjectPaths(root=tmp_path)
         logger = TrajectoryLogger(environment_id="game:GuessTheNumber-v0-easy", seed=42)
         logger.set_initial_state("start", {"suffix": "next"})
@@ -537,14 +537,15 @@ class TestTrajectoryLogger:
             info={"suffix": "next"},
         )
 
-        file_path = logger.save(project_paths=paths)
-        assert file_path.exists()
-        assert file_path.parent == paths.logs
+        db_path = logger.save(project_paths=paths)
+        assert db_path.exists()
+        assert db_path.suffix == ".db"
+        assert db_path.parent == paths.logs
 
-        payload = json.loads(file_path.read_text(encoding="utf-8"))
-        assert payload["environment_id"] == "game:GuessTheNumber-v0-easy"
-        assert payload["total_reward"] == 1.0
-        assert len(payload["steps"]) == 2
+        loaded = load_trajectory(db_path, run_id=logger.last_run_id)
+        assert loaded.environment_id == "game:GuessTheNumber-v0-easy"
+        assert loaded.total_reward == 1.0
+        assert loaded.num_steps == 2
 
     def test_build_log_requires_initial_state(self):
         logger = TrajectoryLogger(environment_id="game:GuessTheNumber-v0-easy")
@@ -693,15 +694,15 @@ class TestTrajectoryLogger:
             truncated=False,
             llm_calls=[_make_llm_call(5, 10, 0.005)],
         )
-        file_path = logger.save(project_paths=paths)
-        payload = json.loads(file_path.read_text(encoding="utf-8"))
+        db_path = logger.save(project_paths=paths)
+        loaded = load_trajectory(db_path, run_id=logger.last_run_id)
 
-        assert payload["schema_version"] == SCHEMA_VERSION
-        assert payload["system_prompt"] == "Be precise."
-        assert payload["episode_outcome"] == "success"
-        assert payload["num_steps"] == 1
-        assert payload["total_tokens"] == 15
-        assert abs(payload["total_cost_usd"] - 0.005) < 1e-9
+        assert loaded.schema_version == SCHEMA_VERSION
+        assert loaded.system_prompt == "Be precise."
+        assert loaded.episode_outcome == "success"
+        assert loaded.num_steps == 1
+        assert loaded.total_tokens == 15
+        assert abs(loaded.total_cost_usd - 0.005) < 1e-9
 
     def test_save_failure_leaves_no_tmp_file(self, tmp_path):
         logger = TrajectoryLogger(environment_id="game:GuessTheNumber-v0-easy")
@@ -758,9 +759,9 @@ class TestTrajectoryLoadAndFilter:
         logger = TrajectoryLogger(environment_id="math:Math12K", seed=1)
         logger.set_initial_state("problem")
         logger.add_step(action="a", observation="o", reward=1.0, terminated=True, truncated=False)
-        file_path = logger.save(project_paths=paths)
+        db_path = logger.save(project_paths=paths)
 
-        loaded = load_trajectory(file_path)
+        loaded = load_trajectory(db_path, run_id=logger.last_run_id)
         assert loaded.environment_id == "math:Math12K"
         assert loaded.total_reward == 1.0
         assert loaded.num_steps == 1
@@ -809,9 +810,9 @@ class TestTrajectoryLoadAndFilter:
             tool_calls=[tc],
             llm_calls=[_make_llm_call(20, 30, 0.02)],
         )
-        file_path = logger.save(project_paths=paths)
+        db_path = logger.save(project_paths=paths)
 
-        loaded = load_trajectory(file_path)
+        loaded = load_trajectory(db_path, run_id=logger.last_run_id)
         assert loaded.system_prompt == "Write efficient code."
         assert loaded.episode_outcome == "success"
         assert len(loaded.steps[0].tool_calls) == 1
@@ -834,9 +835,9 @@ class TestTrajectoryLoadAndFilter:
                 _make_llm_call(5, 15, None),
             ],
         )
-        file_path = logger.save(project_paths=paths)
+        db_path = logger.save(project_paths=paths)
 
-        loaded = load_trajectory(file_path)
+        loaded = load_trajectory(db_path, run_id=logger.last_run_id)
         assert len(loaded.steps[0].llm_calls) == 2
         assert loaded.steps[0].llm_calls[0].total_tokens == 30
         assert loaded.steps[0].llm_calls[0].cost_usd == 0.01

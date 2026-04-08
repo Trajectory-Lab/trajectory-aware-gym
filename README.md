@@ -170,7 +170,7 @@ poe typecheck
 ## Documentation
 
 - **[docs/02-architecture/configuration.md](docs/02-architecture/configuration.md)**: Configuration guide — YAML schema, env var overrides, adding models
-- **[docs/ollama_setup.md](docs/ollama_setup.md)**: Local Ollama setup guide for Qwen3 Base models (WSL2/GPU)
+- **[docs/05-operations/ollama_setup.md](docs/05-operations/ollama_setup.md)**: Local Ollama setup guide for Qwen3 Base models (WSL2/GPU)
 - **[AGENTS.md](AGENTS.md)**: Comprehensive guidelines for AI coding assistants working on this project
 - **[.env.example](.env.example)**: Example environment configuration with AWS Bedrock settings
 - **[integration_test_matrix.md](docs/04-testing/integration_test_matrix.md)**: Integration test plan and CI matrix for Phase 2

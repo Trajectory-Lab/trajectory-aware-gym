@@ -71,7 +71,7 @@ dspy.configure(lm=get_task_lm("qwen3:1.7b", "train"))
 | `llama:3b` | Bedrock (AWS) | Llama 3.2 3B |
 | `llama:8b` | Bedrock (AWS) | Llama 3.1 8B |
 
-Ollama models require local setup. See [docs/ollama_setup.md](ollama_setup.md) for installation.
+Ollama models require local setup. See [docs/05-operations/ollama_setup.md](../05-operations/ollama_setup.md) for installation.
 SageMaker models require a running endpoint. See [SageMaker Endpoints](#sagemaker-endpoints) below for deploy/teardown instructions.
 
 ### Model Roles
