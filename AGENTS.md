@@ -205,6 +205,9 @@ uv run bandit -r src
 - Standard checks (trailing whitespace, YAML/TOML/JSON validation, etc.)
 
 ### Running Experiments
+
+See **[docs/03-experiments/production_runner.md](docs/03-experiments/production_runner.md)** for full CLI documentation, flags, results structure, and resume behavior.
+
 Primary experiment configs:
 - `experiments/orz57k/config.yaml`
 - `experiments/hotpotqa/config.yaml`

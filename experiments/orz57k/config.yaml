@@ -11,6 +11,7 @@ environment:
   env_type: math
   dspy_module: react
   train_size: 500
+  eval_size: 50
   max_steps: 10
   discount_gamma: 1.0
   tools: [python_exec]
@@ -21,7 +22,7 @@ environment:
     subsample_strategy: uniform
     eval_dataset_id: "axon-rl/math-eval"
     eval_split: MATH500
-    eval_size: 500
+    total_eval_size: 500
 
 eval_protocol:
   max_response_tokens: 4096
@@ -29,24 +30,19 @@ eval_protocol:
   temperature_eval: 0.0
   top_p: 1.0
   top_k: -1
-  rollouts_per_task: 5
+  rollouts_per_task: 1
   tost_margin: 0.05
   tost_alpha: 0.05
   bootstrap_iterations: 1000
 
 task_models:
-  - name: Qwen3-1.7B-Base
-    model_id: "ollama/qwen3-1.7b-base"
-    provider: ollama
-    parameter_count: "1.7B"
-
   - name: Qwen3-4B-Base
-    model_id: "ollama/qwen3-4b-base"
-    provider: ollama
+    model_id: "sagemaker/qwen3-4b-base"
+    provider: sagemaker
     parameter_count: "4B"
 
 reflection_model:
-  model_id: "anthropic.claude-sonnet-4-5-v2:0"
+  model_id: "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
   provider: bedrock
   temperature: 1.0
   max_tokens: 4096
@@ -56,7 +52,7 @@ gepa_budget:
   iterations: 75
   population_size: 6
   elite_count: 2
-  tasks_per_minibatch: 3
+  tasks_per_minibatch: 5
 
 seeds:
   data_seed: 42

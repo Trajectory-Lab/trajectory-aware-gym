@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import dspy  # type: ignore[import-untyped]
 import yaml
@@ -23,19 +23,14 @@ from trajectory_aware_gym.adapters.gem_episode_runner import GEMEpisodeResult, G
 from trajectory_aware_gym.adapters.gem_solver_module import GEMSolverModule
 from trajectory_aware_gym.config import settings
 from trajectory_aware_gym.config.core import FitnessModel
-from trajectory_aware_gym.config.llm_provider import (
-    TaskModelName,
-    get_reflection_lm,
-    get_task_lm,
-    get_task_model_id,
-)
+from trajectory_aware_gym.config.llm_provider import get_reflection_lm
 from trajectory_aware_gym.metrics import EpisodeRawMetrics
 from trajectory_aware_gym.models.experiment import (
     ExperimentConfig,
     FitnessOverride,
     TaskModelConfig,
 )
-from trajectory_aware_gym.models.gepa_result import GEPARunResult
+from trajectory_aware_gym.models.gepa_result import GEPARunResult, accuracy_from_subscores
 
 DEFAULT_RESULTS_ROOT = Path("results")
 DEFAULT_SEED_PROMPT = (
@@ -57,6 +52,8 @@ class RunExperimentArgs:
     models: tuple[str, ...] | None = None
     seeds: tuple[int, ...] | None = None
     fresh: bool = False
+    purge: bool = False
+    resume: str | None = None
     results_root: Path = DEFAULT_RESULTS_ROOT
     halt_on_budget_exceeded: bool = False
 
@@ -225,7 +222,7 @@ def _extract_reflection_usage(reflection_lm: Any | None) -> tuple[int, float]:
         if response is not None:
             try:
                 maybe_cost = completion_cost(completion_response=response)
-            except (KeyError, TypeError, ValueError):
+            except Exception:  # noqa: BLE001  # LiteLLM raises bare Exception for unmapped models
                 maybe_cost = None
             if isinstance(maybe_cost, int | float):
                 total_cost += float(maybe_cost)
@@ -244,18 +241,27 @@ def _extract_fitness_history(optimized_module: Any) -> list[dict[str, Any]]:
     if detailed is None:
         return []
 
-    history = getattr(detailed, "history", None)
-    if isinstance(history, list):
-        return [item for item in history if isinstance(item, dict)]
-
     aggregate = getattr(detailed, "val_aggregate_scores", None)
-    if isinstance(aggregate, list):
-        rows: list[dict[str, Any]] = []
-        for index, score in enumerate(aggregate):
-            if isinstance(score, int | float):
-                rows.append({"index": index, "val_aggregate_score": float(score)})
-        return rows
-    return []
+    subscores = getattr(detailed, "val_subscores", None)
+    discovery = getattr(detailed, "discovery_eval_counts", None)
+
+    if not isinstance(aggregate, list):
+        return []
+
+    rows: list[dict[str, Any]] = []
+    for index, score in enumerate(aggregate):
+        if not isinstance(score, int | float):
+            continue
+        row: dict[str, Any] = {
+            "index": index,
+            "val_aggregate_score": float(score),
+        }
+        if isinstance(subscores, list) and index < len(subscores):
+            row["accuracy"] = accuracy_from_subscores(subscores[index])
+        if isinstance(discovery, list) and index < len(discovery):
+            row["metric_calls"] = int(discovery[index])
+        rows.append(row)
+    return rows
 
 
 def _extract_pareto_frontier(optimized_module: Any) -> list[dict[str, Any]]:
@@ -273,33 +279,27 @@ def _extract_pareto_frontier(optimized_module: Any) -> list[dict[str, Any]]:
     return []
 
 
-def _completed(replication_dir: Path) -> bool:
+def _replication_status(replication_dir: Path) -> str | None:
+    """Return the status from run_metadata.json, or None if missing/corrupt."""
     metadata_path = replication_dir / "run_metadata.json"
     if not metadata_path.exists():
-        return False
+        return None
     try:
         payload = json.loads(metadata_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
-        return False
-    return payload.get("status") == "completed"
+        return None
+    return payload.get("status")
+
+
+def _completed(replication_dir: Path) -> bool:
+    return _replication_status(replication_dir) == "completed"
 
 
 def _resolve_task_model_id(task_model: TaskModelConfig) -> str:
-    if task_model.provider in ("bedrock", "sagemaker"):
-        model_id = get_task_model_id(cast(TaskModelName, task_model.name))
-        if model_id is None:
-            raise ValueError(f"Unable to resolve model id for task model: {task_model.name}")
-        return model_id
     return task_model.model_id
 
 
 def _build_task_lm(config: ExperimentConfig, task_model: TaskModelConfig) -> Any:
-    if task_model.provider in ("bedrock", "sagemaker"):
-        task_lm = get_task_lm(cast(TaskModelName, task_model.name), mode="train")
-        if task_lm is None:
-            raise ValueError(f"Unable to build task LM for {task_model.name}")
-        return task_lm
-
     kwargs: dict[str, Any] = {
         "model": task_model.model_id,
         "temperature": config.eval_protocol.temperature_train,
@@ -307,6 +307,10 @@ def _build_task_lm(config: ExperimentConfig, task_model: TaskModelConfig) -> Any
     }
     if task_model.provider == "ollama":
         kwargs["api_base"] = settings.ollama.api_base
+    if task_model.provider in ("bedrock", "sagemaker"):
+        aws_region = getattr(settings.aws, "region", None)
+        if aws_region is not None:
+            kwargs["aws_region_name"] = aws_region
     return dspy.LM(**kwargs)
 
 
@@ -358,13 +362,45 @@ def _model_replication_dir(
     config: ExperimentConfig,
     task_model: TaskModelConfig,
     replication_seed: int,
+    run_timestamp: str,
 ) -> Path:
     return (
         args.results_root
         / _safe_segment(config.name)
+        / run_timestamp
         / _safe_segment(task_model.name)
         / f"replication_{replication_seed}"
     )
+
+
+def _find_resumable_run(results_root: Path, config_name: str) -> str | None:
+    """Find the most recent incomplete run's timestamp directory, if any.
+
+    A run is incomplete if its ``run_summary.json`` has no ``finished_at`` field.
+    Returns the directory name (timestamp string) or None.
+    """
+    config_dir = results_root / _safe_segment(config_name)
+    if not config_dir.exists():
+        return None
+
+    candidates: list[str] = []
+    for entry in config_dir.iterdir():
+        if not entry.is_dir():
+            continue
+        summary_path = entry / "run_summary.json"
+        if not summary_path.exists():
+            continue
+        try:
+            data = json.loads(summary_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if data.get("finished_at") is None:
+            candidates.append(entry.name)
+
+    if not candidates:
+        return None
+    candidates.sort()
+    return candidates[-1]
 
 
 def _eval_examples(config: ExperimentConfig) -> list[dspy.Example]:
@@ -376,7 +412,7 @@ def _eval_examples(config: ExperimentConfig) -> list[dspy.Example]:
 
     examples: list[dspy.Example] = []
     start_seed = config.seeds.data_seed + config.environment.train_size
-    eval_size = config.environment.effective_val_size
+    eval_size = config.environment.effective_eval_size
     for index in range(eval_size):
         seed = start_seed + index
         observation, _ = env.reset(seed=seed)
@@ -389,13 +425,23 @@ def _eval_examples(config: ExperimentConfig) -> list[dspy.Example]:
     return examples
 
 
-def _run_heldout_eval(
-    *,
+@dataclass(frozen=True)
+class _EvalTask:
+    """One eval episode to run."""
+
+    episode_index: int
+    seed: int
+    expected_observation: str | None
+    instructions: str
+
+
+def _run_eval_task(
+    task: _EvalTask,
     config: ExperimentConfig,
     task_model_id: str,
-    instructions: str,
-) -> tuple[list[GEMEpisodeResult], dict[str, Any]]:
-    eval_runner = GEMEpisodeRunner(
+) -> GEMEpisodeResult:
+    """Run a single eval episode. Thread-safe: creates its own runner/env."""
+    runner = GEMEpisodeRunner(
         environment_id=config.environment.gem_env_id,
         model_id=task_model_id,
         temperature=config.eval_protocol.temperature_eval,
@@ -405,34 +451,84 @@ def _run_heldout_eval(
         experiment_name=config.name,
         tools=[tool.value for tool in config.environment.tools if tool.value != "none"],
     )
+    return runner.run_episode(
+        task.instructions,
+        episode_index=task.episode_index,
+        seed_override=task.seed,
+        expected_observation=task.expected_observation,
+        persist=False,
+    )
 
+
+def _run_heldout_eval(
+    *,
+    config: ExperimentConfig,
+    task_model_id: str,
+    instructions: str,
+    max_workers: int = 8,
+) -> tuple[list[GEMEpisodeResult], dict[str, Any]]:
     eval_examples = _eval_examples(config)
     rollouts = config.eval_protocol.rollouts_per_task
 
-    results: list[GEMEpisodeResult] = []
-    successes = 0
+    tasks: list[_EvalTask] = []
     for example_index, example in enumerate(eval_examples):
         for rollout_index in range(rollouts):
-            seed = int(example.seed) + rollout_index
-            result = eval_runner.run_episode(
-                instructions,
-                episode_index=example_index * rollouts + rollout_index,
-                seed_override=seed,
-                expected_observation=str(example.problem),
-                persist=False,
+            tasks.append(
+                _EvalTask(
+                    episode_index=example_index * rollouts + rollout_index,
+                    seed=int(example.seed) + rollout_index,
+                    expected_observation=str(example.problem) if rollout_index == 0 else None,
+                    instructions=instructions,
+                )
             )
-            results.append(result)
-            if result.raw_metrics.success:
-                successes += 1
 
-    total = len(results)
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    total_tasks = len(tasks)
+    logger.info("Starting held-out eval: %d episodes, %d workers", total_tasks, max_workers)
+    results: list[GEMEpisodeResult | None] = [None] * total_tasks
+    done_count = 0
+    eval_start = time.monotonic()
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_idx = {
+            executor.submit(_run_eval_task, task, config, task_model_id): idx
+            for idx, task in enumerate(tasks)
+        }
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            try:
+                results[idx] = future.result()
+            except Exception:
+                logger.exception("Eval episode %d failed", idx)
+            done_count += 1
+            elapsed = time.monotonic() - eval_start
+            per_ep = elapsed / done_count
+            remaining = per_ep * (total_tasks - done_count)
+            mins_left = remaining / 60
+            pct = done_count / total_tasks
+            bar_len = 30
+            filled = int(bar_len * pct)
+            bar = "█" * filled + "░" * (bar_len - filled)
+            print(
+                f"\rEval: {bar} {done_count}/{total_tasks} ({pct:.0%}) ~{mins_left:.1f}m left",
+                end="",
+                flush=True,
+            )
+        print()  # newline after progress bar
+
+    completed = [r for r in results if r is not None]
+    successes = sum(1 for r in completed if r.raw_metrics.success)
+    correct = sum(1 for r in completed if r.raw_metrics.total_reward > 0)
+    total = len(completed)
     summary = {
         "episodes": total,
         "successes": successes,
         "success_rate": (successes / total) if total else 0.0,
+        "correct": correct,
+        "accuracy": (correct / total) if total else 0.0,
         "temperature_eval": config.eval_protocol.temperature_eval,
     }
-    return (results, summary)
+    return (completed, summary)
 
 
 def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
@@ -447,18 +543,33 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
     replication_seeds = select_replication_seeds(config, args.seeds)
     max_metric_calls = derive_max_metric_calls(config, args.max_metric_calls)
 
-    if args.fresh:
-        fresh_target = args.results_root / _safe_segment(config.name)
-        if fresh_target.exists():
-            logger.info("Removing existing results directory: %s", fresh_target)
-            shutil.rmtree(fresh_target)
+    if args.purge:
+        purge_target = args.results_root / _safe_segment(config.name)
+        if purge_target.exists():
+            logger.info("Purging all results for config: %s", purge_target)
+            shutil.rmtree(purge_target)
 
     trainset = _build_trainset(config)
     val_size = config.environment.effective_val_size
     valset = trainset[:val_size] if val_size <= len(trainset) else trainset
 
     global_started = _utc_now()
-    run_id = f"{_safe_segment(config.name)}-{global_started.strftime('%Y%m%dT%H%M%SZ')}"
+
+    # Decide whether to resume an incomplete run or start fresh.
+    if args.resume:
+        run_timestamp = args.resume
+        logger.info("Resuming specified run: %s", run_timestamp)
+    elif args.fresh:
+        run_timestamp = global_started.strftime("%Y%m%dT%H%M%SZ")
+    else:
+        resumable = _find_resumable_run(args.results_root, config.name)
+        if resumable:
+            run_timestamp = resumable
+            logger.info("Resuming incomplete run: %s", run_timestamp)
+        else:
+            run_timestamp = global_started.strftime("%Y%m%dT%H%M%SZ")
+
+    run_id = f"{_safe_segment(config.name)}-{run_timestamp}"
     config_hash = _config_hash(config)
     git_commit = _git_commit_hash()
 
@@ -468,9 +579,16 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
         "config_hash": config_hash,
         "git_commit": git_commit,
         "started_at": _iso(global_started),
+        "finished_at": None,
         "max_metric_calls": max_metric_calls,
         "models": {},
     }
+
+    # Write run_summary.json at start so _find_resumable_run can detect it.
+    experiment_summary_path = (
+        args.results_root / _safe_segment(config.name) / run_timestamp / "run_summary.json"
+    )
+    _write_json(experiment_summary_path, overall)
 
     with _fitness_override_context(config.fitness_override):
         metric = TrajectoryFitnessMetric(return_feedback=True)
@@ -482,7 +600,9 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
             overall["models"][task_model.name] = model_entries
 
             for replication_seed in replication_seeds:
-                replication_dir = _model_replication_dir(args, config, task_model, replication_seed)
+                replication_dir = _model_replication_dir(
+                    args, config, task_model, replication_seed, run_timestamp
+                )
                 replication_dir.mkdir(parents=True, exist_ok=True)
 
                 if _completed(replication_dir):
@@ -542,6 +662,7 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                 optimizer = dspy.GEPA(
                     metric=metric,
                     max_metric_calls=max_metric_calls,
+                    reflection_minibatch_size=config.gepa_budget.tasks_per_minibatch,
                     num_threads=settings.gepa.num_threads,
                     log_dir=str(gepa_log_dir),
                     track_stats=True,
@@ -550,50 +671,88 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                 )
 
                 try:
-                    compile_start = time.monotonic()
-                    optimized_module = optimizer.compile(
-                        student=module,
-                        trainset=trainset,
-                        valset=valset,
-                    )
-                    compile_elapsed = time.monotonic() - compile_start
-                    logger.info(
-                        "GEPA compile complete model=%s seed=%s elapsed=%.2fs",
-                        task_model.name,
-                        replication_seed,
-                        compile_elapsed,
+                    # --- Phase 1: GEPA optimization (skip if already done) ---
+                    prior_status = _replication_status(replication_dir)
+                    prompt_path = replication_dir / "optimized_prompt.txt"
+
+                    if prior_status == "gepa_done" and prompt_path.exists():
+                        optimized_prompt = prompt_path.read_text(encoding="utf-8")
+                        logger.info(
+                            "Resuming from saved GEPA result model=%s seed=%s",
+                            task_model.name,
+                            replication_seed,
+                        )
+                        result = None
+                        training_results: list[GEMEpisodeResult] = []
+                    else:
+                        compile_start = time.monotonic()
+                        optimized_module = optimizer.compile(
+                            student=module,
+                            trainset=trainset,
+                            valset=valset,
+                        )
+                        compile_elapsed = time.monotonic() - compile_start
+                        logger.info(
+                            "GEPA compile complete model=%s seed=%s elapsed=%.2fs",
+                            task_model.name,
+                            replication_seed,
+                            compile_elapsed,
+                        )
+
+                        result = GEPARunResult.from_module(optimized_module, args.seed_prompt)
+                        optimized_prompt = (
+                            result.optimized_instructions
+                            if result is not None
+                            else getattr(optimized_module, "instructions", args.seed_prompt)
+                        )
+
+                        # Save GEPA artifacts immediately.
+                        prompt_path.write_text(optimized_prompt, encoding="utf-8")
+                        fitness_history = _extract_fitness_history(optimized_module)
+                        _write_json(
+                            replication_dir / "fitness_history.json",
+                            {"history": fitness_history},
+                        )
+                        _write_json(
+                            replication_dir / "pareto_frontier.json",
+                            {"pareto_frontier": _extract_pareto_frontier(optimized_module)},
+                        )
+                        training_results = list(runner.episode_history)
+                        _write_csv(
+                            replication_dir / "training_metrics.csv",
+                            [r.raw_metrics for r in training_results],
+                        )
+
+                        metadata["status"] = "gepa_done"
+                        if result is not None:
+                            metadata["result"] = result.model_dump(mode="json")
+                        _write_json(replication_dir / "run_metadata.json", metadata)
+                        logger.info(
+                            "Saved GEPA artifacts model=%s seed=%s",
+                            task_model.name,
+                            replication_seed,
+                        )
+
+                    # --- Phase 2: Held-out evaluation ---
+                    logger.info("Running baseline eval with seed prompt...")
+                    baseline_eval_results, baseline_eval_summary = _run_heldout_eval(
+                        config=config,
+                        task_model_id=model_id,
+                        instructions=args.seed_prompt,
                     )
 
-                    result = GEPARunResult.from_module(optimized_module, args.seed_prompt)
-                    optimized_prompt = (
-                        result.optimized_instructions
-                        if result is not None
-                        else getattr(optimized_module, "instructions", args.seed_prompt)
-                    )
-                    (replication_dir / "optimized_prompt.txt").write_text(
-                        optimized_prompt,
-                        encoding="utf-8",
-                    )
-
-                    fitness_history = _extract_fitness_history(optimized_module)
-                    _write_json(
-                        replication_dir / "fitness_history.json", {"history": fitness_history}
-                    )
-                    _write_json(
-                        replication_dir / "pareto_frontier.json",
-                        {"pareto_frontier": _extract_pareto_frontier(optimized_module)},
-                    )
-
-                    training_results = list(runner.episode_history)
+                    logger.info("Running optimized eval...")
                     eval_results, eval_summary = _run_heldout_eval(
                         config=config,
                         task_model_id=model_id,
                         instructions=optimized_prompt,
                     )
 
-                    all_rows = [r.raw_metrics for r in training_results] + [
-                        r.raw_metrics for r in eval_results
-                    ]
+                    all_rows = (
+                        [r.raw_metrics for r in training_results]
+                        + [r.raw_metrics for r in baseline_eval_results]
+                        + [r.raw_metrics for r in eval_results]
+                    )
                     _write_csv(replication_dir / "raw_metrics.csv", all_rows)
                     _write_jsonl(replication_dir / "raw_metrics.jsonl", all_rows)
                     _write_json(
@@ -602,11 +761,14 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                     )
 
                     task_tokens_train, task_cost_train = _extract_task_usage(training_results)
+                    task_tokens_baseline_eval, task_cost_baseline_eval = _extract_task_usage(
+                        baseline_eval_results
+                    )
                     task_tokens_eval, task_cost_eval = _extract_task_usage(eval_results)
                     reflection_tokens, reflection_cost = _extract_reflection_usage(reflection_lm)
 
-                    task_tokens = task_tokens_train + task_tokens_eval
-                    task_cost = task_cost_train + task_cost_eval
+                    task_tokens = task_tokens_train + task_tokens_baseline_eval + task_tokens_eval
+                    task_cost = task_cost_train + task_cost_baseline_eval + task_cost_eval
                     total_tokens = task_tokens + reflection_tokens
                     total_cost = task_cost + reflection_cost
 
@@ -620,6 +782,8 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                         "effective_budget_usd": config.cost_budget.effective_budget_usd,
                         "training_task_model_tokens": task_tokens_train,
                         "training_task_model_cost": round(task_cost_train, 6),
+                        "baseline_eval_task_model_tokens": task_tokens_baseline_eval,
+                        "baseline_eval_task_model_cost": round(task_cost_baseline_eval, 6),
                         "eval_task_model_tokens": task_tokens_eval,
                         "eval_task_model_cost": round(task_cost_eval, 6),
                     }
@@ -657,6 +821,7 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                             "result": result.model_dump(mode="json")
                             if result is not None
                             else None,
+                            "baseline_eval": baseline_eval_summary,
                             "eval": eval_summary,
                         }
                     )
@@ -665,8 +830,39 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                     model_entries[str(replication_seed)] = {
                         "status": "completed",
                         "cost_summary": cost_summary,
+                        "baseline_eval": baseline_eval_summary,
                         "eval": eval_summary,
                     }
+
+                    baseline_acc = result.baseline_accuracy if result else None
+                    final_acc = result.final_accuracy if result else None
+                    train_bench = config.environment.gem_env_id.split(":")[-1]
+                    eval_bench = (
+                        config.environment.dataset.eval_split
+                        if config.environment.dataset
+                        else train_bench
+                    )
+                    bl_eval_acc = baseline_eval_summary["accuracy"]
+                    bl_eval_correct = baseline_eval_summary["correct"]
+                    bl_eval_total = baseline_eval_summary["episodes"]
+                    eval_acc = eval_summary["accuracy"]
+                    eval_correct = eval_summary["correct"]
+                    eval_total = eval_summary["episodes"]
+                    print(
+                        f"\n{'=' * 60}\n"
+                        f"  Replication complete: {task_model.name} seed={replication_seed}\n"
+                        f"  Baseline accuracy:  {baseline_acc} ({train_bench})\n"
+                        f"  Optimized accuracy: {final_acc} ({train_bench})\n"
+                        f"  Baseline eval:      {bl_eval_acc:.1%} "
+                        f"({bl_eval_correct}/{bl_eval_total}) ({eval_bench})\n"
+                        f"  Eval accuracy:      {eval_acc:.1%} "
+                        f"({eval_correct}/{eval_total}) ({eval_bench})\n"
+                        f"  Total cost:         ${total_cost:.4f}\n"
+                        f"  Total tokens:       {total_tokens:,}\n"
+                        f"  Elapsed:            {(finished - started_at).total_seconds():.1f}s\n"
+                        f"{'=' * 60}",
+                        flush=True,
+                    )
                 except Exception:
                     finished = _utc_now()
                     metadata.update(
@@ -688,6 +884,5 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
     overall["finished_at"] = _iso(finished_at)
     overall["elapsed_seconds"] = round((finished_at - global_started).total_seconds(), 3)
 
-    experiment_summary_path = args.results_root / _safe_segment(config.name) / "run_summary.json"
     _write_json(experiment_summary_path, overall)
     return overall

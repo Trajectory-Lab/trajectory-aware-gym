@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 from trajectory_aware_gym.experiments.runner import (
@@ -49,7 +50,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--fresh",
         action="store_true",
-        help="Remove existing results for this config.name before running",
+        help="Skip resuming an incomplete run; start a new one",
+    )
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="Resume a specific run by its timestamp (e.g. 20260408T150000Z)",
+    )
+    parser.add_argument(
+        "--danger-purge",
+        action="store_true",
+        help="Delete ALL prior results for this config before running (requires confirmation)",
     )
     parser.add_argument(
         "--results-root",
@@ -68,6 +80,20 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     """CLI entrypoint."""
     args = parse_args()
+
+    purge = args.danger_purge
+    if purge:
+        config_dir = args.results_root / args.config.stem
+        print(
+            f"WARNING: This will permanently delete ALL results under {config_dir}/\n"
+            f"Type 'yes' to confirm: ",
+            end="",
+        )
+        confirmation = input().strip()
+        if confirmation != "yes":
+            print("Aborted.")
+            sys.exit(1)
+
     run_experiment(
         RunExperimentArgs(
             config_path=args.config,
@@ -76,6 +102,8 @@ def main() -> None:
             models=tuple(args.models) if args.models else None,
             seeds=tuple(args.seeds) if args.seeds else None,
             fresh=args.fresh,
+            purge=purge,
+            resume=args.resume,
             results_root=args.results_root,
             halt_on_budget_exceeded=args.halt_on_budget_exceeded,
         )

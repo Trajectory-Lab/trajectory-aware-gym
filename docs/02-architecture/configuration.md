@@ -51,7 +51,7 @@ task_lm = get_task_lm("qwen3:1.7b", "train")            # Ollama, temp=1.0
 eval_lm = get_task_lm("llama:8b", "eval")               # Bedrock, temp=0.0
 sage_lm = get_task_lm("qwen3-sagemaker:1.7b", "train")  # SageMaker, temp=1.0
 
-# Reflection model (Claude Sonnet 4.5 via Bedrock)
+# Reflection model (via Bedrock, configured per experiment)
 reflection_lm = get_reflection_lm()
 
 # With DSPy

@@ -23,6 +23,7 @@ from trajectory_aware_gym.experiments.runner import (
     _extract_pareto_frontier,
     _extract_reflection_usage,
     _extract_task_usage,
+    _find_resumable_run,
     _fitness_override_context,
     _git_commit_hash,
     _model_replication_dir,
@@ -41,6 +42,14 @@ from trajectory_aware_gym.metrics import EpisodeRawMetrics
 from trajectory_aware_gym.models.experiment import ExperimentConfig, FitnessOverride
 
 QUICK_TEST_CONFIG = Path("experiments/quick-test/config.yaml")
+
+
+def _find_replication_dir(tmp_path: Path, config_name: str, model_name: str, seed: int) -> Path:
+    """Locate the timestamped replication dir for a config/model/seed combo."""
+    config_dir = tmp_path / config_name
+    ts_dirs = sorted(d for d in config_dir.iterdir() if d.is_dir())
+    assert len(ts_dirs) >= 1, f"No timestamp dirs found under {config_dir}"
+    return ts_dirs[-1] / model_name / f"replication_{seed}"
 
 
 def _make_metric(
@@ -209,6 +218,8 @@ def test_run_experiment_writes_full_replication_artifacts(
                 "episodes": 1,
                 "successes": 1,
                 "success_rate": 1.0,
+                "correct": 1,
+                "accuracy": 1.0,
                 "temperature_eval": 0.0,
             },
         ),
@@ -222,7 +233,7 @@ def test_run_experiment_writes_full_replication_artifacts(
         )
     )
 
-    replication_dir = tmp_path / "quick-test" / "Qwen3-1.7B-Base" / "replication_42"
+    replication_dir = _find_replication_dir(tmp_path, "quick-test", "Qwen3-1.7B-Base", 42)
     assert (replication_dir / "optimized_prompt.txt").exists()
     assert (replication_dir / "fitness_history.json").exists()
     assert (replication_dir / "pareto_frontier.json").exists()
@@ -235,22 +246,29 @@ def test_run_experiment_writes_full_replication_artifacts(
     assert (replication_dir / "gepa_logs").is_dir()
 
     cost_summary = json.loads((replication_dir / "cost_summary.json").read_text(encoding="utf-8"))
-    assert cost_summary["task_model_tokens"] == 35
+    # train(10+20) + baseline_eval(5) + eval(5) = 40
+    assert cost_summary["task_model_tokens"] == 40
     assert cost_summary["reflection_tokens"] == 7
-    assert cost_summary["total_tokens"] == 42
-    assert cost_summary["task_model_cost"] == pytest.approx(0.35)
+    assert cost_summary["total_tokens"] == 47
+    # train(0.10+0.20) + baseline_eval(0.05) + eval(0.05) = 0.40
+    assert cost_summary["task_model_cost"] == pytest.approx(0.40)
     assert cost_summary["reflection_cost"] == pytest.approx(0.07)
-    assert cost_summary["total_cost"] == pytest.approx(0.42)
+    assert cost_summary["total_cost"] == pytest.approx(0.47)
+    assert cost_summary["baseline_eval_task_model_tokens"] == 5
+    assert cost_summary["baseline_eval_task_model_cost"] == pytest.approx(0.05)
 
     metadata = json.loads((replication_dir / "run_metadata.json").read_text(encoding="utf-8"))
     assert metadata["status"] == "completed"
     assert metadata["result"]["final_fitness"] == pytest.approx(0.9)
+    assert metadata["baseline_eval"]["accuracy"] == 1.0
+    assert metadata["baseline_eval"]["episodes"] == 1
 
     raw_summary = json.loads(
         (replication_dir / "raw_metrics_summary.json").read_text(encoding="utf-8")
     )
-    assert raw_summary["episodes"] == 3
-    assert raw_summary["successes"] == 2
+    # 2 train + 1 baseline eval + 1 optimized eval = 4
+    assert raw_summary["episodes"] == 4
+    assert raw_summary["successes"] == 3
     assert raw_summary["mean_cost_data_coverage"] > 0
     assert raw_summary["mean_token_data_coverage"] > 0
 
@@ -263,7 +281,16 @@ def test_run_experiment_skips_completed_replication(
 ) -> None:
     import trajectory_aware_gym.experiments.runner as runner_module
 
-    replication_dir = tmp_path / "quick-test" / "Qwen3-1.7B-Base" / "replication_42"
+    # Pre-create an incomplete run (run_summary.json without finished_at) so
+    # the runner resumes into this timestamp directory.
+    ts = "20260101T000000Z"
+    ts_dir = tmp_path / "quick-test" / ts
+    ts_dir.mkdir(parents=True)
+    (ts_dir / "run_summary.json").write_text(
+        json.dumps({"finished_at": None}),
+        encoding="utf-8",
+    )
+    replication_dir = ts_dir / "Qwen3-1.7B-Base" / "replication_42"
     replication_dir.mkdir(parents=True)
     (replication_dir / "run_metadata.json").write_text(
         json.dumps({"status": "completed"}),
@@ -350,7 +377,7 @@ def test_git_commit_hash_reads_head_and_ref(tmp_path: Path) -> None:
         result = _git_commit_hash()
     finally:
         os.chdir(original_cwd)
-    assert result == "deadbeef1234"
+    assert result == "deadbeef1234"  # pragma: allowlist secret
 
 
 def test_git_commit_hash_returns_none_when_no_git_dir(tmp_path: Path) -> None:
@@ -637,9 +664,9 @@ def test_eval_examples_uses_offset_seed_and_closes_env() -> None:
         examples = runner_module._eval_examples(config)
 
     start_seed = config.seeds.data_seed + config.environment.train_size
-    assert len(examples) == config.environment.effective_val_size
+    assert len(examples) == config.environment.effective_eval_size
     assert seen_seeds[0] == start_seed
-    assert seen_seeds[-1] == start_seed + config.environment.effective_val_size - 1
+    assert seen_seeds[-1] == start_seed + config.environment.effective_eval_size - 1
     assert env_closed["value"] is True
 
 
@@ -691,11 +718,13 @@ def test_run_heldout_eval_rollouts_and_summary(monkeypatch: pytest.MonkeyPatch) 
     assert summary["episodes"] == 4
     assert summary["successes"] == 2
     assert summary["success_rate"] == pytest.approx(0.5)
+    assert summary["correct"] == 2
+    assert summary["accuracy"] == pytest.approx(0.5)
     assert run_calls == [
         (0, 100, "p1"),
-        (1, 101, "p1"),
+        (1, 101, None),
         (2, 200, "p2"),
-        (3, 201, "p2"),
+        (3, 201, None),
     ]
 
 
@@ -726,23 +755,22 @@ def test_extract_fitness_history_no_detailed_results() -> None:
     assert _extract_fitness_history(module) == []
 
 
-def test_extract_fitness_history_with_history_list() -> None:
-    detailed = SimpleNamespace(history=[{"step": 0, "score": 0.3}, {"step": 1, "score": 0.7}])
+def test_extract_fitness_history_with_all_fields() -> None:
+    detailed = SimpleNamespace(
+        val_aggregate_scores=[0.3, 0.7],
+        val_subscores=[{0: 0.0, 1: 0.95}, {0: 0.95, 1: 0.95}],
+        discovery_eval_counts=[0, 53],
+    )
     module = SimpleNamespace(detailed_results=detailed)
     result = _extract_fitness_history(module)
-    assert result == [{"step": 0, "score": 0.3}, {"step": 1, "score": 0.7}]
+    assert result == [
+        {"index": 0, "val_aggregate_score": 0.3, "accuracy": 0.5, "metric_calls": 0},
+        {"index": 1, "val_aggregate_score": 0.7, "accuracy": 1.0, "metric_calls": 53},
+    ]
 
 
-def test_extract_fitness_history_history_list_filters_non_dicts() -> None:
-    detailed = SimpleNamespace(history=[{"score": 0.5}, "not-a-dict", 42, None])
-    module = SimpleNamespace(detailed_results=detailed)
-    result = _extract_fitness_history(module)
-    assert result == [{"score": 0.5}]
-
-
-def test_extract_fitness_history_falls_back_to_aggregate() -> None:
+def test_extract_fitness_history_aggregate_only() -> None:
     detailed = SimpleNamespace(val_aggregate_scores=[0.2, 0.8, 0.9])
-    # no `history` attribute → falls back to val_aggregate_scores
     module = SimpleNamespace(detailed_results=detailed)
     result = _extract_fitness_history(module)
     assert result == [
@@ -762,7 +790,6 @@ def test_extract_fitness_history_aggregate_skips_non_numeric() -> None:
 
 
 def test_extract_fitness_history_fallthrough_returns_empty() -> None:
-    # detailed_results exists but neither `history` nor `val_aggregate_scores`
     detailed = SimpleNamespace()
     module = SimpleNamespace(detailed_results=detailed)
     assert _extract_fitness_history(module) == []
@@ -805,52 +832,73 @@ def test_completed_invalid_json_returns_false(tmp_path: Path) -> None:
     assert _completed(d) is False
 
 
+# ── _find_resumable_run ────────────────────────────────────────────────────
+
+
+def test_find_resumable_run_returns_none_when_no_config_dir(tmp_path: Path) -> None:
+    assert _find_resumable_run(tmp_path, "nonexistent") is None
+
+
+def test_find_resumable_run_returns_none_when_all_complete(tmp_path: Path) -> None:
+    ts_dir = tmp_path / "my-config" / "20260101T000000Z"
+    ts_dir.mkdir(parents=True)
+    (ts_dir / "run_summary.json").write_text(
+        json.dumps({"finished_at": "2026-01-01T00:01:00Z"}),
+        encoding="utf-8",
+    )
+    assert _find_resumable_run(tmp_path, "my-config") is None
+
+
+def test_find_resumable_run_returns_incomplete(tmp_path: Path) -> None:
+    ts_dir = tmp_path / "my-config" / "20260101T000000Z"
+    ts_dir.mkdir(parents=True)
+    (ts_dir / "run_summary.json").write_text(
+        json.dumps({"finished_at": None}),
+        encoding="utf-8",
+    )
+    assert _find_resumable_run(tmp_path, "my-config") == "20260101T000000Z"
+
+
+def test_find_resumable_run_picks_most_recent(tmp_path: Path) -> None:
+    for ts in ("20260101T000000Z", "20260102T000000Z"):
+        d = tmp_path / "my-config" / ts
+        d.mkdir(parents=True)
+        (d / "run_summary.json").write_text(
+            json.dumps({"finished_at": None}),
+            encoding="utf-8",
+        )
+    assert _find_resumable_run(tmp_path, "my-config") == "20260102T000000Z"
+
+
+def test_find_resumable_run_ignores_corrupt_json(tmp_path: Path) -> None:
+    ts_dir = tmp_path / "my-config" / "20260101T000000Z"
+    ts_dir.mkdir(parents=True)
+    (ts_dir / "run_summary.json").write_text("{{ bad json", encoding="utf-8")
+    assert _find_resumable_run(tmp_path, "my-config") is None
+
+
 # ── _resolve_task_model_id ─────────────────────────────────────────────────
 
 
-def test_resolve_task_model_id_ollama_returns_model_id() -> None:
-    from trajectory_aware_gym.models.experiment import TaskModelConfig
-
-    model = TaskModelConfig(
-        name="Qwen3-1.7B",
-        model_id="ollama/qwen3-1.7b-base",
-        provider="ollama",
-        parameter_count="1.7B",
-    )
+@pytest.mark.parametrize(
+    ("provider", "model_id"),
+    [
+        ("ollama", "ollama/qwen3-1.7b-base"),
+        ("bedrock", "bedrock/llama-8b"),
+        ("sagemaker", "sagemaker/qwen3-4b-base"),
+    ],
+)
+def test_resolve_task_model_id_returns_model_id(provider: str, model_id: str) -> None:
     from trajectory_aware_gym.experiments.runner import _resolve_task_model_id
-
-    assert _resolve_task_model_id(model) == "ollama/qwen3-1.7b-base"
-
-
-def test_resolve_task_model_id_bedrock_success(monkeypatch: pytest.MonkeyPatch) -> None:
-    import trajectory_aware_gym.experiments.runner as runner_module
     from trajectory_aware_gym.models.experiment import TaskModelConfig
 
-    monkeypatch.setattr(runner_module, "get_task_model_id", lambda name: "bedrock/resolved-id")
-
     model = TaskModelConfig(
-        name="Llama3-8B",
-        model_id="bedrock/llama",
-        provider="bedrock",
-        parameter_count="8B",
+        name="test-model",
+        model_id=model_id,
+        provider=provider,
+        parameter_count="4B",
     )
-    assert runner_module._resolve_task_model_id(model) == "bedrock/resolved-id"
-
-
-def test_resolve_task_model_id_bedrock_not_found_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    import trajectory_aware_gym.experiments.runner as runner_module
-    from trajectory_aware_gym.models.experiment import TaskModelConfig
-
-    monkeypatch.setattr(runner_module, "get_task_model_id", lambda name: None)
-
-    model = TaskModelConfig(
-        name="Unknown",
-        model_id="bedrock/unknown",
-        provider="bedrock",
-        parameter_count="?",
-    )
-    with pytest.raises(ValueError, match="Unable to resolve model id"):
-        runner_module._resolve_task_model_id(model)
+    assert _resolve_task_model_id(model) == model_id
 
 
 # ── _build_task_lm ─────────────────────────────────────────────────────────
@@ -881,37 +929,29 @@ def test_build_task_lm_ollama_passes_api_base(monkeypatch: pytest.MonkeyPatch) -
     assert captured["model"] == "ollama/qwen3-1.7b-base"
 
 
-def test_build_task_lm_bedrock_success(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_build_task_lm_sagemaker_passes_region(monkeypatch: pytest.MonkeyPatch) -> None:
     import trajectory_aware_gym.experiments.runner as runner_module
     from trajectory_aware_gym.models.experiment import ExperimentConfig, TaskModelConfig
 
     config = ExperimentConfig.from_yaml(QUICK_TEST_CONFIG)
     model = TaskModelConfig(
-        name="Llama3-8B",
-        model_id="bedrock/llama",
-        provider="bedrock",
-        parameter_count="8B",
+        name="Qwen3-4B-Base",
+        model_id="sagemaker/qwen3-4b-base",
+        provider="sagemaker",
+        parameter_count="4B",
     )
-    fake_lm = SimpleNamespace()
-    monkeypatch.setattr(runner_module, "get_task_lm", lambda name, mode: fake_lm)
-    result = runner_module._build_task_lm(config, model)
-    assert result is fake_lm
 
+    captured: dict = {}
 
-def test_build_task_lm_bedrock_returns_none_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    import trajectory_aware_gym.experiments.runner as runner_module
-    from trajectory_aware_gym.models.experiment import ExperimentConfig, TaskModelConfig
+    def fake_lm(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(**kwargs)
 
-    config = ExperimentConfig.from_yaml(QUICK_TEST_CONFIG)
-    model = TaskModelConfig(
-        name="Unknown",
-        model_id="bedrock/unknown",
-        provider="bedrock",
-        parameter_count="?",
-    )
-    monkeypatch.setattr(runner_module, "get_task_lm", lambda name, mode: None)
-    with pytest.raises(ValueError, match="Unable to build task LM"):
-        runner_module._build_task_lm(config, model)
+    monkeypatch.setattr(runner_module.dspy, "LM", fake_lm)
+    runner_module._build_task_lm(config, model)
+
+    assert captured["model"] == "sagemaker/qwen3-4b-base"
+    assert "api_base" not in captured
 
 
 # ── _budget_alert_fraction ─────────────────────────────────────────────────
@@ -963,8 +1003,9 @@ def test_model_replication_dir_path_structure(tmp_path: Path) -> None:
     config = ExperimentConfig.from_yaml(QUICK_TEST_CONFIG)
     model = config.task_models[0]
     args = RunExperimentArgs(config_path=QUICK_TEST_CONFIG, results_root=tmp_path)
-    result = _model_replication_dir(args, config, model, 42)
-    assert result == tmp_path / "quick-test" / _safe_segment(model.name) / "replication_42"
+    ts = "20260101T000000Z"
+    result = _model_replication_dir(args, config, model, 42, ts)
+    assert result == tmp_path / "quick-test" / ts / _safe_segment(model.name) / "replication_42"
 
 
 # ── _config_hash ───────────────────────────────────────────────────────────
@@ -992,20 +1033,14 @@ def test_fitness_override_context_no_op_with_empty_override() -> None:
     assert settings.fitness.gamma == pytest.approx(original_gamma)
 
 
-# ── run_experiment: fresh=True ─────────────────────────────────────────────
+# ── run_experiment: fresh / purge ──────────────────────────────────────────
 
 
-def test_run_experiment_fresh_removes_existing_dir(
+def _setup_fake_runner(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    runner_module: Any,
 ) -> None:
-    import trajectory_aware_gym.experiments.runner as runner_module
-
-    existing = tmp_path / "quick-test" / "should-be-deleted"
-    existing.mkdir(parents=True)
-    sentinel = existing / "old_file.txt"
-    sentinel.write_text("old content", encoding="utf-8")
-
+    """Patch runner_module dependencies for lightweight integration tests."""
     eval_result = _make_episode_result("e1", success=True, cost=0.01, tokens=1)
 
     class FakeRunner:
@@ -1041,9 +1076,59 @@ def test_run_experiment_fresh_removes_existing_dir(
         "_run_heldout_eval",
         lambda **kwargs: (
             [eval_result],
-            {"episodes": 1, "successes": 1, "success_rate": 1.0, "temperature_eval": 0.0},
+            {
+                "episodes": 1,
+                "successes": 1,
+                "success_rate": 1.0,
+                "correct": 1,
+                "accuracy": 1.0,
+                "temperature_eval": 0.0,
+            },
         ),
     )
+
+
+def test_run_experiment_purge_removes_existing_dir(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import trajectory_aware_gym.experiments.runner as runner_module
+
+    existing = tmp_path / "quick-test" / "should-be-deleted"
+    existing.mkdir(parents=True)
+    sentinel = existing / "old_file.txt"
+    sentinel.write_text("old content", encoding="utf-8")
+
+    _setup_fake_runner(monkeypatch, runner_module)
+
+    run_experiment(
+        RunExperimentArgs(
+            config_path=QUICK_TEST_CONFIG,
+            results_root=tmp_path,
+            purge=True,
+        )
+    )
+
+    assert not sentinel.exists()
+
+
+def test_run_experiment_fresh_skips_resume(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """fresh=True creates a new timestamp dir even when a resumable run exists."""
+    import trajectory_aware_gym.experiments.runner as runner_module
+
+    # Create a resumable (incomplete) run directory.
+    old_ts = "20260101T000000Z"
+    old_dir = tmp_path / "quick-test" / old_ts
+    old_dir.mkdir(parents=True)
+    (old_dir / "run_summary.json").write_text(
+        json.dumps({"finished_at": None}),
+        encoding="utf-8",
+    )
+
+    _setup_fake_runner(monkeypatch, runner_module)
 
     run_experiment(
         RunExperimentArgs(
@@ -1053,7 +1138,11 @@ def test_run_experiment_fresh_removes_existing_dir(
         )
     )
 
-    assert not sentinel.exists()
+    # Should have two timestamp dirs: the old one and a new one.
+    config_dir = tmp_path / "quick-test"
+    ts_dirs = sorted(d.name for d in config_dir.iterdir() if d.is_dir())
+    assert len(ts_dirs) == 2
+    assert old_ts in ts_dirs
 
 
 # ── run_experiment: budget alert and halt ─────────────────────────────────
@@ -1109,7 +1198,14 @@ def _make_run_experiment_mocks(
         "_run_heldout_eval",
         lambda **kwargs: (
             [],
-            {"episodes": 0, "successes": 0, "success_rate": 0.0, "temperature_eval": 0.0},
+            {
+                "episodes": 0,
+                "successes": 0,
+                "success_rate": 0.0,
+                "correct": 0,
+                "accuracy": 0.0,
+                "temperature_eval": 0.0,
+            },
         ),
     )
 
@@ -1202,7 +1298,7 @@ def test_run_experiment_exception_writes_failed_status_and_reraises(
     with pytest.raises(RuntimeError, match="GEPA exploded"):
         run_experiment(RunExperimentArgs(config_path=QUICK_TEST_CONFIG, results_root=tmp_path))
 
-    replication_dir = tmp_path / "quick-test" / "Qwen3-1.7B-Base" / "replication_42"
+    replication_dir = _find_replication_dir(tmp_path, "quick-test", "Qwen3-1.7B-Base", 42)
     metadata = json.loads((replication_dir / "run_metadata.json").read_text(encoding="utf-8"))
     assert metadata["status"] == "failed"
     assert metadata["finished_at"] is not None
@@ -1246,7 +1342,14 @@ def test_run_experiment_result_none_when_no_detailed_results(
         "_run_heldout_eval",
         lambda **kwargs: (
             [],
-            {"episodes": 0, "successes": 0, "success_rate": 0.0, "temperature_eval": 0.0},
+            {
+                "episodes": 0,
+                "successes": 0,
+                "success_rate": 0.0,
+                "correct": 0,
+                "accuracy": 0.0,
+                "temperature_eval": 0.0,
+            },
         ),
     )
 
@@ -1255,7 +1358,7 @@ def test_run_experiment_result_none_when_no_detailed_results(
     )
 
     assert summary["models"]["Qwen3-1.7B-Base"]["42"]["status"] == "completed"
-    replication_dir = tmp_path / "quick-test" / "Qwen3-1.7B-Base" / "replication_42"
+    replication_dir = _find_replication_dir(tmp_path, "quick-test", "Qwen3-1.7B-Base", 42)
     prompt_text = (replication_dir / "optimized_prompt.txt").read_text(encoding="utf-8")
     assert prompt_text == "fallback-prompt"
     metadata = json.loads((replication_dir / "run_metadata.json").read_text(encoding="utf-8"))
@@ -1292,6 +1395,8 @@ def test_cli_parse_args_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert args.models is None
     assert args.seeds is None
     assert args.fresh is False
+    assert args.resume is None
+    assert args.danger_purge is False
     assert args.results_root == Path("results")
     assert args.halt_on_budget_exceeded is False
 
@@ -1314,6 +1419,7 @@ def test_cli_parse_args_all_flags(monkeypatch: pytest.MonkeyPatch) -> None:
             "42",
             "123",
             "--fresh",
+            "--danger-purge",
             "--results-root",
             "/tmp/results",
             "--halt-on-budget-exceeded",
@@ -1326,6 +1432,7 @@ def test_cli_parse_args_all_flags(monkeypatch: pytest.MonkeyPatch) -> None:
     assert args.models == ["Qwen3-1.7B-Base"]
     assert args.seeds == [42, 123]
     assert args.fresh is True
+    assert args.danger_purge is True
     assert args.results_root == Path("/tmp/results")
     assert args.halt_on_budget_exceeded is True
 

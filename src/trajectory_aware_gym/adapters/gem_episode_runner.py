@@ -143,10 +143,9 @@ def generate_smoke_action(
         reasoning = getattr(msg, "reasoning_content", None) or ""
         action = _extract_text_content(reasoning) if reasoning else "[empty-action]"
 
-    # LiteLLM converts chat messages into a text prompt for base models
-    # (ollama/ prefix → /api/generate). The response often starts with
-    # "### Assistant:" from the auto-generated prompt template — strip it
-    # so the GEM environment sees only the model's actual answer.
+    # LiteLLM converts chat messages into a text prompt for completion-style
+    # providers. The response often echoes the prompt. Strip provider-specific
+    # prefixes so the GEM environment sees only the model's actual answer.
     if model_id.startswith("ollama/"):
         for prefix in ("### Assistant:\n", "### Assistant: ", "Assistant:\n", "Assistant: "):
             if action.startswith(prefix):
@@ -162,7 +161,7 @@ def generate_smoke_action(
     try:
         maybe_cost = completion_cost(completion_response=response)
         cost_usd = float(maybe_cost)
-    except (KeyError, TypeError, ValueError):
+    except Exception:  # noqa: BLE001  # LiteLLM raises bare Exception for unmapped models
         cost_usd = None
 
     return action, LLMCallMetadata(

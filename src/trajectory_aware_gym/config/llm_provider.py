@@ -87,6 +87,7 @@ def get_reflection_lm(
         "model": f"bedrock/{model_id or settings.gepa.reflection_model}",
         "temperature": temperature,
         "max_tokens": max_tokens,
+        "num_retries": 3,
     }
     aws_region = getattr(settings.aws, "region", None)
     if aws_region is not None:
