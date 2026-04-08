@@ -8,27 +8,27 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from trajectory_aware_gym.adapters.gem_episode_runner import GEMEpisodeResult
+from trajectory_aware_gym.config.core import Settings
 from trajectory_aware_gym.experiments.runner import (
     DEFAULT_SEED_PROMPT,
     RunExperimentArgs,
     _budget_alert_fraction,
-    _completed,
+    _build_examples,
     _config_hash,
     _extract_fitness_history,
     _extract_pareto_frontier,
     _extract_reflection_usage,
     _extract_task_usage,
     _find_resumable_run,
-    _fitness_override_context,
     _git_commit_hash,
+    _is_replication_completed,
     _model_replication_dir,
     _raw_metrics_summary,
-    _resolve_task_model_id,
     _safe_segment,
     _write_csv,
     _write_json,
@@ -132,35 +132,36 @@ def test_model_and_seed_selectors_validate_subset() -> None:
         select_replication_seeds(config, (999,))
 
 
-def test_fitness_override_context_applies_and_restores() -> None:
+def test_settings_override_fitness_applies_and_restores() -> None:
     from trajectory_aware_gym.config import settings
 
     original_gamma = settings.fitness.gamma
     override = FitnessOverride(gamma=0.123)
+    patch = override.model_dump(mode="json", by_alias=True, exclude_none=True)
 
-    with _fitness_override_context(override):
+    with Settings.override_fitness(patch):
         assert settings.fitness.gamma == pytest.approx(0.123)
 
     assert settings.fitness.gamma == pytest.approx(original_gamma)
 
 
-def test_completed_checks_run_metadata_status(tmp_path: Path) -> None:
+def test_is_replication_completed_checks_run_metadata_status(tmp_path: Path) -> None:
     replication_dir = tmp_path / "replication_42"
     replication_dir.mkdir(parents=True)
 
-    assert _completed(replication_dir) is False
+    assert _is_replication_completed(replication_dir) is False
 
     (replication_dir / "run_metadata.json").write_text(
         json.dumps({"status": "running"}),
         encoding="utf-8",
     )
-    assert _completed(replication_dir) is False
+    assert _is_replication_completed(replication_dir) is False
 
     (replication_dir / "run_metadata.json").write_text(
         json.dumps({"status": "completed"}),
         encoding="utf-8",
     )
-    assert _completed(replication_dir) is True
+    assert _is_replication_completed(replication_dir) is True
 
 
 def test_run_experiment_writes_full_replication_artifacts(
@@ -214,14 +215,7 @@ def test_run_experiment_writes_full_replication_artifacts(
         "_run_heldout_eval",
         lambda **kwargs: (
             eval_results,
-            {
-                "episodes": 1,
-                "successes": 1,
-                "success_rate": 1.0,
-                "correct": 1,
-                "accuracy": 1.0,
-                "temperature_eval": 0.0,
-            },
+            _default_eval_summary(episodes=1, successes=1, correct=1),
         ),
     )
 
@@ -339,14 +333,9 @@ def test_git_commit_hash_returns_hash_for_detached_head(tmp_path: Path) -> None:
     git_dir = tmp_path / ".git"
     git_dir.mkdir()
     (git_dir / "HEAD").write_text("abc123def456\n", encoding="utf-8")
-    with patch("trajectory_aware_gym.experiments.runner.Path") as mock_path_cls:
-        mock_path_cls.side_effect = lambda *args: (
-            tmp_path.joinpath(*args)
-            if args[0] == ".git/HEAD" or (len(args) == 1 and args[0] == ".git/HEAD")
-            else Path(*args)
-        )
-    result = _git_commit_hash()
-    assert result is None or isinstance(result, str)
+    with patch("trajectory_aware_gym.experiments.runner._PROJECT_ROOT", tmp_path):
+        result = _git_commit_hash()
+    assert result == "abc123def456"  # pragma: allowlist secret
 
 
 def test_git_commit_hash_reads_head_and_ref(tmp_path: Path) -> None:
@@ -356,48 +345,27 @@ def test_git_commit_hash_reads_head_and_ref(tmp_path: Path) -> None:
     ref_dir.mkdir(parents=True)
     (git_dir / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
     (ref_dir / "main").write_text("deadbeef1234\n", encoding="utf-8")
-    with patch("trajectory_aware_gym.experiments.runner.Path") as mock_path_cls:
-
-        def _fake_path(*args):
-            if len(args) == 1 and args[0] == ".git/HEAD":
-                return git_dir / "HEAD"
-            if len(args) == 2 and args[0] == ".git":
-                return git_dir / args[1]
-            return Path(*args)
-
-        mock_path_cls.side_effect = _fake_path
-        # Exercise the real function via integration path using actual files.
-
-    # Integration test: run directly against real tmp_path git layout.
-    import os
-
-    original_cwd = os.getcwd()
-    try:
-        os.chdir(tmp_path)
+    with patch("trajectory_aware_gym.experiments.runner._PROJECT_ROOT", tmp_path):
         result = _git_commit_hash()
-    finally:
-        os.chdir(original_cwd)
     assert result == "deadbeef1234"  # pragma: allowlist secret
 
 
 def test_git_commit_hash_returns_none_when_no_git_dir(tmp_path: Path) -> None:
     """No .git directory present → returns None."""
-    import os
-
-    original_cwd = os.getcwd()
-    try:
-        os.chdir(tmp_path)
+    with patch("trajectory_aware_gym.experiments.runner._PROJECT_ROOT", tmp_path):
         result = _git_commit_hash()
-    finally:
-        os.chdir(original_cwd)
     assert result is None
 
 
 def test_git_commit_hash_returns_none_on_oserror(tmp_path: Path) -> None:
     """OSError reading .git files → returns None."""
-    with patch("trajectory_aware_gym.experiments.runner.Path") as mock_path_cls:
-        mock_path_cls.return_value.exists.return_value = True
-        mock_path_cls.return_value.read_text.side_effect = OSError("Permission denied")
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+    (git_dir / "HEAD").write_text("abc123\n", encoding="utf-8")
+    with (
+        patch("trajectory_aware_gym.experiments.runner._PROJECT_ROOT", tmp_path),
+        patch.object(Path, "read_text", side_effect=OSError("Permission denied")),
+    ):
         result = _git_commit_hash()
     assert result is None
 
@@ -407,14 +375,18 @@ def test_git_commit_hash_returns_none_for_empty_head(tmp_path: Path) -> None:
     git_dir = tmp_path / ".git"
     git_dir.mkdir()
     (git_dir / "HEAD").write_text("   \n", encoding="utf-8")
-    import os
-
-    original_cwd = os.getcwd()
-    try:
-        os.chdir(tmp_path)
+    with patch("trajectory_aware_gym.experiments.runner._PROJECT_ROOT", tmp_path):
         result = _git_commit_hash()
-    finally:
-        os.chdir(original_cwd)
+    assert result is None
+
+
+def test_git_commit_hash_rejects_path_traversal(tmp_path: Path) -> None:
+    """A malicious ref: with '..' must not read outside .git/."""
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+    (git_dir / "HEAD").write_text("ref: ../../etc/passwd\n", encoding="utf-8")
+    with patch("trajectory_aware_gym.experiments.runner._PROJECT_ROOT", tmp_path):
+        result = _git_commit_hash()
     assert result is None
 
 
@@ -587,20 +559,13 @@ def test_extract_reflection_usage_adds_numeric_completion_cost() -> None:
 # ── dataset/eval helpers ───────────────────────────────────────────────────
 
 
-def test_build_trainset_uses_expected_seeds_and_closes_env() -> None:
-    import importlib
-
-    import trajectory_aware_gym.experiments.runner as runner_module
-
-    config = ExperimentConfig.from_yaml(QUICK_TEST_CONFIG)
-
-    seen_seeds: list[int] = []
-    env_closed = {"value": False}
+def _fake_gem_env(seen_seeds: list[int], env_closed: dict[str, bool], prefix: str = "obs"):
+    """Create a fake GEM environment and gem module for testing _build_examples."""
 
     class FakeEnv:
         def reset(self, *, seed: int):
             seen_seeds.append(seed)
-            return (f"train-observation-{seed}", {})
+            return (f"{prefix}-{seed}", {})
 
         def close(self) -> None:
             env_closed["value"] = True
@@ -619,8 +584,19 @@ def test_build_trainset_uses_expected_seeds_and_closes_env() -> None:
             return SimpleNamespace()
         raise ModuleNotFoundError(name)
 
-    with patch.object(importlib, "import_module", side_effect=fake_import_module):
-        trainset = runner_module._build_trainset(config)
+    return fake_import_module
+
+
+def test_build_examples_uses_expected_seeds_and_closes_env() -> None:
+    import importlib
+
+    config = ExperimentConfig.from_yaml(QUICK_TEST_CONFIG)
+    seen_seeds: list[int] = []
+    env_closed = {"value": False}
+    fake_import = _fake_gem_env(seen_seeds, env_closed, "train")
+
+    with patch.object(importlib, "import_module", side_effect=fake_import):
+        trainset = _build_examples(config, config.seeds.data_seed, config.environment.train_size)
 
     assert len(trainset) == config.environment.train_size
     assert seen_seeds[0] == config.seeds.data_seed
@@ -628,42 +604,18 @@ def test_build_trainset_uses_expected_seeds_and_closes_env() -> None:
     assert env_closed["value"] is True
 
 
-def test_eval_examples_uses_offset_seed_and_closes_env() -> None:
+def test_build_examples_eval_uses_offset_seed_and_closes_env() -> None:
     import importlib
 
-    import trajectory_aware_gym.experiments.runner as runner_module
-
     config = ExperimentConfig.from_yaml(QUICK_TEST_CONFIG)
-
     seen_seeds: list[int] = []
     env_closed = {"value": False}
-
-    class FakeEnv:
-        def reset(self, *, seed: int):
-            seen_seeds.append(seed)
-            return (f"eval-observation-{seed}", {})
-
-        def close(self) -> None:
-            env_closed["value"] = True
-
-    fake_env = FakeEnv()
-
-    class FakeGem:
-        @staticmethod
-        def make(_env_id: str):
-            return fake_env
-
-    def fake_import_module(name: str):
-        if name == "gem":
-            return FakeGem
-        if name == "gem.envs":
-            return SimpleNamespace()
-        raise ModuleNotFoundError(name)
-
-    with patch.object(importlib, "import_module", side_effect=fake_import_module):
-        examples = runner_module._eval_examples(config)
+    fake_import = _fake_gem_env(seen_seeds, env_closed, "eval")
 
     start_seed = config.seeds.data_seed + config.environment.train_size
+    with patch.object(importlib, "import_module", side_effect=fake_import):
+        examples = _build_examples(config, start_seed, config.environment.effective_eval_size)
+
     assert len(examples) == config.environment.effective_eval_size
     assert seen_seeds[0] == start_seed
     assert seen_seeds[-1] == start_seed + config.environment.effective_eval_size - 1
@@ -715,7 +667,9 @@ def test_run_heldout_eval_rollouts_and_summary(monkeypatch: pytest.MonkeyPatch) 
     )
 
     assert len(results) == 4
+    assert summary["episodes_attempted"] == 4
     assert summary["episodes"] == 4
+    assert summary["failed"] == 0
     assert summary["successes"] == 2
     assert summary["success_rate"] == pytest.approx(0.5)
     assert summary["correct"] == 2
@@ -825,11 +779,11 @@ def test_extract_pareto_frontier_filters_non_dicts() -> None:
 # ── _completed edge cases ──────────────────────────────────────────────────
 
 
-def test_completed_invalid_json_returns_false(tmp_path: Path) -> None:
+def test_is_replication_completed_invalid_json_returns_false(tmp_path: Path) -> None:
     d = tmp_path / "rep"
     d.mkdir()
     (d / "run_metadata.json").write_text("{{ not valid json }", encoding="utf-8")
-    assert _completed(d) is False
+    assert _is_replication_completed(d) is False
 
 
 # ── _find_resumable_run ────────────────────────────────────────────────────
@@ -875,30 +829,6 @@ def test_find_resumable_run_ignores_corrupt_json(tmp_path: Path) -> None:
     ts_dir.mkdir(parents=True)
     (ts_dir / "run_summary.json").write_text("{{ bad json", encoding="utf-8")
     assert _find_resumable_run(tmp_path, "my-config") is None
-
-
-# ── _resolve_task_model_id ─────────────────────────────────────────────────
-
-
-@pytest.mark.parametrize(
-    ("provider", "model_id"),
-    [
-        ("ollama", "ollama/qwen3-1.7b-base"),
-        ("bedrock", "bedrock/llama-8b"),
-        ("sagemaker", "sagemaker/qwen3-4b-base"),
-    ],
-)
-def test_resolve_task_model_id_returns_model_id(provider: str, model_id: str) -> None:
-    from trajectory_aware_gym.experiments.runner import _resolve_task_model_id
-    from trajectory_aware_gym.models.experiment import TaskModelConfig
-
-    model = TaskModelConfig(
-        name="test-model",
-        model_id=model_id,
-        provider=provider,
-        parameter_count="4B",
-    )
-    assert _resolve_task_model_id(model) == model_id
 
 
 # ── _build_task_lm ─────────────────────────────────────────────────────────
@@ -1022,13 +952,12 @@ def test_config_hash_is_stable() -> None:
 # ── _fitness_override_context no-op path ──────────────────────────────────
 
 
-def test_fitness_override_context_no_op_with_empty_override() -> None:
-    """A FitnessOverride with no fields set must not modify settings."""
+def test_settings_override_fitness_no_op_with_empty_override() -> None:
+    """An empty override dict must not modify settings."""
     from trajectory_aware_gym.config import settings
-    from trajectory_aware_gym.models.experiment import FitnessOverride
 
     original_gamma = settings.fitness.gamma
-    with _fitness_override_context(FitnessOverride()):
+    with Settings.override_fitness({}):
         assert settings.fitness.gamma == pytest.approx(original_gamma)
     assert settings.fitness.gamma == pytest.approx(original_gamma)
 
@@ -1036,16 +965,42 @@ def test_fitness_override_context_no_op_with_empty_override() -> None:
 # ── run_experiment: fresh / purge ──────────────────────────────────────────
 
 
+def _default_eval_summary(
+    episodes: int = 1,
+    successes: int = 1,
+    correct: int = 1,
+) -> dict[str, Any]:
+    total = episodes
+    return {
+        "episodes_attempted": total,
+        "episodes": total,
+        "failed": 0,
+        "successes": successes,
+        "success_rate": (successes / total) if total else 0.0,
+        "correct": correct,
+        "accuracy": (correct / total) if total else 0.0,
+        "temperature_eval": 0.0,
+    }
+
+
 def _setup_fake_runner(
     monkeypatch: pytest.MonkeyPatch,
     runner_module: Any,
+    *,
+    task_cost: float = 0.01,
+    task_tokens: int = 1,
+    reflection_cost: float = 0.0,
+    reflection_tokens: int = 0,
+    eval_episodes: int = 1,
+    eval_successes: int = 1,
 ) -> None:
     """Patch runner_module dependencies for lightweight integration tests."""
-    eval_result = _make_episode_result("e1", success=True, cost=0.01, tokens=1)
+    train_result = _make_episode_result("t1", success=True, cost=task_cost, tokens=task_tokens)
+    eval_result = _make_episode_result("e1", success=True, cost=task_cost, tokens=task_tokens)
 
     class FakeRunner:
         def __init__(self, **kwargs):
-            self.episode_history = (_make_episode_result("t1", success=True, cost=0.01, tokens=1),)
+            self.episode_history = (train_result,)
 
     class FakeSolverModule:
         def __init__(self, runner, default_instructions: str):
@@ -1070,20 +1025,17 @@ def _setup_fake_runner(
     monkeypatch.setattr(runner_module.dspy, "configure", lambda **kwargs: None)
     monkeypatch.setattr(runner_module, "_build_task_lm", lambda *a, **k: SimpleNamespace())
     monkeypatch.setattr(runner_module, "get_reflection_lm", lambda *a, **k: SimpleNamespace())
-    monkeypatch.setattr(runner_module, "_extract_reflection_usage", lambda lm: (0, 0.0))
+    monkeypatch.setattr(
+        runner_module,
+        "_extract_reflection_usage",
+        lambda lm: (reflection_tokens, reflection_cost),
+    )
     monkeypatch.setattr(
         runner_module,
         "_run_heldout_eval",
         lambda **kwargs: (
-            [eval_result],
-            {
-                "episodes": 1,
-                "successes": 1,
-                "success_rate": 1.0,
-                "correct": 1,
-                "accuracy": 1.0,
-                "temperature_eval": 0.0,
-            },
+            [eval_result] * eval_episodes,
+            _default_eval_summary(eval_episodes, eval_successes, eval_successes),
         ),
     )
 
@@ -1148,68 +1100,6 @@ def test_run_experiment_fresh_skips_resume(
 # ── run_experiment: budget alert and halt ─────────────────────────────────
 
 
-def _make_run_experiment_mocks(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    task_cost: float,
-    reflection_cost: float,
-    task_tokens: int = 1,
-    reflection_tokens: int = 0,
-) -> None:
-    """Patch runner internals to control cost values."""
-    import trajectory_aware_gym.experiments.runner as runner_module
-
-    episode = _make_episode_result("x", success=True, cost=task_cost, tokens=task_tokens)
-
-    class FakeRunner:
-        def __init__(self, **kwargs):
-            self.episode_history = (episode,)
-
-    class FakeSolverModule:
-        def __init__(self, runner, default_instructions: str):
-            self.instructions = default_instructions
-
-    class FakeGEPA:
-        def __init__(self, **kwargs):
-            pass
-
-        def compile(self, student, trainset, valset):
-            detailed = SimpleNamespace(
-                best_idx=0,
-                val_aggregate_scores=[0.8],
-                val_subscores=[{"k": 1.0}],
-            )
-            return SimpleNamespace(instructions="prompt", detailed_results=detailed)
-
-    monkeypatch.setattr(runner_module, "_build_trainset", lambda config: [SimpleNamespace()])
-    monkeypatch.setattr(runner_module, "GEMEpisodeRunner", FakeRunner)
-    monkeypatch.setattr(runner_module, "GEMSolverModule", FakeSolverModule)
-    monkeypatch.setattr(runner_module.dspy, "GEPA", FakeGEPA)
-    monkeypatch.setattr(runner_module.dspy, "configure", lambda **kwargs: None)
-    monkeypatch.setattr(runner_module, "_build_task_lm", lambda *a, **k: SimpleNamespace())
-    monkeypatch.setattr(runner_module, "get_reflection_lm", lambda *a, **k: SimpleNamespace())
-    monkeypatch.setattr(
-        runner_module,
-        "_extract_reflection_usage",
-        lambda lm: (reflection_tokens, reflection_cost),
-    )
-    monkeypatch.setattr(
-        runner_module,
-        "_run_heldout_eval",
-        lambda **kwargs: (
-            [],
-            {
-                "episodes": 0,
-                "successes": 0,
-                "success_rate": 0.0,
-                "correct": 0,
-                "accuracy": 0.0,
-                "temperature_eval": 0.0,
-            },
-        ),
-    )
-
-
 def test_run_experiment_logs_cost_alert(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1220,11 +1110,9 @@ def test_run_experiment_logs_cost_alert(
 
     import trajectory_aware_gym.experiments.runner as runner_module
 
-    # Cost budget in quick-test is total_budget_usd=50, buffer_pct=0.25
-    # effective = 50 * (1 - 0.25) = 37.50
-    # settings.cost_tracking.alert_threshold defaults to 100.0 (100%),
-    # so alert level is 37.50.
-    _make_run_experiment_mocks(monkeypatch, task_cost=100.0, reflection_cost=0.0)
+    _setup_fake_runner(
+        monkeypatch, runner_module, task_cost=100.0, eval_episodes=0, eval_successes=0
+    )
     monkeypatch.setattr(runner_module, "_budget_alert_fraction", lambda: 0.5)
 
     with caplog.at_level(logging.WARNING, logger="trajectory_aware_gym.experiments.runner"):
@@ -1241,7 +1129,11 @@ def test_run_experiment_cost_budget_exceeded_warning(
 ) -> None:
     import logging
 
-    _make_run_experiment_mocks(monkeypatch, task_cost=100.0, reflection_cost=0.0)
+    import trajectory_aware_gym.experiments.runner as runner_module
+
+    _setup_fake_runner(
+        monkeypatch, runner_module, task_cost=100.0, eval_episodes=0, eval_successes=0
+    )
 
     with caplog.at_level(logging.WARNING, logger="trajectory_aware_gym.experiments.runner"):
         run_experiment(RunExperimentArgs(config_path=QUICK_TEST_CONFIG, results_root=tmp_path))
@@ -1254,7 +1146,11 @@ def test_run_experiment_halt_on_budget_exceeded(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    _make_run_experiment_mocks(monkeypatch, task_cost=100.0, reflection_cost=0.0)
+    import trajectory_aware_gym.experiments.runner as runner_module
+
+    _setup_fake_runner(
+        monkeypatch, runner_module, task_cost=100.0, eval_episodes=0, eval_successes=0
+    )
 
     with pytest.raises(RuntimeError, match="Cost budget exceeded"):
         run_experiment(

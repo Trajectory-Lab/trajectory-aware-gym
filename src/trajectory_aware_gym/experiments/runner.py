@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import importlib
 import json
 import logging
 import shutil
 import time
-from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,12 +22,11 @@ from trajectory_aware_gym.adapters.dspy_adapter import TrajectoryFitnessMetric
 from trajectory_aware_gym.adapters.gem_episode_runner import GEMEpisodeResult, GEMEpisodeRunner
 from trajectory_aware_gym.adapters.gem_solver_module import GEMSolverModule
 from trajectory_aware_gym.config import settings
-from trajectory_aware_gym.config.core import FitnessModel
+from trajectory_aware_gym.config.core import Settings
 from trajectory_aware_gym.config.llm_provider import get_reflection_lm
 from trajectory_aware_gym.metrics import EpisodeRawMetrics
 from trajectory_aware_gym.models.experiment import (
     ExperimentConfig,
-    FitnessOverride,
     TaskModelConfig,
 )
 from trajectory_aware_gym.models.gepa_result import GEPARunResult, accuracy_from_subscores
@@ -38,6 +37,8 @@ DEFAULT_SEED_PROMPT = (
     "Solve the problem step by step, then give your final answer "
     "inside \\boxed{}.  For example: \\boxed{42}"
 )
+_COST_DECIMAL_PLACES = 6
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +109,7 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-def _iso(ts: datetime) -> str:
+def _format_iso(ts: datetime) -> str:
     return ts.isoformat().replace("+00:00", "Z")
 
 
@@ -124,12 +125,15 @@ def _config_hash(config: ExperimentConfig) -> str:
 def _git_commit_hash() -> str | None:
     """Read the current git commit hash without spawning a subprocess."""
     try:
-        head_file = Path(".git/HEAD")
+        git_dir = _PROJECT_ROOT / ".git"
+        head_file = git_dir / "HEAD"
         if not head_file.exists():
             return None
         head_content = head_file.read_text(encoding="utf-8").strip()
         if head_content.startswith("ref: "):
-            ref_path = Path(".git") / head_content[5:]
+            ref_path = (git_dir / head_content[5:]).resolve()
+            if not ref_path.is_relative_to(git_dir.resolve()):
+                return None
             if not ref_path.exists():
                 return None
             return ref_path.read_text(encoding="utf-8").strip() or None
@@ -175,7 +179,7 @@ def _raw_metrics_summary(rows: list[EpisodeRawMetrics]) -> dict[str, float | int
             "total_cost": None,
             "total_tokens": None,
             "mean_cost_data_coverage": None,
-            "mean_token_data_coverage": None,
+            "mean_token_data_coverage": None,  # nosec B105 — not a password
             "mean_llm_latency_data_coverage": None,
         }
 
@@ -188,14 +192,17 @@ def _raw_metrics_summary(rows: list[EpisodeRawMetrics]) -> dict[str, float | int
     return {
         "episodes": episodes,
         "successes": successes,
-        "mean_latency_seconds": round(sum(latencies) / episodes, 6),
-        "total_cost": round(sum(costs), 6) if costs else None,
+        "mean_latency_seconds": round(sum(latencies) / episodes, _COST_DECIMAL_PLACES),
+        "total_cost": round(sum(costs), _COST_DECIMAL_PLACES) if costs else None,
         "total_tokens": int(sum(tokens)) if tokens else None,
-        "mean_cost_data_coverage": round(sum(r.cost_data_coverage for r in rows) / episodes, 6),
-        "mean_token_data_coverage": round(sum(r.token_data_coverage for r in rows) / episodes, 6),
+        "mean_cost_data_coverage": round(
+            sum(r.cost_data_coverage for r in rows) / episodes, _COST_DECIMAL_PLACES
+        ),
+        "mean_token_data_coverage": round(
+            sum(r.token_data_coverage for r in rows) / episodes, _COST_DECIMAL_PLACES
+        ),
         "mean_llm_latency_data_coverage": round(
-            sum(r.llm_latency_data_coverage for r in rows) / episodes,
-            6,
+            sum(r.llm_latency_data_coverage for r in rows) / episodes, _COST_DECIMAL_PLACES
         ),
     }
 
@@ -291,12 +298,8 @@ def _replication_status(replication_dir: Path) -> str | None:
     return payload.get("status")
 
 
-def _completed(replication_dir: Path) -> bool:
+def _is_replication_completed(replication_dir: Path) -> bool:
     return _replication_status(replication_dir) == "completed"
-
-
-def _resolve_task_model_id(task_model: TaskModelConfig) -> str:
-    return task_model.model_id
 
 
 def _build_task_lm(config: ExperimentConfig, task_model: TaskModelConfig) -> Any:
@@ -314,16 +317,15 @@ def _build_task_lm(config: ExperimentConfig, task_model: TaskModelConfig) -> Any
     return dspy.LM(**kwargs)
 
 
-def _build_trainset(config: ExperimentConfig) -> list[dspy.Example]:
-    import importlib
-
+def _build_examples(config: ExperimentConfig, start_seed: int, count: int) -> list[dspy.Example]:
+    """Build dspy.Example list by resetting GEM env with sequential seeds."""
     gem = importlib.import_module("gem")
     importlib.import_module("gem.envs")
     env = gem.make(config.environment.gem_env_id)
 
     examples: list[dspy.Example] = []
-    for index in range(config.environment.train_size):
-        seed = config.seeds.data_seed + index
+    for index in range(count):
+        seed = start_seed + index
         observation, _ = env.reset(seed=seed)
         examples.append(
             dspy.Example(problem=str(observation), seed=seed).with_inputs("problem", "seed")
@@ -334,20 +336,8 @@ def _build_trainset(config: ExperimentConfig) -> list[dspy.Example]:
     return examples
 
 
-@contextmanager
-def _fitness_override_context(override: FitnessOverride) -> Any:
-    base = settings.fitness.model_dump(mode="json", by_alias=True)
-    patch = override.model_dump(mode="json", by_alias=True, exclude_none=True)
-    if not patch:
-        yield
-        return
-
-    merged = {**base, **patch}
-    type(settings)._fitness = FitnessModel(**merged)
-    try:
-        yield
-    finally:
-        type(settings)._fitness = FitnessModel(**base)
+def _build_trainset(config: ExperimentConfig) -> list[dspy.Example]:
+    return _build_examples(config, config.seeds.data_seed, config.environment.train_size)
 
 
 def _budget_alert_fraction() -> float:
@@ -404,25 +394,8 @@ def _find_resumable_run(results_root: Path, config_name: str) -> str | None:
 
 
 def _eval_examples(config: ExperimentConfig) -> list[dspy.Example]:
-    import importlib
-
-    gem = importlib.import_module("gem")
-    importlib.import_module("gem.envs")
-    env = gem.make(config.environment.gem_env_id)
-
-    examples: list[dspy.Example] = []
     start_seed = config.seeds.data_seed + config.environment.train_size
-    eval_size = config.environment.effective_eval_size
-    for index in range(eval_size):
-        seed = start_seed + index
-        observation, _ = env.reset(seed=seed)
-        examples.append(
-            dspy.Example(problem=str(observation), seed=seed).with_inputs("problem", "seed")
-        )
-
-    if hasattr(env, "close"):
-        env.close()
-    return examples
+    return _build_examples(config, start_seed, config.environment.effective_eval_size)
 
 
 @dataclass(frozen=True)
@@ -449,7 +422,7 @@ def _run_eval_task(
         max_response_tokens=config.eval_protocol.max_response_tokens,
         seed=config.seeds.data_seed + config.environment.train_size,
         experiment_name=config.name,
-        tools=[tool.value for tool in config.environment.tools if tool.value != "none"],
+        tools=config.environment.active_tool_names,
     )
     return runner.run_episode(
         task.instructions,
@@ -465,7 +438,6 @@ def _run_heldout_eval(
     config: ExperimentConfig,
     task_model_id: str,
     instructions: str,
-    max_workers: int = 8,
 ) -> tuple[list[GEMEpisodeResult], dict[str, Any]]:
     eval_examples = _eval_examples(config)
     rollouts = config.eval_protocol.rollouts_per_task
@@ -485,6 +457,7 @@ def _run_heldout_eval(
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     total_tasks = len(tasks)
+    max_workers = config.eval_protocol.max_eval_workers
     logger.info("Starting held-out eval: %d episodes, %d workers", total_tasks, max_workers)
     results: list[GEMEpisodeResult | None] = [None] * total_tasks
     done_count = 0
@@ -517,11 +490,21 @@ def _run_heldout_eval(
         print()  # newline after progress bar
 
     completed = [r for r in results if r is not None]
+    failed = total_tasks - len(completed)
+    if failed > 0:
+        logger.warning(
+            "Eval had %d/%d failed episodes — accuracy is computed over %d completed only",
+            failed,
+            total_tasks,
+            len(completed),
+        )
     successes = sum(1 for r in completed if r.raw_metrics.success)
     correct = sum(1 for r in completed if r.raw_metrics.total_reward > 0)
     total = len(completed)
     summary = {
+        "episodes_attempted": total_tasks,
         "episodes": total,
+        "failed": failed,
         "successes": successes,
         "success_rate": (successes / total) if total else 0.0,
         "correct": correct,
@@ -533,12 +516,14 @@ def _run_heldout_eval(
 
 def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
     """Run a production GEPA experiment across configured models and replications."""
-    logging.basicConfig(
-        level=getattr(logging, settings.logging.level.upper(), logging.INFO),
-        format="%(asctime)s %(levelname)s %(name)s - %(message)s",
-    )
-
     config = ExperimentConfig.from_yaml(args.config_path)
+
+    if "math" not in config.environment.env_type.value and args.seed_prompt == DEFAULT_SEED_PROMPT:
+        logger.warning(
+            "Using math-specific default seed prompt for non-math environment '%s'. "
+            "Consider passing --seed-prompt with an appropriate prompt.",
+            config.environment.env_type.value,
+        )
     models = select_task_models(config, args.models)
     replication_seeds = select_replication_seeds(config, args.seeds)
     max_metric_calls = derive_max_metric_calls(config, args.max_metric_calls)
@@ -573,12 +558,12 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
     config_hash = _config_hash(config)
     git_commit = _git_commit_hash()
 
-    overall: dict[str, Any] = {
+    run_summary: dict[str, Any] = {
         "run_id": run_id,
         "config": config.name,
         "config_hash": config_hash,
         "git_commit": git_commit,
-        "started_at": _iso(global_started),
+        "started_at": _format_iso(global_started),
         "finished_at": None,
         "max_metric_calls": max_metric_calls,
         "models": {},
@@ -588,16 +573,19 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
     experiment_summary_path = (
         args.results_root / _safe_segment(config.name) / run_timestamp / "run_summary.json"
     )
-    _write_json(experiment_summary_path, overall)
+    _write_json(experiment_summary_path, run_summary)
 
-    with _fitness_override_context(config.fitness_override):
+    override_patch = config.fitness_override.model_dump(
+        mode="json", by_alias=True, exclude_none=True
+    )
+    with Settings.override_fitness(override_patch):
         metric = TrajectoryFitnessMetric(return_feedback=True)
 
         for task_model in models:
-            model_id = _resolve_task_model_id(task_model)
+            model_id = task_model.model_id
             logger.info("Starting model: %s (%s)", task_model.name, model_id)
             model_entries: dict[str, Any] = {}
-            overall["models"][task_model.name] = model_entries
+            run_summary["models"][task_model.name] = model_entries
 
             for replication_seed in replication_seeds:
                 replication_dir = _model_replication_dir(
@@ -605,7 +593,7 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                 )
                 replication_dir.mkdir(parents=True, exist_ok=True)
 
-                if _completed(replication_dir):
+                if _is_replication_completed(replication_dir):
                     logger.info(
                         "Skipping completed replication model=%s seed=%s",
                         task_model.name,
@@ -620,7 +608,7 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                     "status": "running",
                     "config_hash": config_hash,
                     "git_commit": git_commit,
-                    "started_at": _iso(started_at),
+                    "started_at": _format_iso(started_at),
                     "finished_at": None,
                     "seed": replication_seed,
                     "model_name": task_model.name,
@@ -652,7 +640,7 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                     max_response_tokens=config.eval_protocol.max_response_tokens,
                     seed=config.seeds.data_seed,
                     experiment_name=config.name,
-                    tools=[tool.value for tool in config.environment.tools if tool.value != "none"],
+                    tools=config.environment.active_tool_names,
                 )
                 module = GEMSolverModule(runner, default_instructions=args.seed_prompt)
 
@@ -774,18 +762,20 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
 
                     cost_summary = {
                         "task_model_tokens": task_tokens,
-                        "task_model_cost": round(task_cost, 6),
+                        "task_model_cost": round(task_cost, _COST_DECIMAL_PLACES),
                         "reflection_tokens": reflection_tokens,
-                        "reflection_cost": round(reflection_cost, 6),
+                        "reflection_cost": round(reflection_cost, _COST_DECIMAL_PLACES),
                         "total_tokens": total_tokens,
-                        "total_cost": round(total_cost, 6),
+                        "total_cost": round(total_cost, _COST_DECIMAL_PLACES),
                         "effective_budget_usd": config.cost_budget.effective_budget_usd,
                         "training_task_model_tokens": task_tokens_train,
-                        "training_task_model_cost": round(task_cost_train, 6),
+                        "training_task_model_cost": round(task_cost_train, _COST_DECIMAL_PLACES),
                         "baseline_eval_task_model_tokens": task_tokens_baseline_eval,
-                        "baseline_eval_task_model_cost": round(task_cost_baseline_eval, 6),
+                        "baseline_eval_task_model_cost": round(
+                            task_cost_baseline_eval, _COST_DECIMAL_PLACES
+                        ),
                         "eval_task_model_tokens": task_tokens_eval,
-                        "eval_task_model_cost": round(task_cost_eval, 6),
+                        "eval_task_model_cost": round(task_cost_eval, _COST_DECIMAL_PLACES),
                     }
                     _write_json(replication_dir / "cost_summary.json", cost_summary)
 
@@ -816,7 +806,7 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                     metadata.update(
                         {
                             "status": "completed",
-                            "finished_at": _iso(finished),
+                            "finished_at": _format_iso(finished),
                             "elapsed_seconds": round((finished - started_at).total_seconds(), 3),
                             "result": result.model_dump(mode="json")
                             if result is not None
@@ -851,11 +841,11 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                     print(
                         f"\n{'=' * 60}\n"
                         f"  Replication complete: {task_model.name} seed={replication_seed}\n"
-                        f"  Baseline accuracy:  {baseline_acc} ({train_bench})\n"
-                        f"  Optimized accuracy: {final_acc} ({train_bench})\n"
-                        f"  Baseline eval:      {bl_eval_acc:.1%} "
+                        f"  Train: Baseline accuracy:  {baseline_acc} ({train_bench})\n"
+                        f"  Train: Optimized accuracy: {final_acc} ({train_bench})\n"
+                        f"  Test/eval: Baseline accuracy:  {bl_eval_acc:.1%} "
                         f"({bl_eval_correct}/{bl_eval_total}) ({eval_bench})\n"
-                        f"  Eval accuracy:      {eval_acc:.1%} "
+                        f"  Test/eval: Optimized accuracy: {eval_acc:.1%} "
                         f"({eval_correct}/{eval_total}) ({eval_bench})\n"
                         f"  Total cost:         ${total_cost:.4f}\n"
                         f"  Total tokens:       {total_tokens:,}\n"
@@ -868,7 +858,7 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                     metadata.update(
                         {
                             "status": "failed",
-                            "finished_at": _iso(finished),
+                            "finished_at": _format_iso(finished),
                             "elapsed_seconds": round((finished - started_at).total_seconds(), 3),
                         }
                     )
@@ -881,8 +871,8 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                     raise
 
     finished_at = _utc_now()
-    overall["finished_at"] = _iso(finished_at)
-    overall["elapsed_seconds"] = round((finished_at - global_started).total_seconds(), 3)
+    run_summary["finished_at"] = _format_iso(finished_at)
+    run_summary["elapsed_seconds"] = round((finished_at - global_started).total_seconds(), 3)
 
-    _write_json(experiment_summary_path, overall)
-    return overall
+    _write_json(experiment_summary_path, run_summary)
+    return run_summary

@@ -107,6 +107,11 @@ class EnvironmentConfig(BaseModel):
             return self.eval_size
         return self.effective_val_size
 
+    @property
+    def active_tool_names(self) -> list[str]:
+        """Tool names excluding 'none', ready for GEMEpisodeRunner."""
+        return [tool.value for tool in self.tools if tool.value != "none"]
+
     @classmethod
     def orz57k(cls) -> EnvironmentConfig:
         """Canonical Orz57K config matching the GEM paper's math training setup."""
@@ -163,6 +168,7 @@ class EvalProtocol(BaseModel):
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)
     top_k: int = Field(default=-1, description="-1 means disabled")
     rollouts_per_task: int = Field(default=5, ge=1)
+    max_eval_workers: int = Field(default=8, ge=1, description="Parallel workers for held-out eval")
     tost_margin: float = Field(default=0.05, gt=0.0, le=1.0, description="TOST equivalence margin")
     tost_alpha: float = Field(default=0.05, gt=0.0, lt=1.0)
     bootstrap_iterations: int = Field(default=1000, ge=100)

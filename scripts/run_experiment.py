@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 
+from trajectory_aware_gym.config import settings
 from trajectory_aware_gym.experiments.runner import (
     DEFAULT_SEED_PROMPT,
     RunExperimentArgs,
@@ -79,6 +81,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     """CLI entrypoint."""
+    logging.basicConfig(
+        level=getattr(logging, settings.logging.level.upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s - %(message)s",
+    )
     args = parse_args()
 
     purge = args.danger_purge
