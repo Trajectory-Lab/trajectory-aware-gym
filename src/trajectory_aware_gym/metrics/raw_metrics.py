@@ -164,7 +164,7 @@ def extract_episode_raw_metrics(trajectory: TrajectoryLog) -> EpisodeRawMetrics:
 
     terminated = trajectory.steps[-1].terminated if trajectory.steps else False
     truncated = trajectory.steps[-1].truncated if trajectory.steps else False
-    success = terminated and not truncated and trajectory.total_reward > 0
+    success = (terminated or truncated) and trajectory.total_reward > 0
 
     cost_values: list[float] = []
     prompt_token_values: list[int] = []

@@ -52,7 +52,9 @@ class DatasetSplit(BaseModel):
     subsample_strategy: Literal["uniform", "stratified"]
     eval_dataset_id: str = Field(description="HuggingFace evaluation dataset ID")
     eval_split: str = Field(description="Primary held-out evaluation split name")
-    eval_size: int = Field(ge=1, description="Number of evaluation tasks in the primary split")
+    total_eval_size: int = Field(
+        ge=1, description="Total size of the evaluation split in the source dataset"
+    )
 
     @model_validator(mode="after")
     def _subsample_within_train_size(self) -> Self:
@@ -76,7 +78,11 @@ class EnvironmentConfig(BaseModel):
     train_size: int = Field(ge=1, description="Number of training tasks (subsampled if needed)")
     val_size: int | None = Field(
         default=None,
-        description="Validation set size. None means 10% of train_size.",
+        description="GEPA validation set size. None means 10% of train_size.",
+    )
+    eval_size: int | None = Field(
+        default=None,
+        description="Held-out evaluation set size. None falls back to effective_val_size.",
     )
     test_split: str = Field(
         default="test",
@@ -89,10 +95,22 @@ class EnvironmentConfig(BaseModel):
 
     @property
     def effective_val_size(self) -> int:
-        """Validation size: explicit value or 10% of train_size."""
+        """GEPA validation size: explicit value or 10% of train_size."""
         if self.val_size is not None:
             return self.val_size
         return max(1, self.train_size // 10)
+
+    @property
+    def effective_eval_size(self) -> int:
+        """Held-out eval size: explicit eval_size, or falls back to effective_val_size."""
+        if self.eval_size is not None:
+            return self.eval_size
+        return self.effective_val_size
+
+    @property
+    def active_tool_names(self) -> list[str]:
+        """Tool names excluding 'none', ready for GEMEpisodeRunner."""
+        return [tool.value for tool in self.tools if tool.value != "none"]
 
     @classmethod
     def orz57k(cls) -> EnvironmentConfig:
@@ -112,7 +130,7 @@ class EnvironmentConfig(BaseModel):
                 subsample_strategy="uniform",
                 eval_dataset_id="axon-rl/math-eval",
                 eval_split="MATH500",
-                eval_size=500,
+                total_eval_size=500,
             ),
         )
 
@@ -134,7 +152,7 @@ class EnvironmentConfig(BaseModel):
                 subsample_strategy="uniform",
                 eval_dataset_id="axon-rl/search-eval",
                 eval_split="hotpotqa",
-                eval_size=512,
+                total_eval_size=512,
             ),
         )
 
@@ -150,6 +168,7 @@ class EvalProtocol(BaseModel):
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)
     top_k: int = Field(default=-1, description="-1 means disabled")
     rollouts_per_task: int = Field(default=5, ge=1)
+    max_eval_workers: int = Field(default=8, ge=1, description="Parallel workers for held-out eval")
     tost_margin: float = Field(default=0.05, gt=0.0, le=1.0, description="TOST equivalence margin")
     tost_alpha: float = Field(default=0.05, gt=0.0, lt=1.0)
     bootstrap_iterations: int = Field(default=1000, ge=100)

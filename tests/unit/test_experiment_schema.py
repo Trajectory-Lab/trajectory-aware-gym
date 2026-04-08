@@ -79,7 +79,7 @@ class TestDatasetSplit:
             subsample_strategy="uniform",
             eval_dataset_id="axon-rl/math-eval",
             eval_split="MATH500",
-            eval_size=500,
+            total_eval_size=500,
         )
         assert dataset.hf_dataset_id == "axon-rl/ORZ-57k"
         assert dataset.subsample_size == 500
@@ -93,7 +93,7 @@ class TestDatasetSplit:
                 subsample_strategy="uniform",
                 eval_dataset_id="axon-rl/math-eval",
                 eval_split="MATH500",
-                eval_size=500,
+                total_eval_size=500,
             )
 
     @pytest.mark.parametrize(
@@ -101,7 +101,7 @@ class TestDatasetSplit:
         [
             ("total_train_size", 0),
             ("subsample_size", 0),
-            ("eval_size", 0),
+            ("total_eval_size", 0),
         ],
     )
     def test_rejects_invalid_sizes(self, field, value):
@@ -112,7 +112,7 @@ class TestDatasetSplit:
             "subsample_strategy": "uniform",
             "eval_dataset_id": "axon-rl/search-eval",
             "eval_split": "hotpotqa",
-            "eval_size": 512,
+            "total_eval_size": 512,
             field: value,
         }
         with pytest.raises(ValidationError):
@@ -142,7 +142,7 @@ class TestEnvironmentConfig:
         assert env.discount_gamma == 0.9
         assert env.tools == [ToolType.WEB_SEARCH]
         assert env.dataset is not None
-        assert env.dataset.eval_size == 512
+        assert env.dataset.total_eval_size == 512
 
     def test_effective_val_size_defaults_to_10_pct(self):
         env = EnvironmentConfig.orz57k()

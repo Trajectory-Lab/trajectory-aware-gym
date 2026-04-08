@@ -1,4 +1,4 @@
-"""SageMaker deployment manager for Qwen base models (boto3 only).
+"""SageMaker deployment manager for Qwen models (boto3 only).
 
 Creates HuggingFace TGI endpoints for models not natively hosted on Bedrock.
 

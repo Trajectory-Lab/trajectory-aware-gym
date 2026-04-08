@@ -27,7 +27,7 @@ environment:
     subsample_strategy: uniform
     eval_dataset_id: "axon-rl/math-eval"
     eval_split: MATH500
-    eval_size: 12
+    total_eval_size: 12
 
 eval_protocol:
   max_response_tokens: 1536
@@ -47,7 +47,7 @@ task_models:
     parameter_count: "8B"
 
 reflection_model:
-  model_id: "openai.gpt-oss-120b-1:0"
+  model_id: "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
   provider: bedrock
   temperature: 1.0
   max_tokens: 15136

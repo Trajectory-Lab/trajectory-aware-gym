@@ -8,6 +8,8 @@ Priority (highest to lowest):
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Literal, get_origin
 
@@ -243,6 +245,27 @@ class Settings:
     @property
     def fitness(self) -> FitnessModel:
         return self._fitness
+
+    @classmethod
+    @contextmanager
+    def override_fitness(cls, override: dict[str, Any]) -> Iterator[None]:
+        """Temporarily replace the fitness config with merged values.
+
+        ``override`` should contain only the fields to change (non-None).
+        Original config is restored on exit, even if an exception is raised.
+        """
+        if not override:
+            yield
+            return
+
+        base = cls._fitness.model_dump(mode="json", by_alias=True)
+        merged = {**base, **override}
+        original = cls._fitness
+        cls._fitness = FitnessModel(**merged)
+        try:
+            yield
+        finally:
+            cls._fitness = original
 
 
 # ── Helpers ──────────────────────────────────────────────────────

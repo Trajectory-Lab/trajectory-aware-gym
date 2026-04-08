@@ -46,7 +46,7 @@ def compute_outcome_component(trajectory: TrajectoryLog) -> float:
     has_steps = bool(trajectory.steps)
     terminated = has_steps and trajectory.steps[-1].terminated
     truncated = has_steps and trajectory.steps[-1].truncated
-    success_bonus = 0.5 if terminated and not truncated and trajectory.total_reward > 0 else 0.0
+    success_bonus = 0.5 if (terminated or truncated) and trajectory.total_reward > 0 else 0.0
     reward_signal = _clip01(trajectory.total_reward)
     return _clip01(success_bonus + (0.5 * reward_signal))
 

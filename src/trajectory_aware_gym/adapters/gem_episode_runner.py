@@ -143,10 +143,9 @@ def generate_smoke_action(
         reasoning = getattr(msg, "reasoning_content", None) or ""
         action = _extract_text_content(reasoning) if reasoning else "[empty-action]"
 
-    # LiteLLM converts chat messages into a text prompt for base models
-    # (ollama/ prefix → /api/generate). The response often starts with
-    # "### Assistant:" from the auto-generated prompt template — strip it
-    # so the GEM environment sees only the model's actual answer.
+    # LiteLLM converts chat messages into a text prompt for completion-style
+    # providers. The response often echoes the prompt. Strip provider-specific
+    # prefixes so the GEM environment sees only the model's actual answer.
     if model_id.startswith("ollama/"):
         for prefix in ("### Assistant:\n", "### Assistant: ", "Assistant:\n", "Assistant: "):
             if action.startswith(prefix):
@@ -162,7 +161,7 @@ def generate_smoke_action(
     try:
         maybe_cost = completion_cost(completion_response=response)
         cost_usd = float(maybe_cost)
-    except (KeyError, TypeError, ValueError):
+    except Exception:  # noqa: BLE001  # LiteLLM raises bare Exception for unmapped models
         cost_usd = None
 
     return action, LLMCallMetadata(
@@ -239,6 +238,16 @@ class GEMEpisodeRunner:
         self._tools = [_normalize_tool_name(tool_name) for tool_name in (tools or [])]
         self._tool_runtime = tool_runtime or ToolRuntime()
         self._max_tool_rounds = max_tool_rounds
+        self._episode_history: list[GEMEpisodeResult] = []
+
+    @property
+    def episode_history(self) -> tuple[GEMEpisodeResult, ...]:
+        """Immutable view of all episodes executed by this runner instance."""
+        return tuple(self._episode_history)
+
+    def clear_episode_history(self) -> None:
+        """Reset in-memory episode history."""
+        self._episode_history.clear()
 
     def run(
         self,
@@ -254,6 +263,7 @@ class GEMEpisodeRunner:
             episode_index=episode_index,
             seed_override=seed_override,
             expected_observation=expected_observation,
+            persist=False,
         ).trajectory
 
     def run_episode(
@@ -335,9 +345,11 @@ class GEMEpisodeRunner:
             else:
                 trajectory = logger.build_log()
             raw_metrics = extract_episode_raw_metrics(trajectory)
-            return GEMEpisodeResult(
+            result = GEMEpisodeResult(
                 trajectory=trajectory, log_path=log_path, raw_metrics=raw_metrics
             )
+            self._episode_history.append(result)
+            return result
         finally:
             if hasattr(env, "close"):
                 env.close()
