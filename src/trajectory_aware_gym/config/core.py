@@ -123,21 +123,16 @@ class CostTrackingModel(BaseModel):
 class RetryModel(BaseModel):
     """Retry, backoff, and concurrency throttling for LLM inference."""
 
-    max_attempts: int = Field(
-        default=4, ge=1, description="Total attempts including initial (1 = no retry)"
-    )
-    initial_wait_seconds: float = Field(default=1.0, ge=0.1)
-    max_wait_seconds: float = Field(default=30.0, ge=1.0)
-    exponential_base: float = Field(default=2.0, ge=1.1)
-    jitter: bool = Field(default=True, description="Add random jitter to backoff wait times")
-    litellm_num_retries: int = Field(
-        default=0, ge=0, description="LiteLLM internal retries (0 avoids stacking)"
-    )
-    boto3_retry_mode: str = Field(default="standard")
-    boto3_max_attempts: int = Field(default=3, ge=1)
-    inference_semaphore_size: int = Field(
-        default=4, ge=1, description="Max concurrent inflight LLM calls"
-    )
+    max_attempts: int = Field(ge=1)
+    initial_wait_seconds: float = Field(ge=0.1)
+    max_wait_seconds: float = Field(ge=1.0)
+    exponential_base: float = Field(ge=1.1)
+    jitter: bool
+    litellm_num_retries: int = Field(ge=0)
+    boto3_retry_mode: str
+    boto3_max_attempts: int = Field(ge=1)
+    sagemaker_read_timeout_seconds: int = Field(ge=10)
+    inference_semaphore_size: int = Field(ge=1)
 
 
 class FitnessModel(BaseModel):

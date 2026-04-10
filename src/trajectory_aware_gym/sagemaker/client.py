@@ -46,6 +46,10 @@ ENDPOINTS: dict[str, str] = {
 _RETRYABLE_SAGEMAKER_STATUS_CODES = (424, 429, 503)
 _RETRYABLE_SAGEMAKER_ERROR_CODES = ("ModelError", "ThrottlingException")
 
+# Extra connections beyond the semaphore size so that retries in flight
+# don't block behind the pool while the original slot is still draining.
+_POOL_CONNECTION_HEADROOM = 2
+
 
 def _is_retryable_sagemaker_error(exc: BaseException) -> bool:
     """Check if a botocore ``ClientError`` is retryable for SageMaker endpoints."""
@@ -73,8 +77,8 @@ class QwenClient:
                 "mode": retry_cfg.boto3_retry_mode,
                 "total_max_attempts": retry_cfg.boto3_max_attempts,
             },
-            max_pool_connections=retry_cfg.inference_semaphore_size + 2,
-            read_timeout=90,
+            max_pool_connections=retry_cfg.inference_semaphore_size + _POOL_CONNECTION_HEADROOM,
+            read_timeout=retry_cfg.sagemaker_read_timeout_seconds,
         )
         self.client = boto3.client(
             "sagemaker-runtime",
@@ -133,12 +137,12 @@ class QwenClient:
                     ContentType="application/json",
                     Body=json.dumps(payload),
                 )
+                result = json.loads(response["Body"].read().decode())
+                if isinstance(result, list):
+                    return result[0].get("generated_text", "")
+                return result.get("generated_text", "")
 
-        result = json.loads(response["Body"].read().decode())  # type: ignore[possibly-undefined]
-
-        if isinstance(result, list):
-            return result[0].get("generated_text", "")
-        return result.get("generated_text", "")
+        raise RuntimeError("Retry loop exited without returning")
 
     def generate_batch(
         self,
