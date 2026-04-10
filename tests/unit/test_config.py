@@ -11,6 +11,7 @@ from trajectory_aware_gym.config.core import (
     AWSModel,
     GEMModel,
     GEPAModel,
+    RetryModel,
     Settings,
     _coerce,
     _with_env_overrides,
@@ -91,6 +92,18 @@ class TestSettingsLoad:
         assert s.fitness.max_steps == 50
         assert s.fitness.loop_window == 3
 
+    def test_loads_retry_section(self):
+        s = _load_settings()
+        assert s.retry.max_attempts == 4
+        assert s.retry.initial_wait_seconds == 1.0
+        assert s.retry.max_wait_seconds == 30.0
+        assert s.retry.exponential_base == 2.0
+        assert s.retry.jitter is True
+        assert s.retry.litellm_num_retries == 0
+        assert s.retry.boto3_retry_mode == "standard"
+        assert s.retry.boto3_max_attempts == 3
+        assert s.retry.inference_semaphore_size == 4
+
     def test_missing_yaml_raises_on_required_fields(self, tmp_path):
         empty_yaml = tmp_path / "empty.yaml"
         empty_yaml.write_text("")
@@ -147,6 +160,16 @@ class TestEnvVarOverrides:
         monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIATEST")
         s = _load_settings()
         assert s.aws.access_key_id == "AKIATEST"
+
+    def test_env_overrides_retry_int_field(self, monkeypatch):
+        monkeypatch.setenv("RETRY_MAX_ATTEMPTS", "6")
+        s = _load_settings()
+        assert s.retry.max_attempts == 6
+
+    def test_env_overrides_retry_float_field(self, monkeypatch):
+        monkeypatch.setenv("RETRY_INITIAL_WAIT_SECONDS", "2.5")
+        s = _load_settings()
+        assert s.retry.initial_wait_seconds == 2.5
 
     def test_yaml_value_used_when_env_absent(self):
         assert os.getenv("GEM_MAX_STEPS") is None

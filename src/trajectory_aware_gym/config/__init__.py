@@ -9,6 +9,7 @@ from trajectory_aware_gym.config.core import (
     GEPAModel,
     LoggingModel,
     OllamaModel,
+    RetryModel,
     SageMakerModel,
     Settings,
 )
@@ -26,6 +27,7 @@ __all__ = [
     "LoggingModel",
     "OllamaModel",
     "ProjectPaths",
+    "RetryModel",
     "SageMakerModel",
     "Settings",
     "settings",

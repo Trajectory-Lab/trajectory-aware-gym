@@ -120,6 +120,26 @@ class CostTrackingModel(BaseModel):
     alert_threshold: float
 
 
+class RetryModel(BaseModel):
+    """Retry, backoff, and concurrency throttling for LLM inference."""
+
+    max_attempts: int = Field(
+        default=4, ge=1, description="Total attempts including initial (1 = no retry)"
+    )
+    initial_wait_seconds: float = Field(default=1.0, ge=0.1)
+    max_wait_seconds: float = Field(default=30.0, ge=1.0)
+    exponential_base: float = Field(default=2.0, ge=1.1)
+    jitter: bool = Field(default=True, description="Add random jitter to backoff wait times")
+    litellm_num_retries: int = Field(
+        default=0, ge=0, description="LiteLLM internal retries (0 avoids stacking)"
+    )
+    boto3_retry_mode: str = Field(default="standard")
+    boto3_max_attempts: int = Field(default=3, ge=1)
+    inference_semaphore_size: int = Field(
+        default=4, ge=1, description="Max concurrent inflight LLM calls"
+    )
+
+
 class FitnessModel(BaseModel):
     """Hyperparameters for trajectory-aware fitness computation."""
 
@@ -145,6 +165,7 @@ _SECTION_MAP: list[tuple[str, str, type[BaseModel]]] = [
     ("logging", "LOG", LoggingModel),
     ("cost_tracking", "COST_TRACKING", CostTrackingModel),
     ("fitness", "FITNESS", FitnessModel),
+    ("retry", "RETRY", RetryModel),
 ]
 
 
@@ -167,6 +188,7 @@ class Settings:
     _logging: LoggingModel
     _cost_tracking: CostTrackingModel
     _fitness: FitnessModel
+    _retry: RetryModel
 
     def __init__(self, yaml_path: Path | None = None) -> None:
         if not Settings._loaded:
@@ -245,6 +267,10 @@ class Settings:
     @property
     def fitness(self) -> FitnessModel:
         return self._fitness
+
+    @property
+    def retry(self) -> RetryModel:
+        return self._retry
 
     @classmethod
     @contextmanager
