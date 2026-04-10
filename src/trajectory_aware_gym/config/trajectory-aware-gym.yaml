@@ -71,4 +71,4 @@ retry:
   boto3_retry_mode: standard
   boto3_max_attempts: 3
   sagemaker_read_timeout_seconds: 90
-  inference_semaphore_size: 4
+  inference_semaphore_size: 16
