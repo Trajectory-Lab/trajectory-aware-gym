@@ -79,6 +79,12 @@ addopts = [
     "--cov-report=html",
 ]
 
+[tool.coverage.run]
+source = ["src/trajectory_aware_gym"]
+
+[tool.coverage.report]
+fail_under = 85
+
 [tool.ruff]
 line-length = 100
 target-version = "py313"

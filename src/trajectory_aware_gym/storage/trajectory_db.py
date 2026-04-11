@@ -141,10 +141,13 @@ def get_connection(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path), timeout=_SQLITE_CONNECT_TIMEOUT_SECONDS)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     with _initialized_dbs_lock:
         if key not in _initialized_dbs:
+            # journal_mode is persistent on the db file — set once during init.
+            # Setting it outside the lock races with executescript's EXCLUSIVE
+            # lock on slow CI runners.
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(_SCHEMA_SQL)
             _initialized_dbs.add(key)
     connections[key] = conn

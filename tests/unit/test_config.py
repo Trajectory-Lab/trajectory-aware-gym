@@ -103,7 +103,7 @@ class TestSettingsLoad:
         assert s.retry.boto3_retry_mode == "standard"
         assert s.retry.boto3_max_attempts == 3
         assert s.retry.sagemaker_read_timeout_seconds == 90
-        assert s.retry.inference_semaphore_size == 4
+        assert s.retry.inference_semaphore_size == 16
 
     def test_missing_yaml_raises_on_required_fields(self, tmp_path):
         empty_yaml = tmp_path / "empty.yaml"
