@@ -42,6 +42,7 @@ dependencies = [
     "pydantic-settings>=2.1.0",
     "PyYAML>=6.0",
     # Utilities
+    "tenacity>=9.0.0",
     "tqdm>=4.66.0",
     "rich>=13.7.0",
     "click>=8.3.1",
@@ -77,6 +78,12 @@ addopts = [
     "--cov-report=term-missing",
     "--cov-report=html",
 ]
+
+[tool.coverage.run]
+source = ["src/trajectory_aware_gym"]
+
+[tool.coverage.report]
+fail_under = 85
 
 [tool.ruff]
 line-length = 100

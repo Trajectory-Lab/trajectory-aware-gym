@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
+from litellm.exceptions import ServiceUnavailableError  # type: ignore[import-untyped]
 
-from trajectory_aware_gym.adapters.gem_episode_runner import GEMEpisodeRunner
+from trajectory_aware_gym.adapters.gem_episode_runner import (
+    GEMEpisodeRunner,
+    _reset_inference_semaphore,
+)
+from trajectory_aware_gym.config.core import Settings
 
 
 class _FakeGemModule:
@@ -208,3 +214,64 @@ def test_runner_tracks_episode_history(monkeypatch):
 
     runner.clear_episode_history()
     assert runner.episode_history == ()
+
+
+def test_run_episode_retries_transient_completion_error(monkeypatch):
+    """generate_smoke_action() retries on transient LiteLLM errors."""
+
+    # Fast retry waits for test speed
+    Settings.reset()
+    _reset_inference_semaphore()
+    s = Settings()
+    monkeypatch.setattr(s.retry, "initial_wait_seconds", 0.01)
+    monkeypatch.setattr(s.retry, "max_wait_seconds", 0.05)
+    monkeypatch.setattr(s.retry, "max_attempts", 3)
+
+    class FakeEnv:
+        def reset(self, **kwargs: Any) -> tuple[str, dict[str, str]]:
+            return "Solve 2 + 2", {"source": "unit"}
+
+        def step(self, action: str) -> tuple[str, float, bool, bool, dict[str, bool]]:
+            return "Correct", 1.0, True, False, {"correct": True}
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "trajectory_aware_gym.adapters.gem_episode_runner.importlib.import_module",
+        _fake_import_module_factory(FakeEnv()),
+    )
+
+    calls: list[int] = []
+
+    def mock_completion(messages: Any, **kwargs: Any) -> SimpleNamespace:
+        calls.append(1)
+        if len(calls) == 1:
+            raise ServiceUnavailableError(
+                message="503 Service Unavailable",
+                llm_provider="bedrock",
+                model="test-model",
+            )
+        return _make_response("\\boxed{4}")
+
+    monkeypatch.setattr(
+        "trajectory_aware_gym.adapters.gem_episode_runner.completion",
+        mock_completion,
+    )
+    monkeypatch.setattr(
+        "trajectory_aware_gym.adapters.gem_episode_runner.completion_cost",
+        lambda *, completion_response: 0.01,
+    )
+
+    runner = GEMEpisodeRunner(
+        environment_id="math:Orz57K",
+        model_id="ollama/qwen3-1.7b-base",
+        temperature=0.0,
+        max_steps=3,
+        seed=42,
+    )
+
+    result = runner.run_episode("Solve carefully.", persist=False)
+    assert len(calls) == 2
+    assert result.trajectory.total_reward == 1.0
+    assert result.raw_metrics.success is True

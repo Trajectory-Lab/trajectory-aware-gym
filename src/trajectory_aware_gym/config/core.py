@@ -120,6 +120,21 @@ class CostTrackingModel(BaseModel):
     alert_threshold: float
 
 
+class RetryModel(BaseModel):
+    """Retry, backoff, and concurrency throttling for LLM inference."""
+
+    max_attempts: int = Field(ge=1)
+    initial_wait_seconds: float = Field(ge=0.1)
+    max_wait_seconds: float = Field(ge=1.0)
+    exponential_base: float = Field(ge=1.1)
+    jitter: bool
+    litellm_num_retries: int = Field(ge=0)
+    boto3_retry_mode: str
+    boto3_max_attempts: int = Field(ge=1)
+    sagemaker_read_timeout_seconds: int = Field(ge=10)
+    inference_semaphore_size: int = Field(ge=1)
+
+
 class FitnessModel(BaseModel):
     """Hyperparameters for trajectory-aware fitness computation."""
 
@@ -145,6 +160,7 @@ _SECTION_MAP: list[tuple[str, str, type[BaseModel]]] = [
     ("logging", "LOG", LoggingModel),
     ("cost_tracking", "COST_TRACKING", CostTrackingModel),
     ("fitness", "FITNESS", FitnessModel),
+    ("retry", "RETRY", RetryModel),
 ]
 
 
@@ -167,6 +183,7 @@ class Settings:
     _logging: LoggingModel
     _cost_tracking: CostTrackingModel
     _fitness: FitnessModel
+    _retry: RetryModel
 
     def __init__(self, yaml_path: Path | None = None) -> None:
         if not Settings._loaded:
@@ -245,6 +262,10 @@ class Settings:
     @property
     def fitness(self) -> FitnessModel:
         return self._fitness
+
+    @property
+    def retry(self) -> RetryModel:
+        return self._retry
 
     @classmethod
     @contextmanager

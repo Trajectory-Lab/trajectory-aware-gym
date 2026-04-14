@@ -60,3 +60,15 @@ logging:
 cost_tracking:
   enabled: true
   alert_threshold: 100.0
+
+retry:
+  max_attempts: 4
+  initial_wait_seconds: 1.0
+  max_wait_seconds: 30.0
+  exponential_base: 2.0
+  jitter: true
+  litellm_num_retries: 0
+  boto3_retry_mode: standard
+  boto3_max_attempts: 3
+  sagemaker_read_timeout_seconds: 90
+  inference_semaphore_size: 16

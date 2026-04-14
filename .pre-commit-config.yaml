@@ -37,6 +37,8 @@ repos:
           - boto3>=1.35.0
           - ddgs>=1.0.0
           - fastmcp>=2.0
+          - litellm>=1.50.0
+          - tenacity>=9.0.0
 
   # Security check - bandit
   - repo: https://github.com/PyCQA/bandit

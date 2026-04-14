@@ -6,6 +6,7 @@ import os
 
 import pytest
 
+from trajectory_aware_gym.adapters.gem_episode_runner import _reset_inference_semaphore
 from trajectory_aware_gym.config.core import Settings
 
 _CONFIG_ENV_PREFIXES = (
@@ -17,6 +18,7 @@ _CONFIG_ENV_PREFIXES = (
     "FITNESS_",
     "LOG_",
     "COST_TRACKING_",
+    "RETRY_",
 )
 
 
@@ -30,8 +32,10 @@ def _reset_settings(monkeypatch):
     override specific values.
     """
     Settings.reset()
+    _reset_inference_semaphore()
     for key in list(os.environ.keys()):
         if any(key.startswith(prefix) for prefix in _CONFIG_ENV_PREFIXES):
             monkeypatch.delenv(key, raising=False)
     yield
     Settings.reset()
+    _reset_inference_semaphore()

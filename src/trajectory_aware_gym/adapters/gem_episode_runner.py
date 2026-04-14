@@ -4,11 +4,32 @@ from __future__ import annotations
 
 import importlib
 import json
+import logging
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
 from litellm import completion, completion_cost  # type: ignore[import-untyped]
+from litellm.exceptions import (  # type: ignore[import-untyped]
+    APIConnectionError as LiteLLMConnectionError,
+)
+from litellm.exceptions import (
+    InternalServerError,
+    RateLimitError,
+    ServiceUnavailableError,
+)
+from litellm.exceptions import (
+    Timeout as LiteLLMTimeout,
+)
+from tenacity import (
+    Retrying,
+    before_sleep_log,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+    wait_exponential_jitter,
+)
 
 from trajectory_aware_gym.adapters.tool_runtime import ToolRuntime
 from trajectory_aware_gym.adapters.trajectory_logger import (
@@ -21,6 +42,8 @@ from trajectory_aware_gym.adapters.trajectory_logger import (
 from trajectory_aware_gym.config import settings
 from trajectory_aware_gym.metrics import EpisodeRawMetrics, extract_episode_raw_metrics
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_MAX_RESPONSE_TOKENS = 4096
 DEFAULT_MAX_TOOL_ROUNDS = 3
 TERMINAL_OBSERVATION = "<TERMINAL>"
@@ -30,6 +53,77 @@ type ChatMessage = dict[str, str]
 _TOOL_NAME_ALIASES = {
     "web_search": "search",
 }
+
+# LiteLLM exception types that indicate transient, retryable failures.
+_RETRYABLE_EXCEPTIONS = (
+    RateLimitError,  # 429 — throttling
+    ServiceUnavailableError,  # 503 — capacity pressure
+    InternalServerError,  # 500 — transient server error
+    LiteLLMTimeout,  # request timeout
+    LiteLLMConnectionError,  # connection-level failures
+)
+
+# ── Inference concurrency semaphore ─────────────────────────────
+_inference_semaphore: threading.Semaphore | None = None
+_semaphore_lock = threading.Lock()
+
+
+def _get_inference_semaphore() -> threading.Semaphore:
+    """Lazily initialise the inference semaphore from ``settings.retry``."""
+    global _inference_semaphore  # noqa: PLW0603
+    if _inference_semaphore is None:
+        with _semaphore_lock:
+            if _inference_semaphore is None:
+                _inference_semaphore = threading.Semaphore(settings.retry.inference_semaphore_size)
+    return _inference_semaphore
+
+
+def _reset_inference_semaphore() -> None:
+    """Reset the module-level semaphore (for test isolation)."""
+    global _inference_semaphore  # noqa: PLW0603
+    _inference_semaphore = None
+
+
+def _completion_with_retry(
+    *,
+    messages: list[ChatMessage],
+    completion_kwargs: dict[str, Any],
+) -> Any:
+    """Call ``litellm.completion()`` with tenacity retry on transient errors.
+
+    Retry parameters are read from ``settings.retry`` at call time so that
+    tests can override them via monkeypatch.
+    """
+    retry_cfg = settings.retry
+
+    if retry_cfg.jitter:
+        wait_strategy = wait_exponential_jitter(
+            initial=retry_cfg.initial_wait_seconds,
+            max=retry_cfg.max_wait_seconds,
+            exp_base=retry_cfg.exponential_base,
+        )
+    else:
+        wait_strategy = wait_exponential(
+            min=retry_cfg.initial_wait_seconds,
+            max=retry_cfg.max_wait_seconds,
+            exp_base=retry_cfg.exponential_base,
+        )
+
+    retryer = Retrying(
+        stop=stop_after_attempt(retry_cfg.max_attempts),
+        wait=wait_strategy,
+        retry=retry_if_exception_type(_RETRYABLE_EXCEPTIONS),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+        reraise=True,
+    )
+
+    completion_kwargs["num_retries"] = retry_cfg.litellm_num_retries
+
+    semaphore = _get_inference_semaphore()
+    for attempt in retryer:
+        with attempt:
+            with semaphore:
+                return completion(messages=messages, **completion_kwargs)
 
 
 @dataclass(frozen=True)
@@ -128,9 +222,9 @@ def generate_smoke_action(
     if model_id.startswith("bedrock/"):
         settings.validate_aws()
 
-    response = completion(
+    response = _completion_with_retry(
         messages=messages,
-        **_build_completion_kwargs(
+        completion_kwargs=_build_completion_kwargs(
             model_id,
             temperature=temperature,
             max_tokens=max_tokens,

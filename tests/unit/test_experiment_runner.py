@@ -674,7 +674,8 @@ def test_run_heldout_eval_rollouts_and_summary(monkeypatch: pytest.MonkeyPatch) 
     assert summary["success_rate"] == pytest.approx(0.5)
     assert summary["correct"] == 2
     assert summary["accuracy"] == pytest.approx(0.5)
-    assert run_calls == [
+    # ThreadPoolExecutor order is non-deterministic; sort by episode_index.
+    assert sorted(run_calls) == [
         (0, 100, "p1"),
         (1, 101, None),
         (2, 200, "p2"),
