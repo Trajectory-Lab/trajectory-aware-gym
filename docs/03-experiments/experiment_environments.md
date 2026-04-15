@@ -61,7 +61,8 @@ All experiments use **uniform random subsampling** controlled by a fixed
 
 - Matches GEM's training step count (500 gradient steps per experiment)
 - Keeps per-experiment token budget under 94M tokens (see cost budget in configs)
-- Sufficient for GEPA's evolutionary search (75 iterations × 6 population × 3 tasks/minibatch)
+- Sufficient for GEPA's evolutionary search at `auto="heavy"` (18 candidates,
+  rollout budget derived by DSPy from train+val sizes)
 
 ## Data Isolation Guarantees
 
@@ -88,7 +89,7 @@ For development and CI, a lightweight config uses Orz57K with:
 - Training subsample: 50 (not 500)
 - Validation: 5 problems
 - Single replication (seed 42)
-- Light GEPA budget (25 iterations, population 4)
+- Light GEPA budget (`auto="light"`, 6 candidates)
 - Eval: still MATH500/500 (full eval set for comparable metrics)
 
 ## Schema Reference

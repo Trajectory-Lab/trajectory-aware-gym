@@ -13,7 +13,8 @@ poe run-experiment --config experiments/orz57k-tool/config.yaml
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--config` | Path | (required) | Path to `ExperimentConfig` YAML |
-| `--max-metric-calls` | int | derived from config | Override GEPA metric call budget |
+| `--budget-mode` | `light\|medium\|heavy` | from config's `gepa_budget.mode` | Override GEPA `auto` budget mode (mutually exclusive with `--max-metric-calls`) |
+| `--max-metric-calls` | int | from config's `auto` mode | Manually set rollout budget (mutually exclusive with `--budget-mode`) |
 | `--seed-prompt` | str | math solver prompt | Initial system prompt for GEPA |
 | `--models` | list | all in config | Subset of task model names to run |
 | `--seeds` | list | all in config | Subset of replication seeds to run |
@@ -23,18 +24,44 @@ poe run-experiment --config experiments/orz57k-tool/config.yaml
 | `--results-root` | Path | `results/` | Root directory for output |
 | `--halt-on-budget-exceeded` | flag | false | Stop if cost exceeds budget |
 
+### GEPA Budget
+
+DSPy's `dspy.GEPA(auto=...)` parameter controls the optimization budget by
+candidate count: `light=6`, `medium=12`, `heavy=18`. DSPy then derives the
+total rollout budget internally from train/val sizes (matches the GEPA paper's
+methodology — see `docs/01-references/GEPA_paper.md`).
+
+The mode lives in the experiment config under `gepa_budget.mode` and defaults
+to `heavy` for the four primary configs (orz57k-tool, orz57k-notool,
+hotpotqa-tool, hotpotqa-notool). Override per-invocation with `--budget-mode`,
+or bypass `auto` entirely with `--max-metric-calls`.
+
+| Source | Budget |
+|---|---|
+| Config (`gepa_budget.mode: heavy`) + no flags | `auto="heavy"` (18 candidates) |
+| `--budget-mode light` | `auto="light"` (6 candidates) |
+| `--max-metric-calls 1500` | exactly 1500 metric calls, no auto |
+
 ### Examples
 
 ```bash
-# Run all models and seeds for Orz57K
+# Use the budget mode set in the config (heavy by default for primary configs)
 poe run-experiment --config experiments/orz57k-tool/config.yaml
 
-# Run only Qwen3-4B with seed 42, budget override, fresh
+# Override to light/medium budget at runtime
 poe run-experiment \
   --config experiments/orz57k-tool/config.yaml \
-  --models Qwen3-4B-Base \
+  --models Llama-3.1-8B-Instruct \
   --seeds 42 \
-  --max-metric-calls 256 \
+  --budget-mode light \
+  --fresh
+
+# Manually set rollout count (skips auto entirely)
+poe run-experiment \
+  --config experiments/orz57k-tool/config.yaml \
+  --models Llama-3.1-8B-Instruct \
+  --seeds 42 \
+  --max-metric-calls 1500 \
   --fresh
 
 # Resume a crashed run (auto-detect most recent incomplete)
@@ -115,30 +142,28 @@ One row per episode (training and evaluation combined). Fields match the `Episod
 
 The experiment config controls three distinct data partitions via the `environment` section:
 
-| Field | Purpose | Default |
-|-------|---------|---------|
-| `train_size` | Number of training examples for GEPA optimization | (required) |
-| `val_size` | GEPA validation set size (subset of trainset used for full-valset scoring) | 10% of `train_size` |
-| `eval_size` | Held-out evaluation set size (never seen during optimization) | falls back to `val_size` |
+| Field | Location | Purpose | Default |
+|-------|----------|---------|---------|
+| `train_size` | `environment` | Number of training examples for GEPA optimization | (required) |
+| `val_size` | `environment` | Validation set size (subset of trainset) | 10% of `train_size` |
+| `eval_size` | `environment.dataset` | Held-out evaluation set size (never seen during optimization) | — |
 
-Seed ranges ensure no overlap between splits:
+Seed ranges ensure no overlap between the three disjoint splits
+(matches the GEPA paper's train/val/test convention):
 
-- **Train**: seeds `data_seed` to `data_seed + train_size - 1`
-- **Val**: first `val_size` examples from the trainset (same seeds, subset)
-- **Eval**: seeds `data_seed + train_size` to `data_seed + train_size + eval_size - 1`
-
-The `dataset` sub-section is metadata about the source datasets (HuggingFace IDs, total sizes) and does not control how many episodes the runner executes. The `total_eval_size` field records the full evaluation split size for reference.
+- **Train**: seeds `[data_seed, data_seed + train_size)`
+- **Val**:   seeds `[data_seed + train_size, data_seed + train_size + val_size)`
+- **Eval**:  seeds `[data_seed + train_size + val_size, data_seed + train_size + val_size + eval_size)`
 
 Example from `experiments/orz57k-tool/config.yaml` (with-tool variant):
 
 ```yaml
 environment:
   train_size: 500    # 500 Orz57K problems for GEPA optimization
-  eval_size: 50      # 50 held-out problems for final evaluation
   # val_size omitted → defaults to 50 (10% of 500)
   dataset:
     eval_split: MATH500
-    total_eval_size: 500  # metadata: MATH500 has 500 problems total
+    eval_size: 500   # 500 MATH500 problems for held-out eval
 ```
 
 ## Experiment Configs

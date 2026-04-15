@@ -15,7 +15,6 @@ import pytest
 from trajectory_aware_gym.adapters.gem_episode_runner import GEMEpisodeResult
 from trajectory_aware_gym.config.core import Settings
 from trajectory_aware_gym.experiments.runner import (
-    DEFAULT_SEED_PROMPT,
     RunExperimentArgs,
     _budget_alert_fraction,
     _build_examples,
@@ -33,7 +32,7 @@ from trajectory_aware_gym.experiments.runner import (
     _write_csv,
     _write_json,
     _write_jsonl,
-    derive_max_metric_calls,
+    resolve_gepa_budget_kwargs,
     run_experiment,
     select_replication_seeds,
     select_task_models,
@@ -101,18 +100,20 @@ def _make_episode_result(
     return GEMEpisodeResult(trajectory=cast(Any, trajectory), log_path=None, raw_metrics=metric)
 
 
-def test_derive_max_metric_calls_from_budget_and_override() -> None:
+def test_resolve_gepa_budget_kwargs_uses_auto_mode_by_default() -> None:
     config = ExperimentConfig.from_yaml(QUICK_TEST_CONFIG)
-    expected = (
-        config.gepa_budget.iterations
-        * config.gepa_budget.population_size
-        * config.gepa_budget.tasks_per_minibatch
-    )
-    assert derive_max_metric_calls(config, None) == expected
-    assert derive_max_metric_calls(config, 77) == 77
+    assert resolve_gepa_budget_kwargs(config, None) == {"auto": config.gepa_budget.mode}
 
+
+def test_resolve_gepa_budget_kwargs_override_takes_precedence() -> None:
+    config = ExperimentConfig.from_yaml(QUICK_TEST_CONFIG)
+    assert resolve_gepa_budget_kwargs(config, 77) == {"max_metric_calls": 77}
+
+
+def test_resolve_gepa_budget_kwargs_rejects_zero_override() -> None:
+    config = ExperimentConfig.from_yaml(QUICK_TEST_CONFIG)
     with pytest.raises(ValueError, match="max_metric_calls"):
-        derive_max_metric_calls(config, 0)
+        resolve_gepa_budget_kwargs(config, 0)
 
 
 def test_model_and_seed_selectors_validate_subset() -> None:
@@ -1288,7 +1289,9 @@ def test_cli_parse_args_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     args = mod.parse_args()
     assert args.config == Path("experiments/quick-test/config.yaml")
     assert args.max_metric_calls is None
-    assert args.seed_prompt == DEFAULT_SEED_PROMPT
+    # When --seed-prompt is omitted, the CLI passes None through so the runner
+    # uses the prompt defined in the experiment YAML.
+    assert args.seed_prompt is None
     assert args.models is None
     assert args.seeds is None
     assert args.fresh is False

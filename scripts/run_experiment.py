@@ -9,7 +9,6 @@ from pathlib import Path
 
 from trajectory_aware_gym.config import settings
 from trajectory_aware_gym.experiments.runner import (
-    DEFAULT_SEED_PROMPT,
     RunExperimentArgs,
     run_experiment,
 )
@@ -28,13 +27,23 @@ def parse_args() -> argparse.Namespace:
         "--max-metric-calls",
         type=int,
         default=None,
-        help="Optional override for GEPA max_metric_calls",
+        help="Optional override for GEPA max_metric_calls (mutually exclusive with --budget-mode)",
+    )
+    parser.add_argument(
+        "--budget-mode",
+        type=str,
+        choices=["light", "medium", "heavy"],
+        default=None,
+        help="Override gepa_budget.mode from config (mutually exclusive with --max-metric-calls)",
     )
     parser.add_argument(
         "--seed-prompt",
         type=str,
-        default=DEFAULT_SEED_PROMPT,
-        help="Seed prompt to initialize GEPA",
+        default=None,
+        help=(
+            "Override seed prompt for ad-hoc runs. "
+            "When omitted, uses seed_prompt from the experiment YAML."
+        ),
     )
     parser.add_argument(
         "--models",
@@ -100,11 +109,16 @@ def main() -> None:
             print("Aborted.")
             sys.exit(1)
 
+    if args.max_metric_calls is not None and args.budget_mode is not None:
+        print("Error: --max-metric-calls and --budget-mode are mutually exclusive.")
+        sys.exit(1)
+
     run_experiment(
         RunExperimentArgs(
             config_path=args.config,
             max_metric_calls=args.max_metric_calls,
-            seed_prompt=args.seed_prompt,
+            budget_mode=args.budget_mode,
+            seed_prompt_override=args.seed_prompt,
             models=tuple(args.models) if args.models else None,
             seeds=tuple(args.seeds) if args.seeds else None,
             fresh=args.fresh,

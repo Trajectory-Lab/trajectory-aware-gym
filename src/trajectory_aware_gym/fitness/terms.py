@@ -105,10 +105,14 @@ class LoopDetectionPenaltyTerm:
 
 
 class StepEfficiencyBonusTerm:
-    """Bonus for shorter successful trajectories.
+    """Bonus for shorter successful trajectories (measured in env steps).
 
     efficiency = 1.0 - (actual_steps / max_steps), clamped to [0, 1].
     Only awards a bonus when the trajectory ends with a positive final reward.
+
+    Pairs with ``CallEfficiencyBonusTerm`` — this term rewards solving a task
+    in fewer agent turns, while the call-efficiency term rewards keeping each
+    turn cheap. Both signals are independently weightable via config.
     """
 
     def __init__(self, config: FitnessModel | None = None) -> None:
@@ -133,6 +137,47 @@ class StepEfficiencyBonusTerm:
         max_steps = self._config.max_steps
         actual_steps = len(steps)
         efficiency = 1.0 - (actual_steps / max_steps)
+
+        return max(0.0, efficiency)
+
+
+class CallEfficiencyBonusTerm:
+    """Bonus for successful trajectories that use fewer LLM + tool calls.
+
+    efficiency = 1.0 - (total_calls / (max_steps * call_budget_per_step)),
+    clamped to [0, 1], where total_calls sums ``len(step.llm_calls) +
+    len(step.tool_calls)`` across the trajectory. Only awards a bonus when the
+    final step has a positive reward; returns 0.0 if no calls are logged.
+
+    Complements ``StepEfficiencyBonusTerm``: a short trajectory that exhausts
+    tool rounds each env step is not truly cheap, and this term catches that.
+    """
+
+    def __init__(self, config: FitnessModel | None = None) -> None:
+        if config is None:
+            from trajectory_aware_gym.config import settings
+
+            config = settings.fitness
+        self._config = config
+
+    @property
+    def name(self) -> str:
+        return "call_efficiency_bonus"
+
+    def compute(self, trajectory: TrajectoryLog) -> float:
+        steps = trajectory.steps
+        if not steps:
+            return 0.0
+
+        if steps[-1].reward <= 0:
+            return 0.0
+
+        total_calls = sum(len(step.llm_calls) + len(step.tool_calls) for step in steps)
+        if total_calls == 0:
+            return 0.0
+
+        call_budget = self._config.max_steps * self._config.call_budget_per_step
+        efficiency = 1.0 - (total_calls / call_budget)
 
         return max(0.0, efficiency)
 

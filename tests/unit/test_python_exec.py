@@ -1,10 +1,15 @@
-"""Tests for the python_exec sandbox tool."""
+"""Tests for the python_exec sandbox tool.
+
+Internals (allowlist, restricted import, namespace) live in
+``_sandbox_runner`` and are tested in-process.  End-to-end tests of
+``python_exec(code=...)`` go through a real subprocess spawn.
+"""
 
 from __future__ import annotations
 
 import pytest
 
-from trajectory_aware_gym.mcp.tools.python_exec import (
+from trajectory_aware_gym.mcp.tools._sandbox_runner import (
     _ALLOWED_MODULES,
     _get_base_namespace,
     _restricted_import,
@@ -167,12 +172,48 @@ print(fib(10))
     def test_runtime_error_captured(self):
         result = _exec(code="1 / 0")
         assert result["status"] == "error"
+        assert "ZeroDivisionError" in result["error"]
         assert "division by zero" in result["error"]
 
     def test_name_error_captured(self):
         result = _exec(code="print(undefined_variable)")
         assert result["status"] == "error"
+        assert "NameError" in result["error"]
         assert "undefined_variable" in result["error"]
+
+    def test_runtime_error_includes_line_number(self):
+        """Models retrying after an error need to know which line failed."""
+        result = _exec(code="x = 1\ny = 2\nz = x / 0\nprint(z)")
+        assert result["status"] == "error"
+        assert "line 3" in result["error"]
+
+    def test_syntax_error_includes_line_number(self):
+        result = _exec(code="x = 1\nif True: print(1); if False: print(2)")
+        assert result["status"] == "error"
+        assert "SyntaxError" in result["error"]
+        assert "line 2" in result["error"]
+
+    def test_runtime_error_includes_user_traceback(self):
+        """Traceback should point at user code, not the runner's exec() call."""
+        code = "def foo():\n    return [1, 2][99]\nfoo()"
+        result = _exec(code=code)
+        assert result["status"] == "error"
+        assert "IndexError" in result["error"]
+        # Traceback should show both the call site and the crash site,
+        # and both should reference <string> (i.e. user code) rather than
+        # the sandbox_runner module.
+        assert "traceback" in result
+        assert "<string>" in result["traceback"]
+        assert "_sandbox_runner" not in result["traceback"]
+
+    def test_runtime_error_preserves_partial_stdout(self):
+        """If the code prints before crashing, preserve the partial output
+        so the model can see how far it got."""
+        code = 'print("checkpoint 1")\nprint("checkpoint 2")\nraise ValueError("stop")'
+        result = _exec(code=code)
+        assert result["status"] == "error"
+        assert "ValueError" in result["error"]
+        assert result.get("partial_output", "").count("checkpoint") == 2
 
     def test_no_stdout_returns_empty_output(self):
         result = _exec(code="x = 42")
@@ -201,3 +242,119 @@ print(fib(10))
         result = _exec(code="print(my_secret)")
         assert result["status"] == "error"
         assert "my_secret" in result["error"]
+
+
+# Wall-clock and CPU limits are verified manually — exercising them in the
+# unit suite would add 10-15s per case for limit-hit assertions.
+
+
+# ---------------------------------------------------------------------------
+# _sandbox_runner internals — tested in-process
+# ---------------------------------------------------------------------------
+
+
+class TestPythonExecParentSide:
+    """Cover the subprocess-wrapping logic in ``python_exec.py`` directly.
+
+    Uses ``monkeypatch`` on ``subprocess.run`` to fake different child
+    process outcomes — avoids the 100+ ms subprocess spawn per case.
+    """
+
+    def test_prefers_stdout_json_over_nonzero_returncode(self, monkeypatch):
+        """A post-success SIGKILL must not discard a valid JSON result.
+
+        Simulates the race where the sandbox printed a success payload and
+        then the process was killed during shutdown. Before the fix, we
+        reported "exited -9" and threw the answer away.
+        """
+        import json as _json
+        import subprocess
+
+        from trajectory_aware_gym.mcp.tools import python_exec as pe
+
+        class _FakeCompleted:
+            returncode = -9
+            stdout = _json.dumps({"status": "success", "output": "84\n"})
+            stderr = ""
+
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _FakeCompleted())
+        result = pe.python_exec.fn(code="print(12*7)")
+        assert result == {"status": "success", "output": "84\n"}
+
+    def test_reports_signal_hint_on_sigkill_with_empty_stdout(self, monkeypatch):
+        """When the child died before writing any JSON, surface a hint."""
+        import subprocess
+
+        from trajectory_aware_gym.mcp.tools import python_exec as pe
+
+        class _FakeCompleted:
+            returncode = -9
+            stdout = ""
+            stderr = ""
+
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _FakeCompleted())
+        result = pe.python_exec.fn(code="while True: pass")
+        assert result["status"] == "error"
+        assert "-9" in result["error"]
+        assert "SIGKILL" in result["error"]
+
+    def test_reports_cpu_limit_hint_on_sigxcpu(self, monkeypatch):
+        import subprocess
+
+        from trajectory_aware_gym.mcp.tools import python_exec as pe
+
+        class _FakeCompleted:
+            returncode = -24
+            stdout = ""
+            stderr = ""
+
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _FakeCompleted())
+        result = pe.python_exec.fn(code="while True: pass")
+        assert result["status"] == "error"
+        assert "SIGXCPU" in result["error"]
+
+    def test_reports_invalid_json_when_stdout_garbled(self, monkeypatch):
+        import subprocess
+
+        from trajectory_aware_gym.mcp.tools import python_exec as pe
+
+        class _FakeCompleted:
+            returncode = 0
+            stdout = "not-json"
+            stderr = ""
+
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _FakeCompleted())
+        result = pe.python_exec.fn(code="print(1)")
+        assert result["status"] == "error"
+        assert "invalid JSON" in result["error"]
+
+
+class TestSandboxRunnerInternals:
+    def test_execute_returns_success_dict(self):
+        from trajectory_aware_gym.mcp.tools._sandbox_runner import execute
+
+        result = execute("print(1 + 1)")
+        assert result == {"status": "success", "output": "2\n"}
+
+    def test_execute_truncates_long_output(self):
+        from trajectory_aware_gym.mcp.tools._sandbox_runner import (
+            _MAX_OUTPUT_BYTES,
+            execute,
+        )
+
+        # Print more than the cap (single string, no newlines, so length >= cap).
+        result = execute(f"print('x' * {_MAX_OUTPUT_BYTES + 1000})")
+        assert result["status"] == "success"
+        assert "[output truncated]" in result["output"]
+
+    def test_execute_empty_code_errors(self):
+        from trajectory_aware_gym.mcp.tools._sandbox_runner import execute
+
+        result = execute("")
+        assert result["status"] == "error"
+        assert "Missing" in result["error"]
+
+    # NOTE: do NOT call _apply_resource_limits() in-process — it sets
+    # RLIMIT_CPU / RLIMIT_AS on the test runner itself and persists, killing
+    # pytest mid-suite.  Resource limits are exercised end-to-end by the
+    # subprocess tests in TestPythonExec.

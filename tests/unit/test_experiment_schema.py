@@ -34,6 +34,7 @@ def _minimal_experiment(**overrides) -> dict:
     """Return minimal valid ExperimentConfig kwargs."""
     base = {
         "name": "test",
+        "seed_prompt": "You are a test solver. Answer with \\boxed{...}.",
         "environment": {
             "gem_env_id": "math:Orz57K",
             "env_type": "math",
@@ -56,9 +57,6 @@ def _minimal_experiment(**overrides) -> dict:
         },
         "gepa_budget": {
             "mode": "medium",
-            "iterations": 75,
-            "population_size": 6,
-            "elite_count": 2,
             "tasks_per_minibatch": 3,
         },
         "seeds": {"data_seed": 42, "replication_seeds": [42, 123, 456]},
@@ -79,7 +77,7 @@ class TestDatasetSplit:
             subsample_strategy="uniform",
             eval_dataset_id="axon-rl/math-eval",
             eval_split="MATH500",
-            total_eval_size=500,
+            eval_size=500,
         )
         assert dataset.hf_dataset_id == "axon-rl/ORZ-57k"
         assert dataset.subsample_size == 500
@@ -93,7 +91,7 @@ class TestDatasetSplit:
                 subsample_strategy="uniform",
                 eval_dataset_id="axon-rl/math-eval",
                 eval_split="MATH500",
-                total_eval_size=500,
+                eval_size=500,
             )
 
     @pytest.mark.parametrize(
@@ -101,7 +99,7 @@ class TestDatasetSplit:
         [
             ("total_train_size", 0),
             ("subsample_size", 0),
-            ("total_eval_size", 0),
+            ("eval_size", 0),
         ],
     )
     def test_rejects_invalid_sizes(self, field, value):
@@ -112,7 +110,7 @@ class TestDatasetSplit:
             "subsample_strategy": "uniform",
             "eval_dataset_id": "axon-rl/search-eval",
             "eval_split": "hotpotqa",
-            "total_eval_size": 512,
+            "eval_size": 512,
             field: value,
         }
         with pytest.raises(ValidationError):
@@ -142,7 +140,7 @@ class TestEnvironmentConfig:
         assert env.discount_gamma == 0.9
         assert env.tools == [ToolType.WEB_SEARCH]
         assert env.dataset is not None
-        assert env.dataset.total_eval_size == 512
+        assert env.dataset.eval_size == 512
 
     def test_effective_val_size_defaults_to_10_pct(self):
         env = EnvironmentConfig.orz57k()
@@ -236,35 +234,21 @@ class TestEvalProtocol:
 
 
 class TestGEPABudgetConfig:
-    """GEPA budget presets and validation."""
+    """GEPA budget config — maps to dspy.GEPA(auto=mode, ...)."""
 
-    @pytest.mark.parametrize(
-        ("mode", "iterations", "population_size", "elite_count", "tasks_per_minibatch"),
-        [
-            ("light", 25, 4, 1, 2),
-            ("medium", 75, 6, 2, 3),
-            ("heavy", 150, 10, 3, 5),
-        ],
-    )
-    def test_from_mode_presets(
-        self, mode, iterations, population_size, elite_count, tasks_per_minibatch
-    ):
-        budget = GEPABudgetConfig.from_mode(mode)
+    @pytest.mark.parametrize("mode", ["light", "medium", "heavy"])
+    def test_valid_modes(self, mode):
+        budget = GEPABudgetConfig(mode=mode, tasks_per_minibatch=3)
         assert budget.mode == mode
-        assert budget.iterations == iterations
-        assert budget.population_size == population_size
-        assert budget.elite_count == elite_count
-        assert budget.tasks_per_minibatch == tasks_per_minibatch
+        assert budget.tasks_per_minibatch == 3
 
-    def test_elite_count_must_be_less_than_population(self):
-        with pytest.raises(ValidationError, match="elite_count"):
-            GEPABudgetConfig(
-                mode="medium",
-                iterations=75,
-                population_size=4,
-                elite_count=4,
-                tasks_per_minibatch=3,
-            )
+    def test_invalid_mode_rejected(self):
+        with pytest.raises(ValidationError, match="mode"):
+            GEPABudgetConfig(mode="invalid", tasks_per_minibatch=3)
+
+    def test_tasks_per_minibatch_must_be_positive(self):
+        with pytest.raises(ValidationError, match="tasks_per_minibatch"):
+            GEPABudgetConfig(mode="medium", tasks_per_minibatch=0)
 
 
 class TestSeedConfig:
@@ -579,3 +563,33 @@ class TestProductionConfigs:
         assert config.environment.tools == [ToolType.PYTHON_EXEC]
         assert config.eval_protocol.max_response_tokens == 1536
         assert len(config.task_models) == 1
+
+    @pytest.mark.parametrize(
+        "config_path",
+        sorted(EXPERIMENTS_DIR.glob("*/config.yaml")),
+        ids=lambda p: p.parent.name,
+    )
+    def test_seed_prompt_is_present_and_mentions_configured_tools(self, config_path):
+        """Every experiment must ship a non-empty seed_prompt, and tool-enabled
+        experiments must reference each enabled tool by the name the model
+        will see. The runner applies ``_TOOL_NAME_ALIASES`` before showing
+        tool names to the model, so we check the aliased (runtime) name.
+
+        Prevents the failure mode that caused orz57k-tool to score far below
+        orz57k-notool in earlier runs: a seed_prompt that never cues the
+        model to use the tool at all.
+        """
+        from trajectory_aware_gym.adapters.gem_episode_runner import (
+            _TOOL_NAME_ALIASES,
+        )
+
+        config = ExperimentConfig.from_yaml(config_path)
+        assert config.seed_prompt.strip(), f"{config_path} has empty seed_prompt"
+
+        for tool_name in config.environment.active_tool_names:
+            runtime_name = _TOOL_NAME_ALIASES.get(tool_name, tool_name)
+            assert runtime_name in config.seed_prompt, (
+                f"{config_path} enables tool {tool_name!r} (runtime name: "
+                f"{runtime_name!r}) but its seed_prompt never mentions it — "
+                f"the model won't know to use it"
+            )

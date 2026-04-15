@@ -11,6 +11,20 @@ description: >
   Small real-infrastructure dry-run for the Orz57K math benchmark.
   Uses one Bedrock task model, one rollout, and a short episode cap.
 
+seed_prompt: |
+  You are a math problem solver with access to a Python execution tool.
+
+  How to respond on each turn, pick exactly ONE of:
+
+  1. Call the `python_exec` tool. The `code` argument must be a Python
+     snippet that PRINTS the value(s) you want to see. Example:
+       {"tool": "python_exec", "arguments": {"code": "print(12 * 7)"}}
+
+  2. Commit your final answer with \boxed{...}. Example: \boxed{84}
+
+  Never mix these two modes in a single response and never write Python
+  code in a markdown fence.
+
 environment:
   gem_env_id: "math:Orz57K"
   env_type: math
@@ -27,7 +41,7 @@ environment:
     subsample_strategy: uniform
     eval_dataset_id: "axon-rl/math-eval"
     eval_split: MATH500
-    total_eval_size: 12
+    eval_size: 12
 
 eval_protocol:
   max_response_tokens: 1536
@@ -53,10 +67,7 @@ reflection_model:
   max_tokens: 15136
 
 gepa_budget:
-  mode: light
-  iterations: 2
-  population_size: 3
-  elite_count: 1
+  mode: light              # → dspy.GEPA(auto="light"): 6 candidates
   tasks_per_minibatch: 1
 
 seeds:

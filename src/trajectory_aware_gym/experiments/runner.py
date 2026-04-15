@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import dspy  # type: ignore[import-untyped]
 import yaml
@@ -32,11 +32,6 @@ from trajectory_aware_gym.models.experiment import (
 from trajectory_aware_gym.models.gepa_result import GEPARunResult, accuracy_from_subscores
 
 DEFAULT_RESULTS_ROOT = Path("results")
-DEFAULT_SEED_PROMPT = (
-    "You are a math problem solver. "
-    "Solve the problem step by step, then give your final answer "
-    "inside \\boxed{}.  For example: \\boxed{42}"
-)
 _COST_DECIMAL_PLACES = 6
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
@@ -45,11 +40,17 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class RunExperimentArgs:
-    """CLI-resolved arguments for a production experiment run."""
+    """CLI-resolved arguments for a production experiment run.
+
+    Note: the seed prompt comes from ``ExperimentConfig.seed_prompt`` in the
+    YAML. ``seed_prompt_override`` below is a CLI escape hatch for ad-hoc
+    experiments; leave it as ``None`` to use the per-experiment prompt.
+    """
 
     config_path: Path
     max_metric_calls: int | None = None
-    seed_prompt: str = DEFAULT_SEED_PROMPT
+    budget_mode: Literal["light", "medium", "heavy"] | None = None
+    seed_prompt_override: str | None = None
     models: tuple[str, ...] | None = None
     seeds: tuple[int, ...] | None = None
     fresh: bool = False
@@ -59,16 +60,32 @@ class RunExperimentArgs:
     halt_on_budget_exceeded: bool = False
 
 
-def derive_max_metric_calls(config: ExperimentConfig, override: int | None = None) -> int:
-    """Derive GEPA metric call budget from config, with optional override."""
-    if override is not None:
-        if override < 1:
-            raise ValueError("max_metric_calls override must be >= 1")
-        return override
+def resolve_gepa_budget_kwargs(
+    config: ExperimentConfig,
+    max_metric_calls_override: int | None = None,
+    budget_mode_override: Literal["light", "medium", "heavy"] | None = None,
+) -> dict[str, Any]:
+    """Build ``dspy.GEPA`` budget kwargs from config, with optional overrides.
 
-    budget = config.gepa_budget
-    upper_bound = budget.iterations * budget.population_size * budget.tasks_per_minibatch
-    return max(1, upper_bound)
+    Returns exactly one of ``{"auto": mode}`` or ``{"max_metric_calls": n}``.
+    dspy.GEPA enforces that exactly one budget source is provided.
+
+    Resolution order:
+    1. ``max_metric_calls_override`` → ``{"max_metric_calls": n}``
+    2. ``budget_mode_override`` → ``{"auto": override}``
+    3. config's ``gepa_budget.mode`` → ``{"auto": mode}``
+    """
+    if max_metric_calls_override is not None and budget_mode_override is not None:
+        raise ValueError(
+            "max_metric_calls_override and budget_mode_override are mutually exclusive"
+        )
+    if max_metric_calls_override is not None:
+        if max_metric_calls_override < 1:
+            raise ValueError("max_metric_calls override must be >= 1")
+        return {"max_metric_calls": max_metric_calls_override}
+    if budget_mode_override is not None:
+        return {"auto": budget_mode_override}
+    return {"auto": config.gepa_budget.mode}
 
 
 def select_task_models(
@@ -340,6 +357,17 @@ def _build_trainset(config: ExperimentConfig) -> list[dspy.Example]:
     return _build_examples(config, config.seeds.data_seed, config.environment.train_size)
 
 
+def _build_valset(config: ExperimentConfig) -> list[dspy.Example]:
+    """Build a held-out validation slice disjoint from train and eval.
+
+    Seed range: [data_seed + train_size, data_seed + train_size + val_size).
+    GEPA uses val scores for Pareto selection but does not reflect on val
+    contents, mirroring the train/val/test split from the GEPA paper.
+    """
+    start_seed = config.seeds.data_seed + config.environment.train_size
+    return _build_examples(config, start_seed, config.environment.effective_val_size)
+
+
 def _budget_alert_fraction() -> float:
     raw_threshold = settings.cost_tracking.alert_threshold
     if raw_threshold > 1.0:
@@ -394,7 +422,11 @@ def _find_resumable_run(results_root: Path, config_name: str) -> str | None:
 
 
 def _eval_examples(config: ExperimentConfig) -> list[dspy.Example]:
-    start_seed = config.seeds.data_seed + config.environment.train_size
+    start_seed = (
+        config.seeds.data_seed
+        + config.environment.train_size
+        + config.environment.effective_val_size
+    )
     return _build_examples(config, start_seed, config.environment.effective_eval_size)
 
 
@@ -518,15 +550,21 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
     """Run a production GEPA experiment across configured models and replications."""
     config = ExperimentConfig.from_yaml(args.config_path)
 
-    if "math" not in config.environment.env_type.value and args.seed_prompt == DEFAULT_SEED_PROMPT:
-        logger.warning(
-            "Using math-specific default seed prompt for non-math environment '%s'. "
-            "Consider passing --seed-prompt with an appropriate prompt.",
-            config.environment.env_type.value,
-        )
+    seed_prompt = args.seed_prompt_override or config.seed_prompt
+    if args.seed_prompt_override is not None:
+        logger.info("Using CLI --seed-prompt override (config.seed_prompt ignored for this run).")
+
     models = select_task_models(config, args.models)
     replication_seeds = select_replication_seeds(config, args.seeds)
-    max_metric_calls = derive_max_metric_calls(config, args.max_metric_calls)
+    gepa_budget_kwargs = resolve_gepa_budget_kwargs(
+        config,
+        max_metric_calls_override=args.max_metric_calls,
+        budget_mode_override=args.budget_mode,
+    )
+    # For reporting only — auto mode resolves to None here since DSPy
+    # computes the true budget internally from trainset/valset sizes.
+    budget_override = gepa_budget_kwargs.get("max_metric_calls")
+    effective_budget_mode = gepa_budget_kwargs.get("auto", config.gepa_budget.mode)
 
     if args.purge:
         purge_target = args.results_root / _safe_segment(config.name)
@@ -535,8 +573,7 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
             shutil.rmtree(purge_target)
 
     trainset = _build_trainset(config)
-    val_size = config.environment.effective_val_size
-    valset = trainset[:val_size] if val_size <= len(trainset) else trainset
+    valset = _build_valset(config)
 
     global_started = _utc_now()
 
@@ -565,7 +602,8 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
         "git_commit": git_commit,
         "started_at": _format_iso(global_started),
         "finished_at": None,
-        "max_metric_calls": max_metric_calls,
+        "gepa_budget_mode": effective_budget_mode,
+        "max_metric_calls_override": budget_override,
         "models": {},
     }
 
@@ -613,7 +651,8 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                     "seed": replication_seed,
                     "model_name": task_model.name,
                     "model_id": model_id,
-                    "max_metric_calls": max_metric_calls,
+                    "gepa_budget_mode": effective_budget_mode,
+                    "max_metric_calls_override": budget_override,
                 }
                 _write_json(replication_dir / "run_metadata.json", metadata)
 
@@ -642,14 +681,14 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                     experiment_name=config.name,
                     tools=config.environment.active_tool_names,
                 )
-                module = GEMSolverModule(runner, default_instructions=args.seed_prompt)
+                module = GEMSolverModule(runner, default_instructions=seed_prompt)
 
                 gepa_log_dir = replication_dir / "gepa_logs"
                 gepa_log_dir.mkdir(parents=True, exist_ok=True)
 
                 optimizer = dspy.GEPA(
                     metric=metric,
-                    max_metric_calls=max_metric_calls,
+                    **gepa_budget_kwargs,
                     reflection_minibatch_size=config.gepa_budget.tasks_per_minibatch,
                     num_threads=settings.gepa.num_threads,
                     log_dir=str(gepa_log_dir),
@@ -687,11 +726,11 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                             compile_elapsed,
                         )
 
-                        result = GEPARunResult.from_module(optimized_module, args.seed_prompt)
+                        result = GEPARunResult.from_module(optimized_module, seed_prompt)
                         optimized_prompt = (
                             result.optimized_instructions
                             if result is not None
-                            else getattr(optimized_module, "instructions", args.seed_prompt)
+                            else getattr(optimized_module, "instructions", seed_prompt)
                         )
 
                         # Save GEPA artifacts immediately.
@@ -726,7 +765,7 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                     baseline_eval_results, baseline_eval_summary = _run_heldout_eval(
                         config=config,
                         task_model_id=model_id,
-                        instructions=args.seed_prompt,
+                        instructions=seed_prompt,
                     )
 
                     logger.info("Running optimized eval...")
@@ -824,8 +863,11 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                         "eval": eval_summary,
                     }
 
-                    baseline_acc = result.baseline_accuracy if result else None
-                    final_acc = result.final_accuracy if result else None
+                    baseline_acc = result.baseline_accuracy if result else 0.0
+                    final_acc = result.final_accuracy if result else 0.0
+                    val_total = config.environment.effective_val_size
+                    bl_val_correct = round(baseline_acc * val_total)
+                    opt_val_correct = round(final_acc * val_total)
                     train_bench = config.environment.gem_env_id.split(":")[-1]
                     eval_bench = (
                         config.environment.dataset.eval_split
@@ -841,8 +883,10 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                     print(
                         f"\n{'=' * 60}\n"
                         f"  Replication complete: {task_model.name} seed={replication_seed}\n"
-                        f"  Train: Baseline accuracy:  {baseline_acc} ({train_bench})\n"
-                        f"  Train: Optimized accuracy: {final_acc} ({train_bench})\n"
+                        f"  Train/val: Baseline accuracy:  {baseline_acc:.1%} "
+                        f"({bl_val_correct}/{val_total}) ({train_bench})\n"
+                        f"  Train/val: Optimized accuracy: {final_acc:.1%} "
+                        f"({opt_val_correct}/{val_total}) ({train_bench})\n"
                         f"  Test/eval: Baseline accuracy:  {bl_eval_acc:.1%} "
                         f"({bl_eval_correct}/{bl_eval_total}) ({eval_bench})\n"
                         f"  Test/eval: Optimized accuracy: {eval_acc:.1%} "

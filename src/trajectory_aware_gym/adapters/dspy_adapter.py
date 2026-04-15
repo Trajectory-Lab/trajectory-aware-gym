@@ -53,8 +53,10 @@ class TrajectoryFitnessMetric:
         #   DiscountedReturnTerm:      [0, 1]  weight = 1.0 (always)
         #   LoopDetectionPenaltyTerm:  [-1, 0] weight = loop_penalty_weight
         #   StepEfficiencyBonusTerm:   [0, 1]  weight = step_efficiency_weight
-        eff_w = self._config.step_efficiency_weight
-        self._score_max = 1.0 + eff_w  # best case: 1 + 0 + eff_w*1
+        #   CallEfficiencyBonusTerm:   [0, 1]  weight = call_efficiency_weight
+        step_w = self._config.step_efficiency_weight
+        call_w = self._config.call_efficiency_weight
+        self._score_max = 1.0 + step_w + call_w  # best case: 1 + 0 + step_w*1 + call_w*1
 
     def __call__(
         self,

@@ -237,7 +237,6 @@ No defaults are hardcoded in Python — all values come from `.env` or YAML.
 Env vars use `PREFIX_FIELD` naming (e.g., `AWS_REGION`, `GEM_MAX_STEPS`):
 - **AWS_ACCESS_KEY_ID**, **AWS_SECRET_ACCESS_KEY**: Bedrock credentials
 - **AWS_REGION**: AWS region override
-- **GEPA_BUDGET**: light/medium/heavy (controls iterations and population)
 - **GEM_MAX_STEPS**: Max steps per episode
 - **GEM_TEMPERATURE_TRAIN**: 1.0 for exploration, **GEM_TEMPERATURE_EVAL**: 0.0 for determinism
 
@@ -252,7 +251,7 @@ from trajectory_aware_gym.config import settings
 # Access sub-configs via properties
 settings.aws.region
 settings.gem.max_steps
-settings.gepa.budget
+settings.gepa.num_threads
 settings.ollama.api_base
 settings.sagemaker.endpoint_1_7b
 ```

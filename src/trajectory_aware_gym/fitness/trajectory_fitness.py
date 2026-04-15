@@ -16,7 +16,9 @@ class TrajectoryFitnessConfig:
     auxiliary_weight: float = 1.0
     loop_penalty_weight: float = 0.25
     efficiency_bonus_weight: float = 0.25
+    call_efficiency_bonus_weight: float = 0.25
     max_steps: int = 50
+    call_budget_per_step: int = 8
 
 
 @dataclass(frozen=True)
@@ -28,6 +30,7 @@ class TrajectoryFitnessBreakdown:
     auxiliary_reward_component: float
     loop_penalty_component: float
     step_efficiency_component: float
+    call_efficiency_component: float
     success_indicator: float
     repeated_action_count: int
 
@@ -83,14 +86,23 @@ def score_trajectory(
     loop_penalty_component = settings.loop_penalty_weight * repeated_action_count
 
     step_efficiency_component = 0.0
-    if settings.max_steps > 0 and success_indicator > 0:
+    if success_indicator > 0 and settings.max_steps > 0:
         efficiency_ratio = max(0.0, 1 - (num_steps / settings.max_steps))
         step_efficiency_component = settings.efficiency_bonus_weight * efficiency_ratio
+
+    call_efficiency_component = 0.0
+    if success_indicator > 0 and settings.max_steps > 0 and settings.call_budget_per_step > 0:
+        total_calls = sum(len(step.llm_calls) + len(step.tool_calls) for step in trajectory.steps)
+        if total_calls > 0:
+            call_budget = settings.max_steps * settings.call_budget_per_step
+            call_ratio = max(0.0, 1 - (total_calls / call_budget))
+            call_efficiency_component = settings.call_efficiency_bonus_weight * call_ratio
 
     final_fitness = (
         discounted_success_component
         + auxiliary_reward_component
         + step_efficiency_component
+        + call_efficiency_component
         - loop_penalty_component
     )
 
@@ -100,6 +112,7 @@ def score_trajectory(
         auxiliary_reward_component=auxiliary_reward_component,
         loop_penalty_component=loop_penalty_component,
         step_efficiency_component=step_efficiency_component,
+        call_efficiency_component=call_efficiency_component,
         success_indicator=success_indicator,
         repeated_action_count=repeated_action_count,
     )

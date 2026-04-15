@@ -31,7 +31,7 @@ from trajectory_aware_gym.config import settings
 # Sub-config sections
 settings.aws.region              # "us-east-1"
 settings.gem.max_steps           # 50
-settings.gepa.budget             # "medium"
+settings.gepa.num_threads        # 16
 settings.ollama.api_base         # "http://localhost:11434"
 settings.sagemaker.endpoint_1_7b # "qwen3-1-7b-base"
 settings.experiment.random_seed  # 42
@@ -91,7 +91,7 @@ Every YAML field can be overridden via an env var named `PREFIX_FIELD`:
 | `ollama` | `OLLAMA_` | `OLLAMA_API_BASE=http://host:11434` |
 | `sagemaker` | `SAGEMAKER_` | `SAGEMAKER_REGION=us-west-2` |
 | `gem` | `GEM_` | `GEM_MAX_STEPS=100` |
-| `gepa` | `GEPA_` | `GEPA_BUDGET=heavy` |
+| `gepa` | `GEPA_` | `GEPA_NUM_THREADS=8` |
 | `experiment` | `EXPERIMENT_` | `EXPERIMENT_RANDOM_SEED=123` |
 | `logging` | `LOG_` | `LOG_LEVEL=DEBUG` |
 | `cost_tracking` | `COST_TRACKING_` | `COST_TRACKING_ENABLED=false` |
@@ -146,13 +146,14 @@ Type coercion is automatic: `"42"` → `int`, `"3.14"` → `float`, `"true"` →
 | `temperature_train` | `float` | Temperature during training (1.0) |
 | `temperature_eval` | `float` | Temperature during evaluation (0.0) |
 
-### `gepa` — GEPA Optimizer
+### `gepa` — GEPA Optimizer (runtime knobs)
+
+Per-experiment budget settings live in `ExperimentConfig.gepa_budget`
+(see `models/experiment.py`).  This section holds only runtime knobs.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `budget` | `Literal["light", "medium", "heavy"]` | Compute budget |
-| `population_size` | `int` | Number of prompts in population |
-| `iterations` | `int` | Optimization iterations |
+| `num_threads` | `int` | Parallel threads dspy.GEPA uses for evaluation |
 | `reflection_model` | `str` | Bedrock model ID for reflection |
 
 ### Dry-Run Note

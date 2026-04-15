@@ -6,23 +6,32 @@ description: >
   GEPA prompt optimization on HotpotQA without tool access.
   Compares against GEM's published REINFORCE+ReBN no-tool baseline.
 
+seed_prompt: |
+  You are a multi-hop question answerer.
+
+  Reason through the question using only the knowledge you already have.
+  State a brief chain of reasoning, then commit your final answer by
+  responding with \boxed{...}. Example: \boxed{Florence}
+
+  The \boxed{} expression must be the last content in your response.
+
 environment:
   gem_env_id: "qa:HotpotQA"
   env_type: qa
   dspy_module: react
-  train_size: 500
-  eval_size: 50
+  train_size: 150
+  val_size: 300
   max_steps: 10
   discount_gamma: 0.9
   tools: []
   dataset:
     hf_dataset_id: "axon-rl/HotpotQA"
     total_train_size: 90400
-    subsample_size: 500
+    subsample_size: 150
     subsample_strategy: uniform
     eval_dataset_id: "axon-rl/search-eval"
     eval_split: hotpotqa
-    total_eval_size: 512
+    eval_size: 512
 
 eval_protocol:
   max_response_tokens: 4096
@@ -46,6 +55,11 @@ task_models:
     provider: ollama
     parameter_count: "4B"
 
+  - name: Llama-3.1-8B-Instruct
+    model_id: "bedrock/us.meta.llama3-1-8b-instruct-v1:0"
+    provider: bedrock
+    parameter_count: "8B"
+
 reflection_model:
   model_id: "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
   provider: bedrock
@@ -53,11 +67,8 @@ reflection_model:
   max_tokens: 4096
 
 gepa_budget:
-  mode: medium
-  iterations: 75
-  population_size: 6
-  elite_count: 2
-  tasks_per_minibatch: 3
+  mode: heavy              # → dspy.GEPA(auto="heavy"): 18 candidates
+  tasks_per_minibatch: 3   # → dspy.GEPA(reflection_minibatch_size): paper uses 3
 
 seeds:
   data_seed: 42

@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 from litellm.exceptions import ServiceUnavailableError  # type: ignore[import-untyped]
 
+import trajectory_aware_gym.adapters.gem_episode_runner as gem_runner_module
 from trajectory_aware_gym.adapters.gem_episode_runner import (
     GEMEpisodeRunner,
     _build_litellm_tools,
@@ -19,11 +20,19 @@ from trajectory_aware_gym.adapters.gem_episode_runner import (
 from trajectory_aware_gym.config.core import Settings
 
 
+@pytest.fixture(autouse=True)
+def _reset_signal_patch():
+    """Reset the gem.utils.math_grader monkey-patch flag between tests."""
+    gem_runner_module._signal_patch_applied = False
+    yield
+    gem_runner_module._signal_patch_applied = False
+
+
 class _FakeGemModule:
     def __init__(self, env):
         self._env = env
 
-    def make(self, environment_id: str):
+    def make(self, environment_id: str, **kwargs: object):
         assert environment_id
         return self._env
 
@@ -36,6 +45,10 @@ def _fake_import_module_factory(env):
             return fake_gem
         if name == "gem.envs":
             return SimpleNamespace()
+        if name == "gem.utils.math_grader":
+            # The runner monkey-patches this module's run_with_timeout_signal
+            # to bypass signal-based timeout in worker threads.
+            return SimpleNamespace(run_with_timeout_signal=lambda *a, **kw: None)
         raise AssertionError(f"unexpected import: {name}")
 
     return _fake_import_module

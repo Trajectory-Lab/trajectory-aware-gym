@@ -1,162 +1,102 @@
-"""GEM-compatible Python execution sandbox.
+"""Sandboxed ``python_exec`` tool.
 
-Provides a sandboxed ``python_exec`` tool with:
-- Full Python builtins (minus file I/O)
-- Pre-imported standard math/computation libraries matching GEM's BASE_IMPORTS
-- Allowlist-based import restriction (blocks os, subprocess, socket, etc.)
+Spawns a fresh Python subprocess per call (via
+``trajectory_aware_gym.mcp.tools._sandbox_runner``).  This isolates the
+host process from runaway code: a ``while True`` or memory-bomb in one
+call cannot wedge the eval thread pool or eat all RAM.
+
+Limits enforced:
+  - Wall-clock timeout (parent, ``subprocess.run(timeout=...)``)
+  - CPU time + virtual memory (child, ``resource.setrlimit``)
+  - Output truncation (child, in ``_sandbox_runner.execute``)
+
+Trade-off: ~50-100ms subprocess startup per call.  Acceptable for tool
+use where each call already involves an LLM round-trip.
 """
 
-import builtins
-import contextlib
-import io
+from __future__ import annotations
+
+import json
+import logging
+import subprocess
+import sys
 from typing import Any
 
 from trajectory_aware_gym.mcp.server import mcp
 
-# ── Import allowlist ────────────────────────────────────────────
-# Only these top-level modules (and their submodules) may be imported
-# by sandboxed code.  Everything else is blocked.
+logger = logging.getLogger(__name__)
 
-_ALLOWED_MODULES = frozenset(
-    {
-        # Math and numeric
-        "math",
-        "cmath",
-        "decimal",
-        "fractions",
-        "statistics",
-        "numbers",
-        # Data structures and algorithms
-        "collections",
-        "itertools",
-        "functools",
-        "operator",
-        "bisect",
-        "heapq",
-        "array",
-        # String and regex
-        "re",
-        "string",
-        "textwrap",
-        # Utilities
-        "copy",
-        "pprint",
-        "json",
-        "random",
-        "datetime",
-        "time",
-        # Typing
-        "typing",
-        "abc",
-        "enum",
-        # Scientific (optional — no error if not installed)
-        "numpy",
-        "pandas",
-        "sympy",
-    }
-)
-
-_builtin_import = builtins.__import__
-
-
-def _restricted_import(name: str, *args: Any, **kwargs: Any) -> Any:
-    """Import hook that only allows whitelisted modules."""
-    top_level = name.split(".")[0]
-    if top_level not in _ALLOWED_MODULES:
-        raise ImportError(f"Import of '{name}' is not allowed")
-    return _builtin_import(name, *args, **kwargs)
-
-
-# ── Pre-populated namespace (cached) ───────────────────────────
-# Matches GEM's BASE_IMPORTS so models don't need explicit imports
-# for common math/algorithm operations.
-
-_GEM_PRE_IMPORTS = """\
-import math
-from math import (
-    floor, log2, log10, sqrt, comb, gcd, ceil, inf,
-    isqrt, factorial, atan2, pi, log, prod,
-)
-from collections import defaultdict, deque, Counter, OrderedDict
-from itertools import (
-    accumulate, chain, combinations, count, permutations, product,
-    groupby, islice, repeat, zip_longest, cycle, pairwise,
-)
-from functools import reduce, cache, lru_cache, cmp_to_key, partial
-from operator import itemgetter, sub, xor, or_, iand
-from bisect import bisect, bisect_left, bisect_right, insort
-from heapq import (
-    heappush, heappop, heapify, merge, nlargest, nsmallest, heapreplace,
-)
-import re
-from re import search as re_search
-import string
-from string import ascii_lowercase, ascii_uppercase
-import copy
-import random
-from random import randrange, shuffle
-import fractions
-import decimal
-import json
-"""
-
-_BASE_NAMESPACE: dict[str, Any] | None = None
-
-
-def _get_base_namespace() -> dict[str, Any]:
-    """Build (and cache) the base execution namespace with GEM pre-imports."""
-    global _BASE_NAMESPACE  # noqa: PLW0603
-    if _BASE_NAMESPACE is not None:
-        return _BASE_NAMESPACE
-
-    restricted_builtins = {**vars(builtins), "__import__": _restricted_import}
-    # Remove builtins that have no place in a computation sandbox.
-    for name in ("open", "breakpoint", "exec", "eval", "compile", "input", "exit", "quit"):
-        restricted_builtins.pop(name, None)
-
-    ns: dict[str, Any] = {"__builtins__": restricted_builtins}
-
-    # Execute GEM-compatible pre-imports into the namespace.
-    exec(_GEM_PRE_IMPORTS, ns)  # nosec B102  # noqa: S102
-
-    # Optional heavy libraries — skip silently if not installed.
-    for module_name, alias in [("numpy", "np"), ("pandas", "pd"), ("sympy", "sympy")]:
-        try:
-            mod = _builtin_import(module_name)
-            ns[alias] = mod
-            ns[module_name] = mod
-        except ImportError:
-            pass
-
-    _BASE_NAMESPACE = ns
-    return _BASE_NAMESPACE
-
-
-def reset_base_namespace() -> None:
-    """Clear the cached namespace (for test isolation)."""
-    global _BASE_NAMESPACE  # noqa: PLW0603
-    _BASE_NAMESPACE = None
+_SANDBOX_MODULE = "trajectory_aware_gym.mcp.tools._sandbox_runner"
+_WALL_TIMEOUT_SECONDS = 15  # parent-side wall clock cap
 
 
 @mcp.tool()
 def python_exec(code: str) -> dict[str, Any]:
-    """Execute Python code and return stdout.
+    """Execute Python code in a sandboxed subprocess and return stdout.
 
-    A GEM-compatible sandbox with standard math/computation libraries
-    pre-imported (math, collections, itertools, numpy, etc.).
-    Imports are restricted to a safe allowlist.
+    The sandbox has standard math/computation libraries pre-imported
+    (math, collections, itertools, numpy, sympy, etc.) and an import
+    allowlist.  Hard caps on CPU time, memory, wall clock, and output
+    size keep one bad call from wedging the host.
     """
     if not code:
         return {"status": "error", "error": "Missing 'code' argument"}
 
-    buffer = io.StringIO()
-    ns = dict(_get_base_namespace())
-
     try:
-        with contextlib.redirect_stdout(buffer):
-            exec(code, ns)  # nosec B102  # noqa: S102
+        completed = subprocess.run(  # noqa: S603  # trusted argv
+            [sys.executable, "-m", _SANDBOX_MODULE],
+            input=code,
+            capture_output=True,
+            text=True,
+            timeout=_WALL_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "error",
+            "error": f"Execution exceeded wall-clock timeout of {_WALL_TIMEOUT_SECONDS}s",
+        }
+    except OSError as exc:
+        logger.exception("Failed to spawn python_exec sandbox")
+        return {"status": "error", "error": f"Sandbox spawn failed: {exc}"}
 
-        return {"status": "success", "output": buffer.getvalue()}
+    # The child uses ``os._exit(0)`` after flushing stdout, so under normal
+    # completion the returncode is 0 and stdout holds a JSON result. When
+    # the process is killed post-output (rare race with resource limits on
+    # cleanup) stdout may still be valid — prefer it over the exit code.
+    parsed_stdout: dict[str, Any] | None = None
+    if completed.stdout:
+        try:
+            candidate = json.loads(completed.stdout)
+        except json.JSONDecodeError:
+            candidate = None
+        if isinstance(candidate, dict) and "status" in candidate:
+            parsed_stdout = candidate
 
-    except Exception as error:  # noqa: BLE001
-        return {"status": "error", "error": str(error)}
+    if parsed_stdout is not None:
+        return parsed_stdout
+
+    if completed.returncode != 0:
+        # Common causes: SIGXCPU (CPU limit), SIGKILL from OOM-killer, or an
+        # import error inside the runner before the sandbox executed user
+        # code.  Map well-known signal return codes to a human-readable hint
+        # so the model can steer its next attempt.
+        signal_hints = {
+            -9: "killed by SIGKILL (likely OOM or exceeded memory/CPU limits)",
+            -11: "segfault (SIGSEGV)",
+            -24: "CPU time limit exceeded (SIGXCPU)",
+        }
+        hint = signal_hints.get(completed.returncode, "")
+        stderr = completed.stderr.strip() or "no stderr"
+        error_msg = f"Sandbox process exited {completed.returncode}"
+        if hint:
+            error_msg += f" — {hint}"
+        if stderr != "no stderr":
+            error_msg += f"\nstderr: {stderr[:500]}"
+        return {"status": "error", "error": error_msg}
+
+    preview = completed.stdout[:200] if completed.stdout else "(empty)"
+    return {
+        "status": "error",
+        "error": f"Sandbox returned invalid JSON: {preview}",
+    }
