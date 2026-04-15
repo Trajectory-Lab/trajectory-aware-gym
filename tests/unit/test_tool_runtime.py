@@ -148,6 +148,30 @@ class TestExecute:
         assert result["status"] == "error"
         assert "bad_tool" in result["error"]
 
+    def test_execute_catches_tool_run_exception(self, runtime, tmp_path):
+        """tool.run() raising is caught and returned as an error dict."""
+        mock_tool = MagicMock()
+        call_count = 0
+
+        def side_effect_fn(coro):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return mock_tool
+            raise RuntimeError("Pydantic validation failed")
+
+        with (
+            patch.object(runtime._server, "get_tool", new=MagicMock()),
+            patch.object(runtime, "_run_sync", side_effect=side_effect_fn),
+        ):
+            result = runtime.execute({"tool": "python_exec", "arguments": {}})
+
+        assert result["status"] == "error"
+        assert "Pydantic validation failed" in result["error"]
+
+        log_file = tmp_path / "tool_calls.jsonl"
+        assert log_file.exists()
+
 
 # ---------------------------------------------------------------------------
 # _run_sync – no running loop (asyncio.run path)

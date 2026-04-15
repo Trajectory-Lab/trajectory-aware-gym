@@ -57,7 +57,7 @@ def test_build_smoke_run_spec_from_experiment_config():
 
 def test_build_smoke_run_spec_respects_overrides():
     args = make_args(
-        experiment_config=Path("experiments/hotpotqa/config.yaml"),
+        experiment_config=Path("experiments/hotpotqa-tool/config.yaml"),
         environment="qa:HotpotQA",
         seed=999,
         task_model_id="bedrock/custom-qwen",

@@ -5,7 +5,7 @@ The production runner (`scripts/run_experiment.py`) executes GEPA optimization a
 ## Usage
 
 ```bash
-poe run-experiment --config experiments/orz57k/config.yaml
+poe run-experiment --config experiments/orz57k-tool/config.yaml
 ```
 
 ### CLI Flags
@@ -27,29 +27,29 @@ poe run-experiment --config experiments/orz57k/config.yaml
 
 ```bash
 # Run all models and seeds for Orz57K
-poe run-experiment --config experiments/orz57k/config.yaml
+poe run-experiment --config experiments/orz57k-tool/config.yaml
 
 # Run only Qwen3-4B with seed 42, budget override, fresh
 poe run-experiment \
-  --config experiments/orz57k/config.yaml \
+  --config experiments/orz57k-tool/config.yaml \
   --models Qwen3-4B-Base \
   --seeds 42 \
   --max-metric-calls 256 \
   --fresh
 
 # Resume a crashed run (auto-detect most recent incomplete)
-poe run-experiment --config experiments/orz57k/config.yaml
+poe run-experiment --config experiments/orz57k-tool/config.yaml
 
 # Resume a specific run by timestamp
 poe run-experiment \
-  --config experiments/orz57k/config.yaml \
+  --config experiments/orz57k-tool/config.yaml \
   --resume 20260408T150000Z
 
 # Ignore incomplete runs, start fresh
-poe run-experiment --config experiments/orz57k/config.yaml --fresh
+poe run-experiment --config experiments/orz57k-tool/config.yaml --fresh
 
 # Delete all Orz57K results and start over
-poe run-experiment --config experiments/orz57k/config.yaml --danger-purge
+poe run-experiment --config experiments/orz57k-tool/config.yaml --danger-purge
 ```
 
 ## Results Directory Structure
@@ -129,7 +129,7 @@ Seed ranges ensure no overlap between splits:
 
 The `dataset` sub-section is metadata about the source datasets (HuggingFace IDs, total sizes) and does not control how many episodes the runner executes. The `total_eval_size` field records the full evaluation split size for reference.
 
-Example from `experiments/orz57k/config.yaml`:
+Example from `experiments/orz57k-tool/config.yaml` (with-tool variant):
 
 ```yaml
 environment:
@@ -145,8 +145,10 @@ environment:
 
 Primary configs live under `experiments/`:
 
-- `experiments/orz57k/config.yaml` — Orz57K mathematical reasoning benchmark
-- `experiments/hotpotqa/config.yaml` — HotpotQA multi-hop QA benchmark
+- `experiments/orz57k-tool/config.yaml` — Orz57K with Python tool
+- `experiments/orz57k-notool/config.yaml` — Orz57K without tools
+- `experiments/hotpotqa-tool/config.yaml` — HotpotQA with search tool
+- `experiments/hotpotqa-notool/config.yaml` — HotpotQA without tools
 - `experiments/quick-test/config.yaml` — Lightweight config for development/CI
 
 Each config specifies environment settings, task models, reflection model, GEPA budget, replication seeds, evaluation protocol, and cost budget. See `src/trajectory_aware_gym/models/experiment.py` for the full `ExperimentConfig` schema.

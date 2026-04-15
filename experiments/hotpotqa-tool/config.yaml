@@ -1,7 +1,7 @@
 # HotpotQA: multi-turn multi-hop question answering
 # GEM paper: gamma=0.9 for QA tasks, r=1 correct / r=0 wrong
 
-name: hotpotqa
+name: hotpotqa-tool
 description: >
   GEPA prompt optimization on HotpotQA with web search tool access.
   Compares against GEM's published REINFORCE+ReBN single-environment baseline.

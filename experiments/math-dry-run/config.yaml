@@ -4,7 +4,7 @@
 # NOTE: eval_protocol values intentionally deviate from the GEM paper
 # (temperature_train=0.2 vs 1.0, max_response_tokens=1536 vs 4096)
 # to keep dry-run costs low. Do NOT use this config as a template
-# for experiment-grade runs — see experiments/orz57k/config.yaml instead.
+# for experiment-grade runs — see experiments/orz57k-tool/config.yaml instead.
 
 name: math-dry-run
 description: >

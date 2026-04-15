@@ -54,6 +54,9 @@ _TOOL_NAME_ALIASES = {
     "web_search": "search",
 }
 
+# Providers that support OpenAI-style native tool calling via LiteLLM.
+_NATIVE_TOOL_PREFIXES = ("bedrock/",)
+
 # LiteLLM exception types that indicate transient, retryable failures.
 _RETRYABLE_EXCEPTIONS = (
     RateLimitError,  # 429 — throttling
@@ -271,22 +274,72 @@ def _normalize_tool_name(tool_name: str) -> str:
     return _TOOL_NAME_ALIASES.get(tool_name, tool_name)
 
 
+def _supports_native_tools(model_id: str) -> bool:
+    """Return True if the model provider supports native tool calling via LiteLLM."""
+    return model_id.startswith(_NATIVE_TOOL_PREFIXES)
+
+
+def _build_litellm_tools(
+    tool_runtime: ToolRuntime,
+    tool_names: list[str],
+) -> list[dict[str, Any]]:
+    """Convert ToolRuntime schemas to OpenAI-format tool definitions for LiteLLM."""
+    all_schemas = tool_runtime.list_schemas()
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": schema["name"],
+                "description": schema.get("description", ""),
+                "parameters": schema.get("parameters", {}),
+            },
+        }
+        for schema in all_schemas
+        if schema["name"] in tool_names
+    ]
+
+
 def _extract_json_payload(text: str) -> dict[str, Any] | None:
+    """Extract a JSON tool-call object from model output text.
+
+    Handles three cases:
+    1. Entire response is a JSON object
+    2. JSON wrapped in ```json … ``` fences
+    3. JSON object embedded within surrounding prose
+    """
     stripped = text.strip()
     if not stripped:
         return None
 
+    # Fast path: entire text is JSON (raw or code-fenced).
     fenced = stripped.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    candidates = [stripped, fenced]
-    for candidate in candidates:
-        if not candidate.startswith("{") or not candidate.endswith("}"):
-            continue
+    for candidate in [stripped, fenced]:
+        if candidate.startswith("{") and candidate.endswith("}"):
+            try:
+                payload = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict):
+                return payload
+
+    # Slow path: scan for a JSON object embedded in surrounding text.
+    # Uses raw_decode so string contents (e.g. braces in code) are handled
+    # correctly by the JSON parser.
+    decoder = json.JSONDecoder()
+    search_start = 0
+    while search_start < len(stripped):
+        brace_pos = stripped.find("{", search_start)
+        if brace_pos == -1:
+            break
         try:
-            payload = json.loads(candidate)
+            payload, end_pos = decoder.raw_decode(stripped, brace_pos)
         except json.JSONDecodeError:
+            search_start = brace_pos + 1
             continue
-        if isinstance(payload, dict):
+        if isinstance(payload, dict) and "tool" in payload:
             return payload
+        search_start = end_pos
+
     return None
 
 
@@ -333,6 +386,16 @@ class GEMEpisodeRunner:
         self._tool_runtime = tool_runtime or ToolRuntime()
         self._max_tool_rounds = max_tool_rounds
         self._episode_history: list[GEMEpisodeResult] = []
+
+        # Pre-build native tool schemas for providers that support them.
+        self._use_native_tools = bool(self._tools) and _supports_native_tools(model_id)
+        self._litellm_tools: list[dict[str, Any]] | None = None
+        if self._use_native_tools:
+            schemas = _build_litellm_tools(self._tool_runtime, self._tools)
+            if schemas:
+                self._litellm_tools = schemas
+            else:
+                self._use_native_tools = False
 
     @property
     def episode_history(self) -> tuple[GEMEpisodeResult, ...]:
@@ -448,6 +511,90 @@ class GEMEpisodeRunner:
             if hasattr(env, "close"):
                 env.close()
 
+    def _generate_action(
+        self,
+        messages: list[ChatMessage],
+        *,
+        include_tools: bool = True,
+    ) -> tuple[str, LLMCallMetadata, list[dict[str, Any]]]:
+        """Run one LLM completion, returning text, metadata, and native tool calls.
+
+        When the provider supports native tool calling and tool schemas are
+        configured, they are passed via LiteLLM's ``tools`` parameter.  The
+        returned ``native_tool_calls`` list contains ``{"tool": …, "arguments":
+        {…}}`` dicts extracted from ``message.tool_calls`` (empty when the
+        provider doesn't return structured calls or none were emitted).
+
+        Set *include_tools* to False to suppress native tool schemas (e.g. to
+        force a text-only response after tool rounds are exhausted).
+        """
+        if self._model_id.startswith("bedrock/"):
+            settings.validate_aws()
+
+        completion_kwargs = _build_completion_kwargs(
+            self._model_id,
+            temperature=self._temperature,
+            max_tokens=self._max_response_tokens,
+        )
+        if include_tools and self._litellm_tools:
+            completion_kwargs["tools"] = self._litellm_tools
+
+        response = _completion_with_retry(
+            messages=messages,
+            completion_kwargs=completion_kwargs,
+        )
+        response_payload = cast(Any, response)
+        msg = response_payload.choices[0].message
+        action = _extract_text_content(msg.content) if msg.content else ""
+        if not action:
+            reasoning = getattr(msg, "reasoning_content", None) or ""
+            action = _extract_text_content(reasoning) if reasoning else "[empty-action]"
+
+        if self._model_id.startswith("ollama/"):
+            for prefix in ("### Assistant:\n", "### Assistant: ", "Assistant:\n", "Assistant: "):
+                if action.startswith(prefix):
+                    action = action[len(prefix) :].strip()
+                    break
+
+        # Extract native tool calls from the response when available.
+        native_tool_calls: list[dict[str, Any]] = []
+        raw_tool_calls = getattr(msg, "tool_calls", None)
+        if raw_tool_calls:
+            for tc in raw_tool_calls:
+                fn = getattr(tc, "function", None)
+                if fn is None:
+                    continue
+                name = getattr(fn, "name", None)
+                args_raw = getattr(fn, "arguments", "{}")
+                if not isinstance(name, str):
+                    continue
+                try:
+                    arguments = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
+                except json.JSONDecodeError:
+                    arguments = {}
+                native_tool_calls.append({"tool": name, "arguments": arguments})
+
+        usage = getattr(response, "usage", None)
+        prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+        completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+        total_tokens = int(getattr(usage, "total_tokens", 0) or (prompt_tokens + completion_tokens))
+
+        cost_usd: float | None = None
+        try:
+            maybe_cost = completion_cost(completion_response=response)
+            cost_usd = float(maybe_cost)
+        except Exception:  # noqa: BLE001  # LiteLLM raises bare Exception for unmapped models
+            cost_usd = None
+
+        metadata = LLMCallMetadata(
+            model_id=self._model_id,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            cost_usd=cost_usd,
+        )
+        return action, metadata, native_tool_calls
+
     def _run_agent_step(
         self,
         *,
@@ -467,15 +614,11 @@ class GEMEpisodeRunner:
                 system_prompt=self._compose_system_prompt(system_prompt),
                 history=step_history,
             )
-            response_text, llm_call = generate_smoke_action(
-                model_id=self._model_id,
-                messages=messages,
-                temperature=self._temperature,
-                max_tokens=self._max_response_tokens,
-            )
+            response_text, llm_call, native_tool_calls = self._generate_action(messages)
             llm_calls.append(llm_call)
 
-            parsed_tool_call = self._parse_tool_call(response_text)
+            # Native tool calls take priority; fall back to text-based parsing.
+            parsed_tool_call = self._resolve_tool_call(response_text, native_tool_calls)
             if parsed_tool_call is None:
                 action = response_text
                 step_history.extend(
@@ -504,6 +647,24 @@ class GEMEpisodeRunner:
             )
             current_observation = _format_tool_result(tool_name, tool_result)
 
+        # Tool rounds exhausted without a text answer — one final call
+        # without tool schemas to force a text-only response.
+        if action == "[empty-action]" and tool_calls:
+            messages = build_smoke_messages(
+                observation=current_observation,
+                system_prompt=system_prompt,
+                history=step_history,
+            )
+            response_text, llm_call, _ = self._generate_action(messages, include_tools=False)
+            llm_calls.append(llm_call)
+            action = response_text
+            step_history.extend(
+                [
+                    {"role": "user", "content": current_observation},
+                    {"role": "assistant", "content": action},
+                ]
+            )
+
         return AgentStepResult(
             action=action,
             llm_calls=llm_calls,
@@ -516,12 +677,28 @@ class GEMEpisodeRunner:
             return prompt
 
         tool_list = ", ".join(sorted(self._tools))
+        # Always include text-based tool instructions regardless of native
+        # support — smaller models (e.g. Llama 8B) inconsistently trigger
+        # native tool calls, so the JSON fallback path must stay active.
         return (
             f"{prompt}\n\n"
             f"Available tools: {tool_list}.\n"
             'If you need a tool, respond with JSON only: {{"tool": "<name>", "arguments": {{...}}}}.\n'
             "If no tool is needed, respond with the final environment action only."
         )
+
+    def _resolve_tool_call(
+        self,
+        response_text: str,
+        native_tool_calls: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        """Pick the best tool call from native or text-parsed sources."""
+        if native_tool_calls:
+            tc = native_tool_calls[0]
+            normalized = _normalize_tool_name(tc["tool"])
+            if normalized in self._tools:
+                return {"tool": normalized, "arguments": tc.get("arguments", {})}
+        return self._parse_tool_call(response_text)
 
     def _parse_tool_call(self, response_text: str) -> dict[str, Any] | None:
         payload = _extract_json_payload(response_text)

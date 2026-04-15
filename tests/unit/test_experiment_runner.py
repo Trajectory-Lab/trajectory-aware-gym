@@ -1305,7 +1305,7 @@ def test_cli_parse_args_all_flags(monkeypatch: pytest.MonkeyPatch) -> None:
         [
             "run_experiment.py",
             "--config",
-            "experiments/orz57k/config.yaml",
+            "experiments/orz57k-tool/config.yaml",
             "--max-metric-calls",
             "50",
             "--seed-prompt",
@@ -1323,7 +1323,7 @@ def test_cli_parse_args_all_flags(monkeypatch: pytest.MonkeyPatch) -> None:
         ],
     )
     args = mod.parse_args()
-    assert args.config == Path("experiments/orz57k/config.yaml")
+    assert args.config == Path("experiments/orz57k-tool/config.yaml")
     assert args.max_metric_calls == 50
     assert args.seed_prompt == "custom prompt"
     assert args.models == ["Qwen3-1.7B-Base"]

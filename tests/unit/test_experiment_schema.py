@@ -508,15 +508,22 @@ class TestProductionConfigs:
 
     @pytest.mark.parametrize(
         "experiment_dir",
-        ["orz57k", "hotpotqa", "quick-test", "math-dry-run"],
+        [
+            "orz57k-tool",
+            "orz57k-notool",
+            "hotpotqa-tool",
+            "hotpotqa-notool",
+            "quick-test",
+            "math-dry-run",
+        ],
     )
     def test_loads_and_validates(self, experiment_dir):
         config_path = EXPERIMENTS_DIR / experiment_dir / "config.yaml"
         config = ExperimentConfig.from_yaml(config_path)
         assert config.name == experiment_dir
 
-    def test_orz57k_values(self):
-        config = ExperimentConfig.from_yaml(EXPERIMENTS_DIR / "orz57k" / "config.yaml")
+    def test_orz57k_tool_values(self):
+        config = ExperimentConfig.from_yaml(EXPERIMENTS_DIR / "orz57k-tool" / "config.yaml")
         assert config.environment.gem_env_id == "math:Orz57K"
         assert config.environment.discount_gamma == 1.0
         assert config.environment.max_steps == 10
@@ -527,8 +534,16 @@ class TestProductionConfigs:
         assert config.rl_baselines[0].tool_augmented is True
         assert config.comparison_protocol is not None
 
-    def test_hotpotqa_values(self):
-        config = ExperimentConfig.from_yaml(EXPERIMENTS_DIR / "hotpotqa" / "config.yaml")
+    def test_orz57k_notool_values(self):
+        config = ExperimentConfig.from_yaml(EXPERIMENTS_DIR / "orz57k-notool" / "config.yaml")
+        assert config.environment.gem_env_id == "math:Orz57K"
+        assert config.environment.discount_gamma == 1.0
+        assert config.environment.tools == []
+        assert config.rl_baselines[0].success_rate == pytest.approx(0.674)
+        assert config.rl_baselines[0].tool_augmented is False
+
+    def test_hotpotqa_tool_values(self):
+        config = ExperimentConfig.from_yaml(EXPERIMENTS_DIR / "hotpotqa-tool" / "config.yaml")
         assert config.environment.gem_env_id == "qa:HotpotQA"
         assert config.environment.discount_gamma == 0.9
         assert config.environment.tools == [ToolType.WEB_SEARCH]
@@ -536,6 +551,14 @@ class TestProductionConfigs:
         assert config.environment.dataset.eval_split == "hotpotqa"
         assert config.rl_baselines[0].success_rate == pytest.approx(0.432)
         assert config.rl_baselines[0].training_condition == "single"
+
+    def test_hotpotqa_notool_values(self):
+        config = ExperimentConfig.from_yaml(EXPERIMENTS_DIR / "hotpotqa-notool" / "config.yaml")
+        assert config.environment.gem_env_id == "qa:HotpotQA"
+        assert config.environment.discount_gamma == 0.9
+        assert config.environment.tools == []
+        assert config.rl_baselines[0].success_rate == pytest.approx(0.211)
+        assert config.rl_baselines[0].tool_augmented is False
 
     def test_quick_test_is_lightweight(self):
         config = ExperimentConfig.from_yaml(EXPERIMENTS_DIR / "quick-test" / "config.yaml")

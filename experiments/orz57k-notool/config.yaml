@@ -1,10 +1,10 @@
-# Orz57K: multi-turn mathematical reasoning with Python execution
+# Orz57K: mathematical reasoning WITHOUT Python tool
 # GEM paper: gamma=1.0 for math tasks, r=1 correct / r=0 wrong
 
-name: orz57k
+name: orz57k-notool
 description: >
-  GEPA prompt optimization on Orz57K with Python tool access.
-  Compares against GEM's published REINFORCE+ReBN baseline on MATH500.
+  GEPA prompt optimization on Orz57K without tool access.
+  Compares against GEM's published REINFORCE+ReBN no-tool baseline on MATH500.
 
 environment:
   gem_env_id: "math:Orz57K"
@@ -14,7 +14,7 @@ environment:
   eval_size: 50
   max_steps: 10
   discount_gamma: 1.0
-  tools: [python_exec]
+  tools: []
   dataset:
     hf_dataset_id: "axon-rl/ORZ-57k"
     total_train_size: 57000
@@ -65,18 +65,18 @@ rl_baselines:
     environment: "math:Orz57K"
     model_name: Qwen3-4B
     model_size: "4B"
-    success_rate: 0.71
-    tool_augmented: true
+    success_rate: 0.674
+    tool_augmented: false
     training_condition: single
     metric_name: pass@1
     source: "GEM (Liu et al., 2025)"
-    source_detail: "Table 1, MATH500, Base+RL (with tool)"
+    source_detail: "Table 1, MATH500, Base+RL (no tool)"
     estimated: false
 
 comparison_protocol:
   primary_metric: success_rate
   equivalence_test: TOST
-  primary_rl_baseline: "REINFORCE+ReBN (+tool)"
+  primary_rl_baseline: "REINFORCE+ReBN (no tool)"
   prompt_baselines:
     - name: zero-shot
       description: "Unoptimized DSPy agent with hand-written instructions"

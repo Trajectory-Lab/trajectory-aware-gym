@@ -386,7 +386,7 @@ class ExperimentConfig(BaseModel):
     """Complete experiment specification for reproducible research.
 
     Each config targets a single environment. One YAML per experiment:
-        config = ExperimentConfig.from_yaml("experiments/orz57k/config.yaml")
+        config = ExperimentConfig.from_yaml("experiments/orz57k-tool/config.yaml")
     """
 
     model_config = {"frozen": True, "populate_by_name": True}
