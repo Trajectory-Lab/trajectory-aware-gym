@@ -14,8 +14,10 @@ _VALID_BASE = {
     "lambda": 0.1,
     "loop_penalty_weight": 1.0,
     "step_efficiency_weight": 1.0,
+    "call_efficiency_weight": 1.0,
     "max_steps": 50,
     "loop_window": 3,
+    "call_budget_per_step": 8,
 }
 
 
@@ -36,8 +38,10 @@ class TestFitnessModelDefaults:
             ("lambda_", 0.1),
             ("loop_penalty_weight", 1.0),
             ("step_efficiency_weight", 1.0),
+            ("call_efficiency_weight", 1.0),
             ("max_steps", 50),
             ("loop_window", 3),
+            ("call_budget_per_step", 8),
         ],
     )
     def test_default_values(self, field, expected):
@@ -57,10 +61,14 @@ class TestFitnessModelValidation:
             ("lambda_", 10.0),
             ("loop_penalty_weight", 0.0),
             ("step_efficiency_weight", 0.0),
+            ("call_efficiency_weight", 0.0),
+            ("call_efficiency_weight", 2.5),
             ("max_steps", 1),
             ("max_steps", 100),
             ("loop_window", 1),
             ("loop_window", 10),
+            ("call_budget_per_step", 1),
+            ("call_budget_per_step", 100),
         ],
     )
     def test_valid_overrides(self, field, value):
@@ -75,10 +83,13 @@ class TestFitnessModelValidation:
             ("lambda", -0.1),
             ("loop_penalty_weight", -1.0),
             ("step_efficiency_weight", -0.5),
+            ("call_efficiency_weight", -0.2),
             ("max_steps", 0),
             ("max_steps", -1),
             ("loop_window", 0),
             ("loop_window", -1),
+            ("call_budget_per_step", 0),
+            ("call_budget_per_step", -3),
         ],
     )
     def test_invalid_values_rejected(self, field, invalid_value):

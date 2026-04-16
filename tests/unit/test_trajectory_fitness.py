@@ -6,12 +6,24 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from trajectory_aware_gym.adapters.trajectory_logger import TrajectoryLog, TrajectoryStep
+from trajectory_aware_gym.adapters.trajectory_logger import (
+    LLMCallMetadata,
+    TrajectoryLog,
+    TrajectoryStep,
+)
 from trajectory_aware_gym.fitness import TrajectoryFitnessConfig, score_trajectory
 
 
+def _stub_llm_call() -> LLMCallMetadata:
+    return LLMCallMetadata(model_id="stub", prompt_tokens=0, completion_tokens=0, total_tokens=0)
+
+
 def _build_trajectory(
-    *, actions: list[str], rewards: list[float], terminated: bool
+    *,
+    actions: list[str],
+    rewards: list[float],
+    terminated: bool,
+    calls_per_step: int = 1,
 ) -> TrajectoryLog:
     started = datetime.now(UTC)
     steps = [
@@ -22,6 +34,7 @@ def _build_trajectory(
             reward=rewards[index],
             terminated=terminated and index == len(actions) - 1,
             truncated=False,
+            llm_calls=[_stub_llm_call() for _ in range(calls_per_step)],
         )
         for index, action in enumerate(actions)
     ]
@@ -73,3 +86,34 @@ def test_step_efficiency_bonus_depends_on_budget(max_steps: int, expected_sign: 
         assert result.step_efficiency_component == 0.0
     else:
         assert result.step_efficiency_component > 0
+
+
+def test_call_efficiency_bonus_scales_with_call_budget():
+    """Call-based efficiency is independent of env-step count alone."""
+    trajectory = _build_trajectory(
+        actions=["a", "b", "c"],
+        rewards=[0.0, 0.0, 1.0],
+        terminated=True,
+        calls_per_step=1,
+    )
+    # 3 calls / (10 * 2 = 20) -> 1 - 3/20 = 0.85, times weight 0.25 = 0.2125
+    config = TrajectoryFitnessConfig(max_steps=10, call_budget_per_step=2)
+    result = score_trajectory(trajectory, config)
+    assert result.call_efficiency_component == pytest.approx(0.25 * (1 - 3 / 20))
+
+
+def test_call_efficiency_zero_when_no_calls_logged():
+    """Call-efficiency yields no bonus when no LLM/tool calls are recorded.
+
+    Env-step efficiency still produces a bonus, proving the two signals are
+    independent.
+    """
+    trajectory = _build_trajectory(
+        actions=["a", "b", "c"],
+        rewards=[0.0, 0.0, 1.0],
+        terminated=True,
+        calls_per_step=0,
+    )
+    result = score_trajectory(trajectory, TrajectoryFitnessConfig(max_steps=10))
+    assert result.call_efficiency_component == 0.0
+    assert result.step_efficiency_component > 0.0

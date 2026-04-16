@@ -52,9 +52,7 @@ class DatasetSplit(BaseModel):
     subsample_strategy: Literal["uniform", "stratified"]
     eval_dataset_id: str = Field(description="HuggingFace evaluation dataset ID")
     eval_split: str = Field(description="Primary held-out evaluation split name")
-    total_eval_size: int = Field(
-        ge=1, description="Total size of the evaluation split in the source dataset"
-    )
+    eval_size: int = Field(ge=1, description="Number of evaluation tasks in the primary split")
 
     @model_validator(mode="after")
     def _subsample_within_train_size(self) -> Self:
@@ -78,11 +76,7 @@ class EnvironmentConfig(BaseModel):
     train_size: int = Field(ge=1, description="Number of training tasks (subsampled if needed)")
     val_size: int | None = Field(
         default=None,
-        description="GEPA validation set size. None means 10% of train_size.",
-    )
-    eval_size: int | None = Field(
-        default=None,
-        description="Held-out evaluation set size. None falls back to effective_val_size.",
+        description="Validation set size. None means 10% of train_size.",
     )
     test_split: str = Field(
         default="test",
@@ -102,9 +96,9 @@ class EnvironmentConfig(BaseModel):
 
     @property
     def effective_eval_size(self) -> int:
-        """Held-out eval size: explicit eval_size, or falls back to effective_val_size."""
-        if self.eval_size is not None:
-            return self.eval_size
+        """Held-out eval size from dataset split, or falls back to effective_val_size."""
+        if self.dataset is not None:
+            return self.dataset.eval_size
         return self.effective_val_size
 
     @property
@@ -130,7 +124,7 @@ class EnvironmentConfig(BaseModel):
                 subsample_strategy="uniform",
                 eval_dataset_id="axon-rl/math-eval",
                 eval_split="MATH500",
-                total_eval_size=500,
+                eval_size=500,
             ),
         )
 
@@ -152,7 +146,7 @@ class EnvironmentConfig(BaseModel):
                 subsample_strategy="uniform",
                 eval_dataset_id="axon-rl/search-eval",
                 eval_split="hotpotqa",
-                total_eval_size=512,
+                eval_size=512,
             ),
         )
 
@@ -168,7 +162,18 @@ class EvalProtocol(BaseModel):
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)
     top_k: int = Field(default=-1, description="-1 means disabled")
     rollouts_per_task: int = Field(default=5, ge=1)
-    max_eval_workers: int = Field(default=8, ge=1, description="Parallel workers for held-out eval")
+    max_eval_workers: int = Field(
+        default=32, ge=1, description="Parallel workers for held-out eval"
+    )
+    eval_episode_timeout_seconds: int = Field(
+        default=120,
+        ge=30,
+        description=(
+            "Per-episode wall-clock timeout during held-out eval. "
+            "Episodes exceeding this are counted as failures. Prevents "
+            "indefinite hangs from math_verify/sympy deadlocks."
+        ),
+    )
     tost_margin: float = Field(default=0.05, gt=0.0, le=1.0, description="TOST equivalence margin")
     tost_alpha: float = Field(default=0.05, gt=0.0, lt=1.0)
     bootstrap_iterations: int = Field(default=1000, ge=100)
@@ -197,47 +202,20 @@ class ReflectionModelConfig(BaseModel):
 
 
 class GEPABudgetConfig(BaseModel):
-    """GEPA optimizer budget configuration."""
+    """GEPA optimizer budget configuration.
+
+    Maps directly to ``dspy.GEPA(auto=mode, reflection_minibatch_size=...)``.
+    DSPy's ``auto`` parameter sets the number of candidate prompts to explore
+    (light=6, medium=12, heavy=18) and derives the metric-call budget
+    internally from trainset/valset sizes.
+    """
 
     model_config = {"frozen": True}
 
     mode: Literal["light", "medium", "heavy"]
-    iterations: int = Field(ge=1)
-    population_size: int = Field(ge=2)
-    elite_count: int = Field(ge=1)
-    tasks_per_minibatch: int = Field(ge=1)
-
-    @model_validator(mode="after")
-    def _elite_lt_population(self) -> Self:
-        if self.elite_count >= self.population_size:
-            msg = f"elite_count ({self.elite_count}) must be < population_size ({self.population_size})"
-            raise ValueError(msg)
-        return self
-
-    @classmethod
-    def from_mode(cls, mode: Literal["light", "medium", "heavy"]) -> GEPABudgetConfig:
-        """Create canonical budget preset."""
-        presets: dict[str, dict[str, int]] = {
-            "light": {
-                "iterations": 25,
-                "population_size": 4,
-                "elite_count": 1,
-                "tasks_per_minibatch": 2,
-            },
-            "medium": {
-                "iterations": 75,
-                "population_size": 6,
-                "elite_count": 2,
-                "tasks_per_minibatch": 3,
-            },
-            "heavy": {
-                "iterations": 150,
-                "population_size": 10,
-                "elite_count": 3,
-                "tasks_per_minibatch": 5,
-            },
-        }
-        return cls(mode=mode, **presets[mode])
+    tasks_per_minibatch: int = Field(
+        ge=1, description="dspy.GEPA reflection_minibatch_size — paper uses 3"
+    )
 
 
 class SeedConfig(BaseModel):
@@ -320,7 +298,9 @@ class FitnessOverride(BaseModel):
     lambda_: float | None = Field(default=None, alias="lambda", ge=0.0)
     loop_penalty_weight: float | None = Field(default=None, ge=0.0)
     step_efficiency_weight: float | None = Field(default=None, ge=0.0)
+    call_efficiency_weight: float | None = Field(default=None, ge=0.0)
     max_steps: int | None = Field(default=None, ge=1)
+    call_budget_per_step: int | None = Field(default=None, ge=1)
 
 
 class PromptBaselineConfig(BaseModel):
@@ -386,7 +366,7 @@ class ExperimentConfig(BaseModel):
     """Complete experiment specification for reproducible research.
 
     Each config targets a single environment. One YAML per experiment:
-        config = ExperimentConfig.from_yaml("experiments/orz57k/config.yaml")
+        config = ExperimentConfig.from_yaml("experiments/orz57k-tool/config.yaml")
     """
 
     model_config = {"frozen": True, "populate_by_name": True}
@@ -394,6 +374,11 @@ class ExperimentConfig(BaseModel):
     name: str
     description: str = ""
     environment: EnvironmentConfig
+    # Seed system prompt that initializes GEPA and is used by baselines.
+    # Required in every experiment YAML because the correct prompt depends on
+    # the environment (math vs. QA) and on whether tools are enabled — there
+    # is no single sensible default.
+    seed_prompt: str = Field(min_length=1)
     eval_protocol: EvalProtocol = Field(default_factory=EvalProtocol)
     task_models: list[TaskModelConfig] = Field(min_length=1)
     reflection_model: ReflectionModelConfig

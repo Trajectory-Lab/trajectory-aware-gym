@@ -82,7 +82,10 @@ class ToolRuntime:
             log_tool_call(self.log_path, name, args, result)
             return result
 
-        raw_result = self._run_sync(tool.run(args))
+        try:
+            raw_result = self._run_sync(tool.run(args))
+        except Exception as exc:  # noqa: BLE001
+            raw_result = {"status": "error", "error": str(exc)}
 
         result = self._normalize_result(raw_result)
 

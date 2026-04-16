@@ -1,43 +1,116 @@
-import contextlib
-import io
+"""Sandboxed ``python_exec`` tool.
+
+Spawns a fresh Python subprocess per call (via
+``trajectory_aware_gym.mcp.tools._sandbox_runner``).  This isolates the
+host process from runaway code: a ``while True`` or memory-bomb in one
+call cannot wedge the eval thread pool or eat all RAM.
+
+Limits enforced:
+  - Wall-clock timeout (parent, ``subprocess.run(timeout=...)``)
+  - CPU time + virtual memory (child, ``resource.setrlimit``)
+  - Output truncation (child, in ``_sandbox_runner.execute``)
+
+Trade-off: ~50-100ms subprocess startup per call.  Acceptable for tool
+use where each call already involves an LLM round-trip.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import subprocess  # nosec B404 — sandboxed runner, not arbitrary shell
+import sys
 from typing import Any
 
 from trajectory_aware_gym.mcp.server import mcp
 
+logger = logging.getLogger(__name__)
+
+_SANDBOX_MODULE = "trajectory_aware_gym.mcp.tools._sandbox_runner"
+_WALL_TIMEOUT_SECONDS = 15  # parent-side wall clock cap
+
 
 @mcp.tool()
 def python_exec(code: str) -> dict[str, Any]:
-    """Execute short Python code and return stdout."""
-    if not code:
-        return {
-            "status": "error",
-            "error": "Missing 'code' argument",
-        }
+    """Execute Python code in a sandboxed subprocess and return stdout.
 
-    buffer = io.StringIO()
+    Pre-imported and ready to use (no import needed):
+      math (floor, ceil, sqrt, isqrt, log, log2, log10, gcd, comb,
+            factorial, prod, pi, inf, atan2),
+      collections (defaultdict, deque, Counter, OrderedDict),
+      itertools (combinations, permutations, product, accumulate,
+                 chain, groupby, islice, pairwise, cycle),
+      functools (reduce, cache, lru_cache, partial),
+      heapq (heappush, heappop, heapify, nlargest, nsmallest),
+      bisect (bisect, bisect_left, insort),
+      re, random, fractions, decimal, json, copy, string.
+      numpy (as np), sympy, pandas (as pd) — if installed.
+
+    You MUST use print() to return values — unprinted expressions are
+    invisible. The result JSON has {"status": "success", "output": "..."}
+    or {"status": "error", "error": "..."}.
+
+    Limits: 15s wall clock, 30s CPU, 4 GB memory, 64 KB output.
+    Disallowed: open(), exec(), eval(), network access, file I/O.
+    """
+    if not code:
+        return {"status": "error", "error": "Missing 'code' argument"}
 
     try:
-        safe_builtins = {
-            "print": print,
-            "len": len,
-            "range": range,
-            "str": str,
-            "int": int,
-            "float": float,
-        }
-
-        with contextlib.redirect_stdout(buffer):
-            # Intentionally allow exec for agent Python tool execution.
-            # Sandbox limits builtins to a safe subset.
-            exec(code, {"__builtins__": safe_builtins})  # nosec B102
-
-        return {
-            "status": "success",
-            "output": buffer.getvalue(),
-        }
-
-    except Exception as error:
+        completed = subprocess.run(  # noqa: S603  # nosec B603 — trusted argv, no user-controlled command
+            [sys.executable, "-m", _SANDBOX_MODULE],
+            input=code,
+            capture_output=True,
+            text=True,
+            timeout=_WALL_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
         return {
             "status": "error",
-            "error": str(error),
+            "error": f"Execution exceeded wall-clock timeout of {_WALL_TIMEOUT_SECONDS}s",
         }
+    except OSError as exc:
+        logger.exception("Failed to spawn python_exec sandbox")
+        return {"status": "error", "error": f"Sandbox spawn failed: {exc}"}
+
+    # The child uses ``os._exit(0)`` after flushing stdout, so under normal
+    # completion the returncode is 0 and stdout holds a JSON result. When
+    # the process is killed post-output (rare race with resource limits on
+    # cleanup) stdout may still be valid — prefer it over the exit code.
+    parsed_stdout: dict[str, Any] | None = None
+    if completed.stdout:
+        try:
+            candidate = json.loads(completed.stdout)
+        except json.JSONDecodeError:
+            candidate = None
+        if isinstance(candidate, dict) and "status" in candidate:
+            parsed_stdout = candidate
+
+    if parsed_stdout is not None:
+        return parsed_stdout
+
+    if completed.returncode != 0:
+        # Common causes: SIGXCPU (CPU limit), SIGKILL from OOM-killer, or an
+        # import error inside the runner before the sandbox executed user
+        # code.  Map well-known signal return codes to a human-readable hint
+        # so the model can steer its next attempt.
+        signal_hints = {
+            -9: "killed by SIGKILL (likely OOM or exceeded memory/CPU limits)",
+            -11: "segfault (SIGSEGV)",
+            -24: "CPU time limit exceeded (SIGXCPU)",
+        }
+        hint = signal_hints.get(completed.returncode, "")
+        stderr = completed.stderr.strip() or "no stderr"
+        error_msg = f"Sandbox process exited {completed.returncode}"
+        if hint:
+            error_msg += f" — {hint}"
+        if stderr != "no stderr":
+            error_msg += f"\nstderr: {stderr[:500]}"
+        return {"status": "error", "error": error_msg}
+
+    preview = completed.stdout[:200] if completed.stdout else "(empty)"
+    return {
+        "status": "error",
+        "error": f"Sandbox returned invalid JSON: {preview}",
+    }

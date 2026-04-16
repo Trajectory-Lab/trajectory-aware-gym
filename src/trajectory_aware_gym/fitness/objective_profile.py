@@ -63,12 +63,31 @@ def compute_progress_component(trajectory: TrajectoryLog) -> float:
     return _clip01(positive_moves / (len(rewards) - 1))
 
 
-def compute_efficiency_component(trajectory: TrajectoryLog, *, max_steps: int) -> float:
-    """Compute step efficiency where shorter successful trajectories score higher."""
+def compute_efficiency_component(
+    trajectory: TrajectoryLog,
+    *,
+    max_steps: int,
+    call_budget_per_step: int,
+) -> float:
+    """Compute combined step + call efficiency (averaged, clipped to [0, 1]).
+
+    Rewards both fewer env steps (1 - num_steps/max_steps) and fewer LLM/tool
+    calls (1 - total_calls/(max_steps * call_budget_per_step)). Averages the
+    two when call data is present; falls back to env-step efficiency alone
+    when no calls are logged so legacy trajectories without call tracking
+    still produce a meaningful signal.
+    """
     if max_steps <= 0:
         return 0.0
-    steps = len(trajectory.steps)
-    return _clip01(1.0 - (steps / max_steps))
+    num_steps = len(trajectory.steps)
+    step_efficiency = _clip01(1.0 - (num_steps / max_steps))
+
+    total_calls = sum(len(step.llm_calls) + len(step.tool_calls) for step in trajectory.steps)
+    if total_calls == 0 or call_budget_per_step <= 0:
+        return step_efficiency
+    call_budget = max_steps * call_budget_per_step
+    call_efficiency = _clip01(1.0 - (total_calls / call_budget))
+    return _clip01(0.5 * (step_efficiency + call_efficiency))
 
 
 def compute_stability_component(trajectory: TrajectoryLog) -> float:
@@ -95,13 +114,18 @@ def score_trajectory_profile(
     *,
     weights: FitnessWeights | None = None,
     max_steps: int = 50,
+    call_budget_per_step: int = 8,
 ) -> TrajectoryFitnessResult:
     """Score trajectory with normalized objective profile and diagnostics."""
     objective_weights = weights or FitnessWeights()
 
     outcome = compute_outcome_component(trajectory)
     progress = compute_progress_component(trajectory)
-    efficiency = compute_efficiency_component(trajectory, max_steps=max_steps)
+    efficiency = compute_efficiency_component(
+        trajectory,
+        max_steps=max_steps,
+        call_budget_per_step=call_budget_per_step,
+    )
     stability = compute_stability_component(trajectory)
 
     profile = ObjectiveProfile(

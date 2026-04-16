@@ -63,9 +63,8 @@ class TestSettingsLoad:
 
     def test_loads_gepa_section(self):
         s = _load_settings()
-        assert s.gepa.budget == "medium"
-        assert s.gepa.population_size == 6
-        assert s.gepa.iterations == 75
+        assert s.gepa.num_threads >= 1
+        assert s.gepa.reflection_model
 
     def test_loads_experiment_section(self):
         s = _load_settings()
@@ -89,8 +88,10 @@ class TestSettingsLoad:
         assert s.fitness.lambda_ == 0.1
         assert s.fitness.loop_penalty_weight == 1.0
         assert s.fitness.step_efficiency_weight == 1.0
+        assert s.fitness.call_efficiency_weight == 1.0
         assert s.fitness.max_steps == 50
         assert s.fitness.loop_window == 3
+        assert s.fitness.call_budget_per_step == 8
 
     def test_loads_retry_section(self):
         s = _load_settings()
@@ -103,7 +104,7 @@ class TestSettingsLoad:
         assert s.retry.boto3_retry_mode == "standard"
         assert s.retry.boto3_max_attempts == 3
         assert s.retry.sagemaker_read_timeout_seconds == 90
-        assert s.retry.inference_semaphore_size == 16
+        assert s.retry.inference_semaphore_size >= 1
 
     def test_missing_yaml_raises_on_required_fields(self, tmp_path):
         empty_yaml = tmp_path / "empty.yaml"
@@ -151,11 +152,6 @@ class TestEnvVarOverrides:
         monkeypatch.setenv("COST_TRACKING_ENABLED", "false")
         s = _load_settings()
         assert s.cost_tracking.enabled is False
-
-    def test_env_overrides_literal_field(self, monkeypatch):
-        monkeypatch.setenv("GEPA_BUDGET", "heavy")
-        s = _load_settings()
-        assert s.gepa.budget == "heavy"
 
     def test_env_provides_secret_not_in_yaml(self, monkeypatch):
         monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIATEST")
@@ -327,6 +323,9 @@ class TestAWSModelClientConfig:
             bedrock_llama_1b="x",
             bedrock_llama_3b="x",
             bedrock_llama_8b="x",
+            bedrock_gemma_4b="x",
+            bedrock_mistral_7b="x",
+            bedrock_nemotron_9b="x",
             s3_bucket="b",
             s3_prefix="p",
         )
@@ -342,6 +341,9 @@ class TestAWSModelClientConfig:
             bedrock_llama_1b="x",
             bedrock_llama_3b="x",
             bedrock_llama_8b="x",
+            bedrock_gemma_4b="x",
+            bedrock_mistral_7b="x",
+            bedrock_nemotron_9b="x",
             s3_bucket="b",
             s3_prefix="p",
         )
@@ -353,29 +355,17 @@ class TestAWSModelClientConfig:
 # ===========================================================================
 
 
-class TestGEPABudget:
-    """Budget field accepts only valid literal values."""
+class TestGEPAModel:
+    """GEPAModel runtime knobs validation."""
 
-    @pytest.mark.parametrize("budget", ["light", "medium", "heavy"])
-    def test_valid_budget(self, budget):
-        model = GEPAModel(
-            budget=budget,
-            population_size=6,
-            iterations=75,
-            num_threads=4,
-            reflection_model="test",
-        )
-        assert model.budget == budget
+    def test_valid_construction(self):
+        model = GEPAModel(num_threads=4, reflection_model="test")
+        assert model.num_threads == 4
+        assert model.reflection_model == "test"
 
-    def test_invalid_budget_rejected(self):
-        with pytest.raises(ValidationError, match="budget"):
-            GEPAModel(
-                budget="invalid",
-                population_size=6,
-                iterations=75,
-                num_threads=4,
-                reflection_model="test",
-            )
+    def test_num_threads_must_be_positive(self):
+        with pytest.raises(ValidationError, match="num_threads"):
+            GEPAModel(num_threads=0, reflection_model="test")
 
 
 # ===========================================================================

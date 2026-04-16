@@ -11,7 +11,11 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from trajectory_aware_gym.adapters.trajectory_logger import TrajectoryLog, TrajectoryStep
+from trajectory_aware_gym.adapters.trajectory_logger import (
+    LLMCallMetadata,
+    TrajectoryLog,
+    TrajectoryStep,
+)
 from trajectory_aware_gym.config import FitnessModel, settings
 from trajectory_aware_gym.fitness.composite import CompositeFitness
 
@@ -21,14 +25,23 @@ def _cfg(**overrides: object) -> FitnessModel:
     return settings.fitness.model_copy(update=overrides)
 
 
+def _stub_llm_call() -> LLMCallMetadata:
+    return LLMCallMetadata(model_id="stub", prompt_tokens=0, completion_tokens=0, total_tokens=0)
+
+
 @pytest.fixture
 def make_trajectory():
-    """Factory for building TrajectoryLog objects with controlled properties."""
+    """Factory for building TrajectoryLog objects with controlled properties.
+
+    Each step records one stub LLM call by default so that call-based
+    efficiency terms produce a non-zero signal.
+    """
 
     def _make(
         rewards: list[float],
         actions: list[str] | None = None,
         environment_id: str = "validation-env",
+        calls_per_step: int = 1,
     ) -> TrajectoryLog:
         now = datetime.now(UTC)
         n = len(rewards)
@@ -42,6 +55,7 @@ def make_trajectory():
                 reward=rewards[i],
                 terminated=(i == n - 1),
                 truncated=False,
+                llm_calls=[_stub_llm_call() for _ in range(calls_per_step)],
             )
             for i in range(n)
         ]
@@ -133,12 +147,13 @@ class TestAblationConsistency:
     """Verify ablation configs produce expected equivalences."""
 
     def test_disabling_both_terms_equals_discounted_return_only(self, make_trajectory):
-        """With both auxiliary weights at 0, composite equals discounted return alone."""
+        """With all auxiliary weights at 0, composite equals discounted return alone."""
         config = _cfg(
             gamma=0.5,
             lambda_=0.1,
             loop_penalty_weight=0.0,
             step_efficiency_weight=0.0,
+            call_efficiency_weight=0.0,
         )
         fitness = CompositeFitness(config)
 
@@ -158,6 +173,7 @@ class TestAblationConsistency:
             lambda_=0.1,
             loop_penalty_weight=1.0,
             step_efficiency_weight=1.0,
+            call_efficiency_weight=1.0,
             max_steps=50,
         )
         dr_only_config = _cfg(
@@ -165,6 +181,7 @@ class TestAblationConsistency:
             lambda_=0.1,
             loop_penalty_weight=0.0,
             step_efficiency_weight=0.0,
+            call_efficiency_weight=0.0,
         )
 
         trajectory = make_trajectory(

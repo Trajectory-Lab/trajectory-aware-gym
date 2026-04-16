@@ -1,28 +1,47 @@
 # HotpotQA: multi-turn multi-hop question answering
 # GEM paper: gamma=0.9 for QA tasks, r=1 correct / r=0 wrong
 
-name: hotpotqa
+name: hotpotqa-tool
 description: >
   GEPA prompt optimization on HotpotQA with web search tool access.
   Compares against GEM's published REINFORCE+ReBN single-environment baseline.
+
+seed_prompt: |
+  You are a multi-hop question answerer with access to a web search tool.
+
+  How to respond on each turn, pick exactly ONE of:
+
+  1. Call the `search` tool to look up evidence. The `query` argument must
+     be a focused keyword phrase targeting the specific fact you need next.
+     Example tool call:
+       {"tool": "search", "arguments": {"query": "founding year Medici Bank Giovanni di Bicci"}}
+
+  2. Commit your final answer by responding with ONLY \boxed{...}, nothing
+     else. Example: \boxed{Florence}
+
+  Never mix these two modes in a single response.
+
+  For multi-hop questions, break the question into sub-questions and issue
+  one focused search per sub-question. Only commit an answer once the
+  retrieved evidence directly supports it.
 
 environment:
   gem_env_id: "qa:HotpotQA"
   env_type: qa
   dspy_module: react
-  train_size: 500
-  eval_size: 50
+  train_size: 150
+  val_size: 300
   max_steps: 10
   discount_gamma: 0.9
   tools: [web_search]
   dataset:
     hf_dataset_id: "axon-rl/HotpotQA"
     total_train_size: 90400
-    subsample_size: 500
+    subsample_size: 150
     subsample_strategy: uniform
     eval_dataset_id: "axon-rl/search-eval"
     eval_split: hotpotqa
-    total_eval_size: 512
+    eval_size: 512
 
 eval_protocol:
   max_response_tokens: 4096
@@ -46,6 +65,26 @@ task_models:
     provider: ollama
     parameter_count: "4B"
 
+  - name: Llama-3.1-8B-Instruct
+    model_id: "bedrock/us.meta.llama3-1-8b-instruct-v1:0"
+    provider: bedrock
+    parameter_count: "8B"
+
+  - name: Gemma-3-4B-IT
+    model_id: "bedrock/google.gemma-3-4b-it"
+    provider: bedrock
+    parameter_count: "4B"
+
+  - name: Mistral-7B-Instruct
+    model_id: "bedrock/mistral.mistral-7b-instruct-v0:2"
+    provider: bedrock
+    parameter_count: "7B"
+
+  - name: Nemotron-Nano-9B
+    model_id: "bedrock/nvidia.nemotron-nano-9b-v2"
+    provider: bedrock
+    parameter_count: "9B"
+
 reflection_model:
   model_id: "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
   provider: bedrock
@@ -53,11 +92,8 @@ reflection_model:
   max_tokens: 4096
 
 gepa_budget:
-  mode: medium
-  iterations: 75
-  population_size: 6
-  elite_count: 2
-  tasks_per_minibatch: 3
+  mode: heavy              # → dspy.GEPA(auto="heavy"): 18 candidates
+  tasks_per_minibatch: 3   # → dspy.GEPA(reflection_minibatch_size): paper uses 3
 
 seeds:
   data_seed: 42

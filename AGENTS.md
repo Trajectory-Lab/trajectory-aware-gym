@@ -148,6 +148,7 @@ uv run pytest tests/integration/ -v
 - Use fixtures for shared setup (e.g., `tmp_path`, `monkeypatch`)
 - For config tests, use `Settings.reset()` in fixtures to clear singleton state between tests
 - Tests load from the production `src/trajectory_aware_gym/config/trajectory-aware-gym.yaml`; use `monkeypatch.setenv()` for overrides
+- **Tests must not be brittle.** Do not hardcode file paths, directory names, config values, or model IDs that may change across experiments. If a test needs to enumerate experiment configs, discover them dynamically (e.g. glob `experiments/*/config.yaml`) rather than maintaining a static list. Tests that assert on specific config values (e.g. baseline accuracy, tool lists) should load them from the config file rather than duplicating literals. A config rename, value tweak, or new experiment should not require updating unrelated test files.
 
 ```python
 # Good: comprehensive parametrized test with edge cases
@@ -209,8 +210,10 @@ uv run bandit -r src
 See **[docs/03-experiments/production_runner.md](docs/03-experiments/production_runner.md)** for full CLI documentation, flags, results structure, and resume behavior.
 
 Primary experiment configs:
-- `experiments/orz57k/config.yaml`
-- `experiments/hotpotqa/config.yaml`
+- `experiments/orz57k-tool/config.yaml` — Orz57K with Python tool
+- `experiments/orz57k-notool/config.yaml` — Orz57K without tools
+- `experiments/hotpotqa-tool/config.yaml` — HotpotQA with search tool
+- `experiments/hotpotqa-notool/config.yaml` — HotpotQA without tools
 - `experiments/quick-test/config.yaml`
 
 Use these YAMLs as the source of truth for environment selection, dataset splits, and RL comparison targets.
@@ -234,7 +237,6 @@ No defaults are hardcoded in Python — all values come from `.env` or YAML.
 Env vars use `PREFIX_FIELD` naming (e.g., `AWS_REGION`, `GEM_MAX_STEPS`):
 - **AWS_ACCESS_KEY_ID**, **AWS_SECRET_ACCESS_KEY**: Bedrock credentials
 - **AWS_REGION**: AWS region override
-- **GEPA_BUDGET**: light/medium/heavy (controls iterations and population)
 - **GEM_MAX_STEPS**: Max steps per episode
 - **GEM_TEMPERATURE_TRAIN**: 1.0 for exploration, **GEM_TEMPERATURE_EVAL**: 0.0 for determinism
 
@@ -249,7 +251,7 @@ from trajectory_aware_gym.config import settings
 # Access sub-configs via properties
 settings.aws.region
 settings.gem.max_steps
-settings.gepa.budget
+settings.gepa.num_threads
 settings.ollama.api_base
 settings.sagemaker.endpoint_1_7b
 ```

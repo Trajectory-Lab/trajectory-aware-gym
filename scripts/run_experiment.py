@@ -5,11 +5,42 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import warnings
 from pathlib import Path
 
-from trajectory_aware_gym.config import settings
-from trajectory_aware_gym.experiments.runner import (
-    DEFAULT_SEED_PROMPT,
+# Python 3.13 emits a DeprecationWarning when multiprocessing.fork() is called
+# from a multi-threaded process. DSPy's GEPA spawns a ThreadPoolExecutor
+# (num_threads), then downstream code (HF datasets, gem env builders) forks
+# under default start_method=fork. The warning is not actionable from the
+# experiment runner — suppress it scoped narrowly so other DeprecationWarnings
+# still surface. TODO: switch the offending fork site to start_method="spawn"
+# or "forkserver" and remove this filter.
+_FORK_WARNING_PATTERN = (
+    r"This process .* is multi-threaded, use of fork\(\) may lead to deadlocks.*"
+)
+
+
+def _suppress_fork_deprecation_warning() -> None:
+    """Install the fork-warning ignore filter at the front of warnings.filters.
+
+    This is called twice intentionally: once at module import (to catch
+    warnings emitted while heavy deps are loading) and once in ``main()``.
+    Some transitive deps (litellm/dspy/numpy stack) prepend a permissive
+    ``('default', None, DeprecationWarning, None, 0)`` filter during their
+    own imports, which would otherwise jump ahead of our filter and let the
+    warning through. Re-applying after imports puts ours at the front again.
+    """
+    warnings.filterwarnings(
+        "ignore",
+        message=_FORK_WARNING_PATTERN,
+        category=DeprecationWarning,
+    )
+
+
+_suppress_fork_deprecation_warning()
+
+from trajectory_aware_gym.config import settings  # noqa: E402  (filter must run first)
+from trajectory_aware_gym.experiments.runner import (  # noqa: E402
     RunExperimentArgs,
     run_experiment,
 )
@@ -28,13 +59,23 @@ def parse_args() -> argparse.Namespace:
         "--max-metric-calls",
         type=int,
         default=None,
-        help="Optional override for GEPA max_metric_calls",
+        help="Optional override for GEPA max_metric_calls (mutually exclusive with --budget-mode)",
+    )
+    parser.add_argument(
+        "--budget-mode",
+        type=str,
+        choices=["light", "medium", "heavy"],
+        default=None,
+        help="Override gepa_budget.mode from config (mutually exclusive with --max-metric-calls)",
     )
     parser.add_argument(
         "--seed-prompt",
         type=str,
-        default=DEFAULT_SEED_PROMPT,
-        help="Seed prompt to initialize GEPA",
+        default=None,
+        help=(
+            "Override seed prompt for ad-hoc runs. "
+            "When omitted, uses seed_prompt from the experiment YAML."
+        ),
     )
     parser.add_argument(
         "--models",
@@ -76,11 +117,24 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Stop the run if cost exceeds config.cost_budget.effective_budget_usd",
     )
+    parser.add_argument(
+        "--continue-on-failure",
+        dest="fail_fast",
+        action="store_false",
+        help=(
+            "Record failed replications and continue with remaining seeds/models "
+            "instead of aborting the entire run. Default is fail-fast so transient "
+            "errors do not silently bias aggregate results across seeds."
+        ),
+    )
+    parser.set_defaults(fail_fast=True)
     return parser.parse_args()
 
 
 def main() -> None:
     """CLI entrypoint."""
+    # Re-apply after heavy imports — see _suppress_fork_deprecation_warning.
+    _suppress_fork_deprecation_warning()
     logging.basicConfig(
         level=getattr(logging, settings.logging.level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s - %(message)s",
@@ -100,11 +154,16 @@ def main() -> None:
             print("Aborted.")
             sys.exit(1)
 
+    if args.max_metric_calls is not None and args.budget_mode is not None:
+        print("Error: --max-metric-calls and --budget-mode are mutually exclusive.")
+        sys.exit(1)
+
     run_experiment(
         RunExperimentArgs(
             config_path=args.config,
             max_metric_calls=args.max_metric_calls,
-            seed_prompt=args.seed_prompt,
+            budget_mode=args.budget_mode,
+            seed_prompt_override=args.seed_prompt,
             models=tuple(args.models) if args.models else None,
             seeds=tuple(args.seeds) if args.seeds else None,
             fresh=args.fresh,
@@ -112,6 +171,7 @@ def main() -> None:
             resume=args.resume,
             results_root=args.results_root,
             halt_on_budget_exceeded=args.halt_on_budget_exceeded,
+            fail_fast=args.fail_fast,
         )
     )
 

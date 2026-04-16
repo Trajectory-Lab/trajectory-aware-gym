@@ -38,6 +38,9 @@ class AWSModel(BaseModel):
     bedrock_llama_1b: str
     bedrock_llama_3b: str
     bedrock_llama_8b: str
+    bedrock_gemma_4b: str
+    bedrock_mistral_7b: str
+    bedrock_nemotron_9b: str
     s3_bucket: str
     s3_prefix: str
 
@@ -89,11 +92,12 @@ class GEMModel(BaseModel):
 
 
 class GEPAModel(BaseModel):
-    """GEPA optimizer configuration."""
+    """GEPA optimizer configuration.
 
-    budget: Literal["light", "medium", "heavy"]
-    population_size: int
-    iterations: int
+    Per-experiment budget settings live in ``ExperimentConfig.gepa_budget``.
+    This section holds only runtime knobs that cross experiment boundaries.
+    """
+
     num_threads: int = Field(ge=1)
     reflection_model: str
 
@@ -144,8 +148,13 @@ class FitnessModel(BaseModel):
     lambda_: float = Field(alias="lambda", ge=0.0)
     loop_penalty_weight: float = Field(ge=0.0)
     step_efficiency_weight: float = Field(ge=0.0)
+    call_efficiency_weight: float = Field(ge=0.0)
     max_steps: int = Field(ge=1)
     loop_window: int = Field(ge=1)
+    # Upper bound on LLM + tool calls permitted inside a single env step.
+    # Used as the denominator for call-based efficiency (max calls per
+    # trajectory = max_steps * call_budget_per_step).
+    call_budget_per_step: int = Field(ge=1)
 
 
 # ── Settings ─────────────────────────────────────────────────────

@@ -5,6 +5,7 @@ from __future__ import annotations
 from trajectory_aware_gym.adapters.trajectory_logger import TrajectoryLog
 from trajectory_aware_gym.config.core import FitnessModel
 from trajectory_aware_gym.fitness.terms import (
+    CallEfficiencyBonusTerm,
     DiscountedReturnTerm,
     LoopDetectionPenaltyTerm,
     StepEfficiencyBonusTerm,
@@ -19,8 +20,9 @@ from trajectory_aware_gym.fitness.types import (
 class CompositeFitness:
     """Weighted combination of fitness terms with detailed breakdown.
 
-    Default configuration includes all three proposal terms.
-    Set weight to 0.0 in FitnessModel to disable any term for ablation.
+    Default configuration includes the three proposal terms plus a separate
+    call-efficiency bonus. Set any weight to 0.0 in FitnessModel to disable
+    the corresponding term for ablation.
     """
 
     def __init__(self, config: FitnessModel | None = None) -> None:
@@ -36,6 +38,7 @@ class CompositeFitness:
             (1.0, DiscountedReturnTerm(self._config)),
             (self._config.loop_penalty_weight, LoopDetectionPenaltyTerm(self._config)),
             (self._config.step_efficiency_weight, StepEfficiencyBonusTerm(self._config)),
+            (self._config.call_efficiency_weight, CallEfficiencyBonusTerm(self._config)),
         ]
 
     def evaluate(self, trajectory: TrajectoryLog) -> FitnessResult:

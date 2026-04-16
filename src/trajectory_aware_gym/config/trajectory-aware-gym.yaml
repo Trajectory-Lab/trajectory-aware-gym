@@ -6,6 +6,9 @@ aws:
   bedrock_llama_1b: "us.meta.llama3-2-1b-instruct-v1:0"
   bedrock_llama_3b: "us.meta.llama3-2-3b-instruct-v1:0"
   bedrock_llama_8b: "us.meta.llama3-1-8b-instruct-v1:0"
+  bedrock_gemma_4b: "google.gemma-3-4b-it"
+  bedrock_mistral_7b: "mistral.mistral-7b-instruct-v0:2"
+  bedrock_nemotron_9b: "nvidia.nemotron-nano-9b-v2"
   s3_bucket: "trajectory-aware-gym-results"
   s3_prefix: "experiments/"
 
@@ -36,13 +39,15 @@ fitness:
   lambda: 0.1
   loop_penalty_weight: 1.0
   step_efficiency_weight: 1.0
+  call_efficiency_weight: 1.0
   max_steps: 50
   loop_window: 3
+  # Conservative headroom for one env step: up to max_tool_rounds LLM/tool
+  # call pairs plus one fallback LLM call. Tune to match the episode runner's
+  # DEFAULT_MAX_TOOL_ROUNDS if that value changes.
+  call_budget_per_step: 8
 
 gepa:
-  budget: medium
-  population_size: 6
-  iterations: 75
   num_threads: 16
   # Must match aws.bedrock_claude_sonnet_4_5 — both change together
   # when the reflection model provider changes.
@@ -71,4 +76,4 @@ retry:
   boto3_retry_mode: standard
   boto3_max_attempts: 3
   sagemaker_read_timeout_seconds: 90
-  inference_semaphore_size: 16
+  inference_semaphore_size: 64
