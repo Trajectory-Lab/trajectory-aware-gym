@@ -279,6 +279,43 @@ def _supports_native_tools(model_id: str) -> bool:
     return model_id.startswith(_NATIVE_TOOL_PREFIXES)
 
 
+def _build_tool_descriptions(
+    tool_runtime: ToolRuntime,
+    tool_names: list[str],
+) -> str:
+    """Build a human-readable tool reference block from MCP tool schemas.
+
+    Included in the text-based system prompt so the model knows what each
+    tool does, what arguments it accepts, and what the output looks like —
+    regardless of whether native tool calling is active.
+    """
+    all_schemas = tool_runtime.list_schemas()
+    active = [s for s in all_schemas if s["name"] in tool_names]
+    if not active:
+        return ""
+
+    parts: list[str] = []
+    for schema in active:
+        name = schema["name"]
+        desc = schema.get("description", "").strip()
+        params = schema.get("parameters", {})
+        required = params.get("required", [])
+        props = params.get("properties", {})
+
+        arg_parts = []
+        for pname, pinfo in props.items():
+            ptype = pinfo.get("type", "any")
+            req = " (required)" if pname in required else ""
+            arg_parts.append(f"    - {pname}: {ptype}{req}")
+
+        block = f"### {name}\n{desc}"
+        if arg_parts:
+            block += "\n  Arguments:\n" + "\n".join(arg_parts)
+        parts.append(block)
+
+    return "\n\n".join(parts)
+
+
 def _build_litellm_tools(
     tool_runtime: ToolRuntime,
     tool_names: list[str],
@@ -387,6 +424,9 @@ class GEMEpisodeRunner:
         self._max_tool_rounds = max_tool_rounds
         self._episode_history: list[GEMEpisodeResult] = []
 
+        # Pre-build tool descriptions for the text-based prompt path.
+        self._tool_descriptions = _build_tool_descriptions(self._tool_runtime, self._tools)
+
         # Pre-build native tool schemas for providers that support them.
         self._use_native_tools = bool(self._tools) and _supports_native_tools(model_id)
         self._litellm_tools: list[dict[str, Any]] | None = None
@@ -414,7 +454,12 @@ class GEMEpisodeRunner:
         seed_override: int | None = None,
         expected_observation: str | None = None,
     ) -> TrajectoryLog:
-        """Run one episode and return the validated trajectory log."""
+        """Run one episode and return the validated trajectory log.
+
+        Used by GEMSolverModule during GEPA training. Persistence is
+        disabled to avoid DB thrash across hundreds of GEPA rollouts —
+        use ``run_episode(persist=True)`` for eval or debugging.
+        """
         return self.run_episode(
             prompt,
             episode_index=episode_index,
@@ -676,28 +721,42 @@ class GEMEpisodeRunner:
         if not self._tools:
             return prompt
 
-        tool_list = ", ".join(sorted(self._tools))
         # Always include text-based tool instructions regardless of native
         # support — smaller models (e.g. Llama 8B) inconsistently trigger
         # native tool calls, so the JSON fallback path must stay active.
-        return (
-            f"{prompt}\n\n"
-            f"Available tools: {tool_list}.\n"
-            'If you need a tool, respond with JSON only: {{"tool": "<name>", "arguments": {{...}}}}.\n'
-            "If no tool is needed, respond with the final environment action only."
-        )
+        # Tool descriptions are pulled from MCP docstrings at init time.
+        parts = [
+            prompt,
+            "## Available Tools",
+            self._tool_descriptions,
+            "## How to call a tool",
+            'Respond with JSON only: {"tool": "<name>", "arguments": {...}}.',
+            "If no tool is needed, respond with the final environment action only.",
+        ]
+        return "\n\n".join(parts)
 
     def _resolve_tool_call(
         self,
         response_text: str,
         native_tool_calls: list[dict[str, Any]],
     ) -> dict[str, Any] | None:
-        """Pick the best tool call from native or text-parsed sources."""
+        """Pick the best tool call from native or text-parsed sources.
+
+        Validation here is deliberately minimal: we only check the first
+        native call (matches provider convention of one tool call per
+        response) and fall back to text-JSON if it is unusable. We do *not*
+        scan past the first native call or attempt schema repair — the goal
+        of GEPA is to evolve prompts that produce well-formed tool calls,
+        and silently rescuing malformed ones contaminates that signal.
+        Tool-side validation errors are surfaced naturally via
+        ``ToolRuntime.execute`` as structured tool errors.
+        """
         if native_tool_calls:
             tc = native_tool_calls[0]
             normalized = _normalize_tool_name(tc["tool"])
-            if normalized in self._tools:
-                return {"tool": normalized, "arguments": tc.get("arguments", {})}
+            arguments = tc.get("arguments", {})
+            if normalized in self._tools and isinstance(arguments, dict):
+                return {"tool": normalized, "arguments": arguments}
         return self._parse_tool_call(response_text)
 
     def _parse_tool_call(self, response_text: str) -> dict[str, Any] | None:

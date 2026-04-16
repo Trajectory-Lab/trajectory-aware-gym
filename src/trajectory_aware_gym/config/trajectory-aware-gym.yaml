@@ -6,6 +6,9 @@ aws:
   bedrock_llama_1b: "us.meta.llama3-2-1b-instruct-v1:0"
   bedrock_llama_3b: "us.meta.llama3-2-3b-instruct-v1:0"
   bedrock_llama_8b: "us.meta.llama3-1-8b-instruct-v1:0"
+  bedrock_gemma_4b: "google.gemma-3-4b-it"
+  bedrock_mistral_7b: "mistral.mistral-7b-instruct-v0:2"
+  bedrock_nemotron_9b: "nvidia.nemotron-nano-9b-v2"
   s3_bucket: "trajectory-aware-gym-results"
   s3_prefix: "experiments/"
 

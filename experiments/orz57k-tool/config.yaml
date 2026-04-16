@@ -66,6 +66,21 @@ task_models:
     provider: bedrock
     parameter_count: "8B"
 
+  - name: Gemma-3-4B-IT
+    model_id: "bedrock/google.gemma-3-4b-it"
+    provider: bedrock
+    parameter_count: "4B"
+
+  - name: Mistral-7B-Instruct
+    model_id: "bedrock/mistral.mistral-7b-instruct-v0:2"
+    provider: bedrock
+    parameter_count: "7B"
+
+  - name: Nemotron-Nano-9B
+    model_id: "bedrock/nvidia.nemotron-nano-9b-v2"
+    provider: bedrock
+    parameter_count: "9B"
+
 reflection_model:
   model_id: "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
   provider: bedrock

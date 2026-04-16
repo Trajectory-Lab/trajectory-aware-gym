@@ -7,7 +7,13 @@ from trajectory_aware_gym.mcp.server import mcp
 
 @mcp.tool()
 def search(query: str) -> dict[str, Any]:
-    """Search the web for information."""
+    """Search the web and return up to 5 results with titles, URLs, and snippets.
+
+    Returns {"status": "success", "results": [{"title": ..., "url": ...,
+    "snippet": ...}, ...]} or {"status": "error", "error": "..."}.
+    Use specific, keyword-rich queries for best results. Issue multiple
+    searches to triangulate facts from different sources.
+    """
     try:
         with DDGS() as ddgs:
             results = list(ddgs.text(query, max_results=5))

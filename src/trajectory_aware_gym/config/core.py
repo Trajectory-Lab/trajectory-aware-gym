@@ -38,6 +38,9 @@ class AWSModel(BaseModel):
     bedrock_llama_1b: str
     bedrock_llama_3b: str
     bedrock_llama_8b: str
+    bedrock_gemma_4b: str
+    bedrock_mistral_7b: str
+    bedrock_nemotron_9b: str
     s3_bucket: str
     s3_prefix: str
 

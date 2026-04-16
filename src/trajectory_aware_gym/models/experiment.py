@@ -165,6 +165,15 @@ class EvalProtocol(BaseModel):
     max_eval_workers: int = Field(
         default=32, ge=1, description="Parallel workers for held-out eval"
     )
+    eval_episode_timeout_seconds: int = Field(
+        default=120,
+        ge=30,
+        description=(
+            "Per-episode wall-clock timeout during held-out eval. "
+            "Episodes exceeding this are counted as failures. Prevents "
+            "indefinite hangs from math_verify/sympy deadlocks."
+        ),
+    )
     tost_margin: float = Field(default=0.05, gt=0.0, le=1.0, description="TOST equivalence margin")
     tost_alpha: float = Field(default=0.05, gt=0.0, lt=1.0)
     bootstrap_iterations: int = Field(default=1000, ge=100)

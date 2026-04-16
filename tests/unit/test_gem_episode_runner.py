@@ -148,6 +148,19 @@ def test_run_episode_executes_tool_call_before_final_action(monkeypatch):
             self.calls.append(tool_call)
             return {"status": "success", "output": "4"}
 
+        def list_schemas(self):
+            return [
+                {
+                    "name": "python_exec",
+                    "description": "Execute Python code.",
+                    "parameters": {
+                        "properties": {"code": {"type": "string"}},
+                        "required": ["code"],
+                        "type": "object",
+                    },
+                }
+            ]
+
     responses = iter(
         [
             _make_response('{"tool":"python_exec","arguments":{"code":"print(2+2)"}}'),
@@ -458,10 +471,13 @@ class TestComposeSystemPrompt:
         assert '{"tool"' in result
         assert result.startswith("Solve it.")
 
-    def test_tool_names_sorted(self):
+    def test_tool_descriptions_included(self):
         runner = self._make_runner(tools=["search", "python_exec"])
         result = runner._compose_system_prompt("Prompt")
-        assert "python_exec, search" in result
+        # Both tools should appear with their MCP docstring descriptions.
+        assert "### python_exec" in result
+        assert "### search" in result
+        assert "## Available Tools" in result
 
 
 # ---------------------------------------------------------------------------
@@ -509,6 +525,33 @@ class TestResolveToolCall:
     def test_returns_none_when_no_tool_found(self):
         runner = self._make_runner(tools=["python_exec"])
         result = runner._resolve_tool_call("Just a text answer", [])
+        assert result is None
+
+    @pytest.mark.parametrize(
+        "bad_args",
+        [
+            [1, 2, 3],
+            "code=print(1)",
+            42,
+            None,
+        ],
+    )
+    def test_native_non_dict_args_falls_through_to_text(self, bad_args):
+        """Malformed native args (non-dict) should fall through to text parsing.
+
+        We deliberately do not iterate past the first native call or attempt
+        repair — see ``_resolve_tool_call`` docstring.
+        """
+        runner = self._make_runner(tools=["python_exec"])
+        native = [{"tool": "python_exec", "arguments": bad_args}]
+        text = '{"tool": "python_exec", "arguments": {"code": "x=1"}}'
+        result = runner._resolve_tool_call(text, native)
+        assert result == {"tool": "python_exec", "arguments": {"code": "x=1"}}
+
+    def test_native_non_dict_args_returns_none_without_text_fallback(self):
+        runner = self._make_runner(tools=["python_exec"])
+        native = [{"tool": "python_exec", "arguments": [1, 2, 3]}]
+        result = runner._resolve_tool_call("free-form text answer", native)
         assert result is None
 
 

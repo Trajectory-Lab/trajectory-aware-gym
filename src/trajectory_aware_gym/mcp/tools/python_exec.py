@@ -34,10 +34,24 @@ _WALL_TIMEOUT_SECONDS = 15  # parent-side wall clock cap
 def python_exec(code: str) -> dict[str, Any]:
     """Execute Python code in a sandboxed subprocess and return stdout.
 
-    The sandbox has standard math/computation libraries pre-imported
-    (math, collections, itertools, numpy, sympy, etc.) and an import
-    allowlist.  Hard caps on CPU time, memory, wall clock, and output
-    size keep one bad call from wedging the host.
+    Pre-imported and ready to use (no import needed):
+      math (floor, ceil, sqrt, isqrt, log, log2, log10, gcd, comb,
+            factorial, prod, pi, inf, atan2),
+      collections (defaultdict, deque, Counter, OrderedDict),
+      itertools (combinations, permutations, product, accumulate,
+                 chain, groupby, islice, pairwise, cycle),
+      functools (reduce, cache, lru_cache, partial),
+      heapq (heappush, heappop, heapify, nlargest, nsmallest),
+      bisect (bisect, bisect_left, insort),
+      re, random, fractions, decimal, json, copy, string.
+      numpy (as np), sympy, pandas (as pd) — if installed.
+
+    You MUST use print() to return values — unprinted expressions are
+    invisible. The result JSON has {"status": "success", "output": "..."}
+    or {"status": "error", "error": "..."}.
+
+    Limits: 15s wall clock, 30s CPU, 4 GB memory, 64 KB output.
+    Disallowed: open(), exec(), eval(), network access, file I/O.
     """
     if not code:
         return {"status": "error", "error": "Missing 'code' argument"}

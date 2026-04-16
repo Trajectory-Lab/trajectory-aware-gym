@@ -323,6 +323,9 @@ class TestAWSModelClientConfig:
             bedrock_llama_1b="x",
             bedrock_llama_3b="x",
             bedrock_llama_8b="x",
+            bedrock_gemma_4b="x",
+            bedrock_mistral_7b="x",
+            bedrock_nemotron_9b="x",
             s3_bucket="b",
             s3_prefix="p",
         )
@@ -338,6 +341,9 @@ class TestAWSModelClientConfig:
             bedrock_llama_1b="x",
             bedrock_llama_3b="x",
             bedrock_llama_8b="x",
+            bedrock_gemma_4b="x",
+            bedrock_mistral_7b="x",
+            bedrock_nemotron_9b="x",
             s3_bucket="b",
             s3_prefix="p",
         )

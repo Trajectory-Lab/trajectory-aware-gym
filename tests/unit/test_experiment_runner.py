@@ -1200,6 +1200,145 @@ def test_run_experiment_exception_writes_failed_status_and_reraises(
     metadata = json.loads((replication_dir / "run_metadata.json").read_text(encoding="utf-8"))
     assert metadata["status"] == "failed"
     assert metadata["finished_at"] is not None
+    assert "GEPA exploded" in metadata["error"]
+
+    # Bug-fix regression: run_summary.json must always be finalized, even
+    # when a replication raised under fail-fast.
+    run_summary_path = replication_dir.parent.parent / "run_summary.json"
+    summary = json.loads(run_summary_path.read_text(encoding="utf-8"))
+    assert summary["finished_at"] is not None
+    assert summary["elapsed_seconds"] is not None
+    failed_entry = summary["models"]["Qwen3-1.7B-Base"]["42"]
+    assert failed_entry["status"] == "failed"
+    assert "GEPA exploded" in failed_entry["error"]
+
+
+def test_run_experiment_continue_on_failure_runs_remaining_seeds(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """fail_fast=False: a failed replication is recorded; later seeds still run."""
+    import trajectory_aware_gym.experiments.runner as runner_module
+
+    config_path = Path("experiments/orz57k-tool/config.yaml")
+    eval_result = _make_episode_result("e1", success=True, cost=0.01, tokens=1)
+    train_result = _make_episode_result("t1", success=True, cost=0.01, tokens=1)
+
+    class FakeRunner:
+        def __init__(self, **kwargs):
+            self.episode_history = (train_result,)
+
+    class FakeSolverModule:
+        def __init__(self, runner, default_instructions: str):
+            self.instructions = default_instructions
+
+    class FlakyGEPA:
+        """Fails on the first compile call, succeeds afterwards."""
+
+        _calls = 0
+
+        def __init__(self, **kwargs):
+            pass
+
+        def compile(self, student, trainset, valset):
+            FlakyGEPA._calls += 1
+            if FlakyGEPA._calls == 1:
+                raise RuntimeError("transient flake on seed 42")
+            detailed = SimpleNamespace(
+                best_idx=0,
+                val_aggregate_scores=[0.5],
+                val_subscores=[{"a": 1.0}],
+            )
+            return SimpleNamespace(instructions="prompt", detailed_results=detailed)
+
+    monkeypatch.setattr(runner_module, "_build_trainset", lambda config: [SimpleNamespace()])
+    monkeypatch.setattr(runner_module, "GEMEpisodeRunner", FakeRunner)
+    monkeypatch.setattr(runner_module, "GEMSolverModule", FakeSolverModule)
+    monkeypatch.setattr(runner_module.dspy, "GEPA", FlakyGEPA)
+    monkeypatch.setattr(runner_module.dspy, "configure", lambda **kwargs: None)
+    monkeypatch.setattr(runner_module, "_build_task_lm", lambda *a, **k: SimpleNamespace())
+    monkeypatch.setattr(runner_module, "get_reflection_lm", lambda *a, **k: SimpleNamespace())
+    monkeypatch.setattr(runner_module, "_extract_reflection_usage", lambda lm: (0, 0.0))
+    monkeypatch.setattr(
+        runner_module,
+        "_run_heldout_eval",
+        lambda **kwargs: ([eval_result], _default_eval_summary(1, 1, 1)),
+    )
+
+    summary = run_experiment(
+        RunExperimentArgs(
+            config_path=config_path,
+            results_root=tmp_path,
+            seeds=(42, 123),
+            fail_fast=False,
+        )
+    )
+
+    config = ExperimentConfig.from_yaml(config_path)
+    model_name = config.task_models[0].name
+    seed_entries = summary["models"][model_name]
+    assert seed_entries["42"]["status"] == "failed"
+    assert "transient flake" in seed_entries["42"]["error"]
+    assert seed_entries["123"]["status"] == "completed"
+    assert summary["finished_at"] is not None
+
+
+def test_run_experiment_fail_fast_aborts_remaining_seeds(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """fail_fast=True (default): first failure aborts; later seeds never run."""
+    import trajectory_aware_gym.experiments.runner as runner_module
+
+    config_path = Path("experiments/orz57k-tool/config.yaml")
+    compile_calls: list[int] = []
+
+    class FakeRunner:
+        def __init__(self, **kwargs):
+            self.episode_history = ()
+
+    class FakeSolverModule:
+        def __init__(self, runner, default_instructions: str):
+            self.instructions = default_instructions
+
+    class BrokenGEPA:
+        def __init__(self, **kwargs):
+            pass
+
+        def compile(self, student, trainset, valset):
+            compile_calls.append(1)
+            raise RuntimeError("first-seed boom")
+
+    monkeypatch.setattr(runner_module, "_build_trainset", lambda config: [SimpleNamespace()])
+    monkeypatch.setattr(runner_module, "GEMEpisodeRunner", FakeRunner)
+    monkeypatch.setattr(runner_module, "GEMSolverModule", FakeSolverModule)
+    monkeypatch.setattr(runner_module.dspy, "GEPA", BrokenGEPA)
+    monkeypatch.setattr(runner_module.dspy, "configure", lambda **kwargs: None)
+    monkeypatch.setattr(runner_module, "_build_task_lm", lambda *a, **k: SimpleNamespace())
+    monkeypatch.setattr(runner_module, "get_reflection_lm", lambda *a, **k: SimpleNamespace())
+
+    with pytest.raises(RuntimeError, match="first-seed boom"):
+        run_experiment(
+            RunExperimentArgs(
+                config_path=config_path,
+                results_root=tmp_path,
+                seeds=(42, 123),
+                fail_fast=True,
+            )
+        )
+
+    assert compile_calls == [1], "fail_fast must not invoke GEPA on the second seed"
+
+    config = ExperimentConfig.from_yaml(config_path)
+    model_name = config.task_models[0].name
+    config_dir = tmp_path / _safe_segment(config.name)
+    ts_dirs = [d for d in config_dir.iterdir() if d.is_dir()]
+    assert len(ts_dirs) == 1
+    summary = json.loads((ts_dirs[0] / "run_summary.json").read_text(encoding="utf-8"))
+    assert summary["finished_at"] is not None
+    assert summary["models"][model_name]["42"]["status"] == "failed"
+    # Second seed must not have a recorded entry — it never started.
+    assert "123" not in summary["models"][model_name]
 
 
 def test_run_experiment_result_none_when_no_detailed_results(
@@ -1299,6 +1438,9 @@ def test_cli_parse_args_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert args.danger_purge is False
     assert args.results_root == Path("results")
     assert args.halt_on_budget_exceeded is False
+    # fail_fast defaults to True so transient errors don't silently bias
+    # aggregate results across seeds.
+    assert args.fail_fast is True
 
 
 def test_cli_parse_args_all_flags(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1323,6 +1465,7 @@ def test_cli_parse_args_all_flags(monkeypatch: pytest.MonkeyPatch) -> None:
             "--results-root",
             "/tmp/results",
             "--halt-on-budget-exceeded",
+            "--continue-on-failure",
         ],
     )
     args = mod.parse_args()
@@ -1335,6 +1478,7 @@ def test_cli_parse_args_all_flags(monkeypatch: pytest.MonkeyPatch) -> None:
     assert args.danger_purge is True
     assert args.results_root == Path("/tmp/results")
     assert args.halt_on_budget_exceeded is True
+    assert args.fail_fast is False
 
 
 def test_cli_main_calls_run_experiment(monkeypatch: pytest.MonkeyPatch) -> None:
