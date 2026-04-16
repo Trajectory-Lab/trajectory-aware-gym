@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
-import subprocess
+import subprocess  # nosec B404 — sandboxed runner, not arbitrary shell
 import sys
 from typing import Any
 
@@ -57,7 +57,7 @@ def python_exec(code: str) -> dict[str, Any]:
         return {"status": "error", "error": "Missing 'code' argument"}
 
     try:
-        completed = subprocess.run(  # noqa: S603  # trusted argv
+        completed = subprocess.run(  # noqa: S603  # nosec B603 — trusted argv, no user-controlled command
             [sys.executable, "-m", _SANDBOX_MODULE],
             input=code,
             capture_output=True,
