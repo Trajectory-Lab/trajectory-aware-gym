@@ -104,13 +104,24 @@ The project evaluates two optimization paradigms:
 - Budget modes: light/medium/heavy controlling iteration count and population size
 
 **Trajectory Storage** (`src/trajectory_aware_gym/storage/`):
-- SQLite-backed persistence for trajectory logs and tool call records (`trajectories.db`)
-- Replaces per-episode JSON files and append-only `tool_calls.jsonl` with a single database
+- SQLite-backed persistence for trajectory logs, tool call records, and experiment runs (`trajectories.db`)
 - WAL mode enabled for concurrent read access during writes
-- Stores episodes, per-step data, LLM call metadata (tokens, cost, latency), and tool calls in normalized tables
+- Schema version 1.3.0 — tables: `episodes`, `steps`, `llm_calls`, `tool_calls`, `experiment_runs`
+- Legacy pre-v1.2 SQLite files are migrated in place on first open before new indexes are created
+- `llm_calls` tracks `provider` (derived from model_id prefix: `ollama/`, `bedrock/`, `sagemaker/`), `cost_type` (currently `"actual"` | `"unavailable"` in stored rows), `latency_ms`, and `cost_usd` per call
+- `tool_calls` tracks `duration_ms` per tool execution
+- `experiment_runs` table (24 columns): full experiment-level registry with the effective runtime config snapshot (including CLI overrides), operator, git info, status lifecycle (`running` → `gepa_done` → `completed` | `failed`), result/cost summaries, `error_summary`, and `logging_summary`
+- Episodes link to experiment runs via nullable `experiment_run_id` FK
+- Experiment runs are local-first: each replication writes canonical artifacts to its local results folder, while trajectories remain canonical in the local SQLite DB
 - Thread-safe connection management (singleton per db path)
-- Public API: `save_trajectory`, `load_trajectory_by_id`, `load_all_trajectories`, `query_trajectories`, `save_tool_call_entry`, `episode_exists`
-- Data models (`TrajectoryLog`, `TrajectoryStep`, `ToolCall`, `LLMCallMetadata`) defined in `adapters/trajectory_logger.py`
+- Data models: `TrajectoryLog`, `TrajectoryStep`, `ToolCall`, `LLMCallMetadata` in `adapters/trajectory_logger.py`; `ExperimentRunRecord`, `EpisodeLoggingSummary`, and `LoggingSummary` in `storage/models.py`
+- Trajectory API: `save_trajectory`, `load_trajectory_by_id`, `load_all_trajectories`, `query_trajectories`, `save_tool_call_entry`, `episode_exists`
+- Experiment run API: `save_experiment_run`, `update_experiment_run`, `load_experiment_run`, `query_experiment_runs`
+- Run naming (`storage/naming.py`): `generate_experiment_run_id()` produces deterministic IDs in format `{config}-{provider}-{model_short}-{operator}-seed{seed}-{YYYYMMDD}T{HHMM}Z`; `get_operator()` reads git config with `$USER` fallback; `get_git_info()` reads `.git/HEAD` directly (no subprocess)
+- Resume semantics: `run_metadata.json` persists `experiment_run_id` immediately, and resumes from `gepa_done` must reuse that same ID so evaluation, reporting, and any later artifact sync stay attached to one logical replication
+- S3 sync (`storage/s3_upload.py`, `scripts/upload_experiment_artifacts.py`): experiment execution never uploads to S3 directly; post-run sync is explicit and writes `upload_manifest.json` locally. `upload_artifact_bundle()` remains immutable check-before-write, `upload_artifact_bundle_detailed()` returns uploaded/skipped/failed detail, `list_remote_runs()` paginates prefixes, and `download_artifact()` fetches single files. boto3 is imported lazily to avoid a hard dependency
+- Cost normalization (`metrics/cost_normalization.py`): `compute_normalized_cost()` maps Ollama token counts to Bedrock-equivalent USD using reference prices from `cost_normalization.reference_prices` config
+- Faithfulness rules: correctness metrics must use stored `episode_outcome` when available rather than inferring success from positive reward; unknown task-model cost must remain unknown instead of being coerced to zero
 
 **AWS/LLM Infrastructure** (`src/trajectory_aware_gym/config/`):
 - All LLM calls route through **LiteLLM** for unified provider interface

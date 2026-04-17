@@ -70,6 +70,9 @@ dspy.configure(lm=get_task_lm("qwen3:1.7b", "train"))
 | `llama:1b` | Bedrock (AWS) | Llama 3.2 1B |
 | `llama:3b` | Bedrock (AWS) | Llama 3.2 3B |
 | `llama:8b` | Bedrock (AWS) | Llama 3.1 8B |
+| `gemma:4b` | Bedrock (AWS) | Gemma 3 4B IT |
+| `mistral:7b` | Bedrock (AWS) | Mistral 7B Instruct |
+| `nemotron:9b` | Bedrock (AWS) | Nemotron Nano 9B |
 
 Ollama models require local setup. See [docs/05-operations/ollama_setup.md](../05-operations/ollama_setup.md) for installation.
 SageMaker models require a running endpoint. See [SageMaker Endpoints](#sagemaker-endpoints) below for deploy/teardown instructions.
@@ -96,8 +99,10 @@ Every YAML field can be overridden via an env var named `PREFIX_FIELD`:
 | `logging` | `LOG_` | `LOG_LEVEL=DEBUG` |
 | `cost_tracking` | `COST_TRACKING_` | `COST_TRACKING_ENABLED=false` |
 | `fitness` | `FITNESS_` | `FITNESS_GAMMA=0.95` |
+| `retry` | `RETRY_` | `RETRY_MAX_ATTEMPTS=6` |
+| `cost_normalization` | `COST_NORMALIZATION_` | `COST_NORMALIZATION_REFERENCE_PRICES='{"ollama/qwen3-1.7b-base":{"input_per_1m_tokens":0.10,"output_per_1m_tokens":0.10}}'` |
 
-Type coercion is automatic: `"42"` → `int`, `"3.14"` → `float`, `"true"` → `bool`.
+Type coercion is automatic: `"42"` → `int`, `"3.14"` → `float`, `"true"` → `bool`. Nested `dict`/`list` fields use JSON strings in env vars.
 
 ## Config Sections
 
@@ -113,6 +118,9 @@ Type coercion is automatic: `"42"` → `int`, `"3.14"` → `float`, `"true"` →
 | `bedrock_llama_1b` | `str` | Bedrock model ID for Llama 1B |
 | `bedrock_llama_3b` | `str` | Bedrock model ID for Llama 3B |
 | `bedrock_llama_8b` | `str` | Bedrock model ID for Llama 8B |
+| `bedrock_gemma_4b` | `str` | Bedrock model ID for Gemma 3 4B |
+| `bedrock_mistral_7b` | `str` | Bedrock model ID for Mistral 7B |
+| `bedrock_nemotron_9b` | `str` | Bedrock model ID for Nemotron 9B |
 | `s3_bucket` | `str` | S3 bucket for results |
 | `s3_prefix` | `str` | S3 key prefix |
 
@@ -145,6 +153,7 @@ Type coercion is automatic: `"42"` → `int`, `"3.14"` → `float`, `"true"` →
 | `max_steps` | `int` | Max steps per episode |
 | `temperature_train` | `float` | Temperature during training (1.0) |
 | `temperature_eval` | `float` | Temperature during evaluation (0.0) |
+| `tool_timeout` | `int` | Max seconds for a single tool execution |
 
 ### `gepa` — GEPA Optimizer (runtime knobs)
 
@@ -194,11 +203,55 @@ The current `math-dry-run` experiment closes the K4 integration milestone by val
 | `lambda` | `float` | >= 0.0 | Auxiliary per-turn reward scaling |
 | `loop_penalty_weight` | `float` | >= 0.0 | Loop detection penalty weight |
 | `step_efficiency_weight` | `float` | >= 0.0 | Step efficiency bonus weight |
+| `call_efficiency_weight` | `float` | >= 0.0 | Call efficiency bonus weight |
 | `max_steps` | `int` | >= 1 | Max steps for efficiency normalization |
 | `loop_window` | `int` | >= 1 | Sliding window for loop detection |
+| `call_budget_per_step` | `int` | >= 1 | Max LLM + tool calls per env step (denominator for call efficiency) |
 
 Note: The YAML field is `lambda` but the Python attribute is `lambda_` (Python keyword).
 Env var override: `FITNESS_LAMBDA`.
+
+### `retry` — Retry, Backoff & Concurrency
+
+| Field | Type | Constraints | Description |
+|-------|------|-------------|-------------|
+| `max_attempts` | `int` | >= 1 | Max retry attempts per LLM call |
+| `initial_wait_seconds` | `float` | >= 0.1 | Initial backoff wait |
+| `max_wait_seconds` | `float` | >= 1.0 | Maximum backoff wait cap |
+| `exponential_base` | `float` | >= 1.1 | Exponential backoff multiplier |
+| `jitter` | `bool` | — | Add randomized jitter to backoff |
+| `litellm_num_retries` | `int` | >= 0 | LiteLLM's built-in retry count (set to 0; we handle retries ourselves) |
+| `boto3_retry_mode` | `str` | — | boto3 retry mode (`standard` or `adaptive`) |
+| `boto3_max_attempts` | `int` | >= 1 | boto3 max retry attempts |
+| `sagemaker_read_timeout_seconds` | `int` | >= 10 | SageMaker endpoint read timeout |
+| `inference_semaphore_size` | `int` | >= 1 | Max concurrent LLM calls (asyncio semaphore) |
+
+### `cost_normalization` — Ollama Cost Proxy
+
+Maps local Ollama models (which have no API pricing) to Bedrock-equivalent USD using reference prices. Used for H2 hypothesis cost comparisons.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `prompt_token_ratio` | `float` | Fraction of total task-model tokens attributed to prompts when only total tokens are available for normalization |
+| `reference_prices` | `dict[str, dict[str, float]]` | Model ID → `{input_per_1m_tokens, output_per_1m_tokens}` |
+
+Each entry maps an Ollama model to the pricing of a comparable Bedrock model. Example:
+
+```yaml
+cost_normalization:
+  prompt_token_ratio: 0.70
+  reference_prices:
+    "ollama/qwen3-1.7b-base":
+      input_per_1m_tokens: 0.10   # Bedrock Llama-1B equivalent
+      output_per_1m_tokens: 0.10
+    "ollama/qwen3-4b-base":
+      input_per_1m_tokens: 0.22   # Bedrock Llama-3B equivalent
+      output_per_1m_tokens: 0.22
+```
+
+Reference prices are sourced from the [AWS Bedrock pricing page](https://aws.amazon.com/bedrock/pricing/) (2026-04, us-east-1). To update when pricing changes, edit the YAML values and add a comment with the new source date.
+
+**Important:** Normalized costs are proxy estimates, not actual spend. They are used only for cross-provider comparison in the paper.
 
 ## Using Config in Production and Experiment Code
 

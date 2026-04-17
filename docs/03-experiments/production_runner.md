@@ -1,6 +1,6 @@
 # Production Experiment Runner
 
-The production runner (`scripts/run_experiment.py`) executes GEPA optimization across configured task models, replication seeds, and evaluation protocols. It handles cost tracking, resume on failure, and structured output.
+The production runner (`scripts/run_experiment.py`) executes GEPA optimization across configured task models, replication seeds, and evaluation protocols. It handles cost tracking, resume on failure, and structured local output. Experiment execution is local-first: each replication writes its artifacts to the results directory and its episode trajectories to the local SQLite DB. Optional S3 sync happens later via `scripts/upload_experiment_artifacts.py`.
 
 ## Usage
 
@@ -90,18 +90,105 @@ results/
         ├── run_summary.json             # Experiment-level metadata and status
         └── {task_model_name}/
             └── replication_{seed}/
-                ├── run_metadata.json    # Replication status, timing, eval summary
-                ├── config_snapshot.yaml # Full config for reproducibility
+                ├── run_metadata.json    # Replication status, experiment_run_id, timing, validation + eval summaries
+                ├── config_snapshot.yaml # Effective runtime config (YAML + CLI overrides)
                 ├── optimized_prompt.txt # GEPA-evolved system prompt
                 ├── fitness_history.json # Fitness scores per GEPA iteration
                 ├── pareto_frontier.json # Pareto frontier of candidate prompts
                 ├── cost_summary.json    # Token/cost breakdown (task vs reflection, train vs eval)
+                ├── run_report.json      # Unified summary (identical keys across providers)
                 ├── training_metrics.csv  # Per-episode metrics (training only)
-                ├── raw_metrics.csv      # Per-episode metrics (train + eval)
+                ├── training_metrics_summary.json  # Aggregated training-phase stats
+                ├── raw_metrics.csv      # Per-episode metrics (held-out eval only)
                 ├── raw_metrics.jsonl    # Same data, JSONL format
-                ├── raw_metrics_summary.json  # Aggregated stats
+                ├── raw_metrics_summary.json  # Held-out eval stats split by baseline vs optimized
+                ├── upload_manifest.json # Written only by the separate S3 sync script
                 └── gepa_logs/           # GEPA internal optimization logs
 ```
+
+## Experiment Run Tracking
+
+Each replication is registered in the SQLite database (`logs/trajectories.db`) as an `experiment_run` record with a deterministic ID. That ID is also written into `run_metadata.json` immediately so resume can keep later evaluation, reporting, and any later artifact sync attached to the same logical replication.
+
+### experiment_run_id Format
+
+`{config_name}-{provider}-{model_short}-{operator}-seed{seed}-{YYYYMMDD}T{HHMM}Z`
+
+Example:
+
+`orz57k-tool-ollama-qwen3-1-7b-base-edward-seed42-20260417T0421Z`
+
+### Lifecycle
+
+```
+save_experiment_run(status="running")
+  → GEPA optimization
+update_experiment_run(status="gepa_done", optimized_prompt=...)
+  → Evaluation
+update_experiment_run(
+  status="completed",
+  finished_at=...,
+  result_summary=...,
+  cost_summary=...,
+  logging_summary=...,
+)
+```
+
+On exception:
+
+```
+update_experiment_run(
+  status="failed",
+  finished_at=...,
+  error_summary=...,
+  logging_summary=...,
+)
+```
+
+If a replication resumes from `status="gepa_done"`, the runner reloads the persisted `experiment_run_id` from `run_metadata.json` and continues updating the same DB row and local replication folder.
+
+Experiment-run registry updates and run-report publication are **best-effort** — failures log a warning and the experiment continues. Per-episode logging/persistence degradation is recorded in `logging_summary` instead of forcing fabricated values into the results.
+
+### Local-First Artifact Sync
+
+The runner itself never uploads to S3. To sync completed local results later, use:
+
+```bash
+poe upload-artifacts -- --replication-dir results/.../replication_42
+poe upload-artifacts -- --run-dir results/orz57k-tool/20260408T150000Z
+poe upload-artifacts -- --config-dir results/orz57k-tool
+```
+
+The upload script scans local replication folders, requires `run_metadata.json` to show `status: "completed"`, uploads the local artifact files (not the SQLite DB), and writes `upload_manifest.json` beside the artifacts with uploaded, skipped-existing, and failed keys.
+
+### Synced Artifacts
+
+| Artifact | Description |
+|----------|-------------|
+| `config_snapshot.yaml` | Effective runtime config, including CLI overrides such as `--seed-prompt`, `--budget-mode`, or `--max-metric-calls` |
+| `run_metadata.json` | Replication status, `experiment_run_id`, timing, and eval summary |
+| `cost_summary.json` | Token/cost breakdown |
+| `optimized_prompt.txt` | GEPA-evolved system prompt |
+| `fitness_history.json` | Fitness scores per GEPA iteration |
+| `run_report.json` | Unified cross-provider summary with provider, accuracy, cost, timing, and logging fields |
+
+S3 key format: `{s3_prefix}{experiment_run_id}/{filename}`
+
+Upload failures are isolated to the sync script and are recorded in `upload_manifest.json`; they never change experiment completion status.
+
+### run_report.json
+
+A unified summary with identical JSON keys regardless of provider (Bedrock or Ollama). Includes experiment metadata, performance summaries, actual/partial/unavailable cost semantics, normalized Ollama proxy cost when task-model token coverage is complete, timing, logging summary, and git info. `mean_llm_latency_ms` is scoped to trajectories linked to the current `experiment_run_id`, not every run in the same environment. Accuracy uses stored `episode_outcome` when available rather than positive reward heuristics.
+
+Key fields:
+
+- `experiment_run_id`, `config_name`, `provider`, `task_model_id`, `environment_id`, `seed`
+- `baseline_eval`, `eval_summary`
+- `total_tokens`, `total_tokens_known`, `task_model_cost_usd`, `task_model_cost_known_usd`
+- `reflection_cost_usd`, `total_cost_usd`, `total_cost_known_usd`, `cost_type`
+- `normalized_cost_usd`, `normalization_reference`
+- `wall_clock_seconds`, `mean_llm_latency_ms`
+- `git_commit`, `started_at`, `finished_at`, `logging_summary`
 
 ## Resume Behavior
 
@@ -112,15 +199,17 @@ The runner writes `run_summary.json` at the **start** of each invocation (with `
 3. **`--resume <timestamp>`**: resumes a specific run by its timestamp.
 4. **`--danger-purge`**: deletes `results/{config_name}/` entirely before starting.
 
+Resume safety checks compare the hash of the effective runtime config, not just the raw YAML file. Changing CLI overrides between runs (for example `--seed-prompt` or `--max-metric-calls`) causes resume to fail fast instead of silently mixing incompatible outputs.
+
 ## Key Output Files
 
 ### run_summary.json
 
-Written at the experiment level (one per invocation). Contains `run_id`, `config_hash`, `git_commit`, per-model results, and timing.
+Written at the experiment level (one per invocation). Contains `run_id`, `config_hash`, `git_commit`, per-model results, and timing. `config_hash` is computed from the effective runtime snapshot, so CLI overrides change the run identity.
 
 ### run_metadata.json
 
-Written per replication. Tracks status (`running` / `completed` / `failed`), timing, the GEPA result summary, and eval scores.
+Written per replication. Tracks status (`running` / `gepa_done` / `completed` / `failed`), `experiment_run_id`, timing, the GEPA result summary, eval scores, `logging_summary`, and `error` on failure. The runner preserves the original `started_at` and `experiment_run_id` when resuming a partially completed replication.
 
 ### cost_summary.json
 
@@ -128,15 +217,23 @@ Per-replication cost breakdown:
 
 | Field | Description |
 |-------|-------------|
-| `task_model_tokens` / `task_model_cost` | Total task model usage (train + eval) |
+| `task_model_tokens` / `task_model_cost` | Complete task-model totals when coverage is 100% |
+| `task_model_tokens_known` / `task_model_cost_known` | Known task-model totals even when some episodes have missing data |
+| `task_model_token_data_coverage` / `task_model_cost_data_coverage` | Fraction of episodes with complete task-model token/cost data |
 | `reflection_tokens` / `reflection_cost` | Reflection model usage during GEPA |
-| `total_tokens` / `total_cost` | Combined totals |
+| `total_tokens` / `total_cost` | Complete combined totals when task-model coverage is 100% |
+| `total_tokens_known` / `total_cost_known` | Combined known totals when task-model data is partial |
+| `cost_type` | `actual`, `partial`, or `unavailable` for the run-level cost summary |
 | `training_task_model_tokens` / `eval_task_model_tokens` | Train vs eval split |
 | `effective_budget_usd` | Budget from config |
 
 ### raw_metrics.csv / .jsonl
 
-One row per episode (training and evaluation combined). Fields match the `EpisodeRawMetrics` schema documented in [phase3_raw_metrics.md](phase3_raw_metrics.md).
+One row per held-out evaluation episode (baseline eval + optimized eval). Fields match the `EpisodeRawMetrics` schema documented in [phase3_raw_metrics.md](phase3_raw_metrics.md).
+
+### training_metrics.csv / .jsonl
+
+One row per GEPA optimization-phase episode. This is the right artifact for inspecting train/validation-side behavior during prompt search.
 
 ## Data Splits
 

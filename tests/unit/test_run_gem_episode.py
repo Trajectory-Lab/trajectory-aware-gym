@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+from trajectory_aware_gym.adapters.trajectory_logger import TrajectoryLog, TrajectoryStep
 
 SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "run_gem_episode.py"
 SPEC = importlib.util.spec_from_file_location("run_gem_episode", SCRIPT_PATH)
@@ -28,6 +31,7 @@ def make_args(**overrides):
         "experiment_config": None,
         "task_model_id": None,
         "mode": "eval",
+        "episodes": None,
         "max_steps": None,
         "temperature": None,
         "max_response_tokens": None,
@@ -35,6 +39,36 @@ def make_args(**overrides):
     }
     base.update(overrides)
     return SimpleNamespace(**base)
+
+
+def make_trajectory(*, steps: list[TrajectoryStep] | None = None) -> TrajectoryLog:
+    """Build a minimal faithful smoke trajectory for script tests."""
+    started_at = datetime.now(UTC)
+    resolved_steps = (
+        steps
+        if steps is not None
+        else [
+            TrajectoryStep(
+                step_index=1,
+                action="\\boxed{42}",
+                observation="correct",
+                reward=1.0,
+                terminated=True,
+                truncated=False,
+            )
+        ]
+    )
+    total_reward = sum(step.reward for step in resolved_steps)
+    return TrajectoryLog(
+        environment_id="math:Orz57K",
+        seed=42,
+        started_at=started_at,
+        finished_at=started_at + timedelta(seconds=1),
+        initial_observation="Solve 6*7",
+        steps=resolved_steps,
+        total_reward=total_reward,
+        episode_outcome="success" if resolved_steps else None,
+    )
 
 
 def test_build_smoke_run_spec_from_experiment_config():
@@ -62,7 +96,8 @@ def test_build_smoke_run_spec_respects_overrides():
         seed=999,
         task_model_id="bedrock/custom-qwen",
         mode="train",
-        max_steps=2,
+        episodes=2,
+        max_steps=3,
         temperature=0.3,
         max_response_tokens=1536,
         system_prompt="custom prompt",
@@ -74,7 +109,7 @@ def test_build_smoke_run_spec_respects_overrides():
     assert spec.model_id == "bedrock/custom-qwen"
     assert spec.seed == 999
     assert spec.episode_count == 2
-    assert spec.episode_max_steps == 10
+    assert spec.episode_max_steps == 3
     assert spec.max_response_tokens == 1536
     assert spec.temperature == pytest.approx(0.3)
     assert spec.system_prompt == "custom prompt"
@@ -126,3 +161,39 @@ def test_build_completion_kwargs(model_id, expected_api_base, expect_stop, expec
         assert kwargs["aws_region_name"] == "us-east-1"
     else:
         assert "aws_region_name" not in kwargs
+
+
+@pytest.mark.parametrize(
+    ("trajectory", "expected_message"),
+    [
+        (None, "faithful trajectory log"),
+        (
+            make_trajectory(steps=[]),
+            "contains no steps",
+        ),
+    ],
+)
+def test_run_smoke_episode_requires_faithful_trajectory(monkeypatch, trajectory, expected_message):
+    class FakeRunner:
+        def __init__(self, **_kwargs):
+            pass
+
+        def run_episode(self, *_args, **_kwargs):
+            return SimpleNamespace(trajectory=trajectory, log_path=Path("logs/trajectories.db"))
+
+    monkeypatch.setattr(run_gem_episode, "GEMEpisodeRunner", FakeRunner)
+
+    spec = run_gem_episode.SmokeRunSpec(
+        environment_id="math:Orz57K",
+        experiment_name="quick-test",
+        model_id="ollama/qwen3-1.7b-base",
+        seed=42,
+        episode_count=1,
+        episode_max_steps=1,
+        max_response_tokens=64,
+        temperature=0.0,
+        system_prompt="solve",
+    )
+
+    with pytest.raises(RuntimeError, match=expected_message):
+        run_gem_episode.run_smoke_episode(spec)

@@ -7,11 +7,14 @@ import hashlib
 import importlib
 import json
 import logging
+import os
 import shutil
+import socket
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any, Literal
 
 import dspy  # type: ignore[import-untyped]
@@ -21,19 +24,36 @@ from litellm import completion_cost  # type: ignore[import-untyped]
 from trajectory_aware_gym.adapters.dspy_adapter import TrajectoryFitnessMetric
 from trajectory_aware_gym.adapters.gem_episode_runner import GEMEpisodeResult, GEMEpisodeRunner
 from trajectory_aware_gym.adapters.gem_solver_module import GEMSolverModule
+from trajectory_aware_gym.adapters.trajectory_logger import SCHEMA_VERSION, TrajectoryLog
 from trajectory_aware_gym.config import settings
 from trajectory_aware_gym.config.core import Settings
 from trajectory_aware_gym.config.llm_provider import get_reflection_lm
 from trajectory_aware_gym.metrics import EpisodeRawMetrics
+from trajectory_aware_gym.metrics.logging_summary import aggregate_logging_summary
+from trajectory_aware_gym.metrics.run_report import build_run_report
 from trajectory_aware_gym.models.experiment import (
     ExperimentConfig,
     TaskModelConfig,
 )
 from trajectory_aware_gym.models.gepa_result import GEPARunResult, accuracy_from_subscores
+from trajectory_aware_gym.storage import (
+    ExperimentRunRecord,
+    LoggingEvent,
+    LoggingStatus,
+    LoggingSummary,
+    episode_exists,
+    generate_experiment_run_id,
+    get_git_info,
+    get_operator,
+    save_experiment_run,
+    save_trajectory,
+    update_experiment_run,
+)
 
 DEFAULT_RESULTS_ROOT = Path("results")
 _COST_DECIMAL_PLACES = 6
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+_DB_PATH = _PROJECT_ROOT / "logs" / "trajectories.db"
 
 logger = logging.getLogger(__name__)
 
@@ -131,38 +151,45 @@ def _format_iso(ts: datetime) -> str:
     return ts.isoformat().replace("+00:00", "Z")
 
 
-def _config_hash(config: ExperimentConfig) -> str:
-    payload = json.dumps(
-        config.model_dump(mode="json", by_alias=True, exclude_none=True),
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def _git_commit_hash() -> str | None:
-    """Read the current git commit hash without spawning a subprocess."""
+def _parse_iso(value: str) -> datetime | None:
     try:
-        git_dir = _PROJECT_ROOT / ".git"
-        head_file = git_dir / "HEAD"
-        if not head_file.exists():
-            return None
-        head_content = head_file.read_text(encoding="utf-8").strip()
-        if head_content.startswith("ref: "):
-            ref_path = (git_dir / head_content[5:]).resolve()
-            if not ref_path.is_relative_to(git_dir.resolve()):
-                return None
-            if not ref_path.exists():
-                return None
-            return ref_path.read_text(encoding="utf-8").strip() or None
-        return head_content or None
-    except OSError:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
         return None
 
 
-def _write_json(path: Path, payload: dict[str, Any]) -> None:
+def _config_hash(config: ExperimentConfig | dict[str, Any]) -> str:
+    snapshot = (
+        config.model_dump(mode="json", by_alias=True, exclude_none=True)
+        if isinstance(config, ExperimentConfig)
+        else config
+    )
+    payload = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    tmp_path: Path | None = None
+    try:
+        with NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            delete=False,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+        ) as handle:
+            handle.write(content)
+            tmp_path = Path(handle.name)
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path is not None and tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    _atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True))
 
 
 def _write_jsonl(path: Path, rows: list[EpisodeRawMetrics]) -> None:
@@ -188,13 +215,79 @@ def _write_csv(path: Path, rows: list[EpisodeRawMetrics]) -> None:
             writer.writerow(row.model_dump(mode="json"))
 
 
+def _load_raw_metrics_jsonl(path: Path) -> list[EpisodeRawMetrics]:
+    if not path.exists():
+        return []
+    rows: list[EpisodeRawMetrics] = []
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                payload = line.strip()
+                if not payload:
+                    continue
+                parsed = json.loads(payload)
+                if isinstance(parsed, dict):
+                    rows.append(EpisodeRawMetrics.model_validate(parsed))
+    except Exception:  # noqa: BLE001
+        logger.warning("Failed to load raw metrics JSONL from %s", path, exc_info=True)
+        return []
+    return rows
+
+
+def _load_raw_metrics_csv(path: Path) -> list[EpisodeRawMetrics]:
+    if not path.exists():
+        return []
+    rows: list[EpisodeRawMetrics] = []
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            for raw_row in csv.DictReader(handle):
+                parsed_row = {
+                    key: None if value == "" else yaml.safe_load(value)
+                    for key, value in raw_row.items()
+                    if key is not None
+                }
+                rows.append(EpisodeRawMetrics.model_validate(parsed_row))
+    except Exception:  # noqa: BLE001
+        logger.warning("Failed to load raw metrics CSV from %s", path, exc_info=True)
+        return []
+    return rows
+
+
+def _load_training_metrics_rows(replication_dir: Path) -> list[EpisodeRawMetrics]:
+    rows = _load_raw_metrics_jsonl(replication_dir / "training_metrics.jsonl")
+    if rows:
+        return rows
+    return _load_raw_metrics_csv(replication_dir / "training_metrics.csv")
+
+
 def _raw_metrics_summary(rows: list[EpisodeRawMetrics]) -> dict[str, float | int | None]:
+    return _raw_metrics_summary_with_omissions(rows, metrics_unavailable_episodes=0)
+
+
+def _raw_metrics_summary_for_results(
+    results: list[GEMEpisodeResult],
+) -> dict[str, float | int | None]:
+    rows = [result.raw_metrics for result in results if result.raw_metrics is not None]
+    return _raw_metrics_summary_with_omissions(
+        rows,
+        metrics_unavailable_episodes=len(results) - len(rows),
+    )
+
+
+def _raw_metrics_summary_with_omissions(
+    rows: list[EpisodeRawMetrics],
+    *,
+    metrics_unavailable_episodes: int,
+) -> dict[str, float | int | None]:
     if not rows:
         return {
             "episodes": 0,
+            "metrics_unavailable_episodes": metrics_unavailable_episodes,
             "successes": 0,
             "mean_latency_seconds": None,
-            "total_cost": None,
+            "known_total_cost_usd": None,
+            "total_cost_usd": None,
+            "known_total_tokens": None,
             "total_tokens": None,
             "mean_cost_data_coverage": None,
             "mean_token_data_coverage": None,  # nosec B105 — not a password
@@ -206,19 +299,30 @@ def _raw_metrics_summary(rows: list[EpisodeRawMetrics]) -> dict[str, float | int
     latencies = [row.episode_latency_seconds for row in rows]
     costs = [row.llm_cost_usd for row in rows if row.llm_cost_usd is not None]
     tokens = [row.total_tokens for row in rows if row.total_tokens is not None]
+    mean_cost_coverage = sum(r.cost_data_coverage for r in rows) / episodes
+    mean_token_coverage = sum(r.token_data_coverage for r in rows) / episodes
+    complete_cost = (
+        metrics_unavailable_episodes == 0
+        and all(r.cost_data_coverage == 1.0 for r in rows)
+        and all(r.llm_cost_usd is not None for r in rows)
+    )
+    complete_tokens = (
+        metrics_unavailable_episodes == 0
+        and all(r.token_data_coverage == 1.0 for r in rows)
+        and all(r.total_tokens is not None for r in rows)
+    )
 
     return {
         "episodes": episodes,
+        "metrics_unavailable_episodes": metrics_unavailable_episodes,
         "successes": successes,
         "mean_latency_seconds": round(sum(latencies) / episodes, _COST_DECIMAL_PLACES),
-        "total_cost": round(sum(costs), _COST_DECIMAL_PLACES) if costs else None,
-        "total_tokens": int(sum(tokens)) if tokens else None,
-        "mean_cost_data_coverage": round(
-            sum(r.cost_data_coverage for r in rows) / episodes, _COST_DECIMAL_PLACES
-        ),
-        "mean_token_data_coverage": round(
-            sum(r.token_data_coverage for r in rows) / episodes, _COST_DECIMAL_PLACES
-        ),
+        "known_total_cost_usd": round(sum(costs), _COST_DECIMAL_PLACES),
+        "total_cost_usd": round(sum(costs), _COST_DECIMAL_PLACES) if complete_cost else None,
+        "known_total_tokens": int(sum(tokens)),
+        "total_tokens": int(sum(tokens)) if complete_tokens else None,
+        "mean_cost_data_coverage": round(mean_cost_coverage, _COST_DECIMAL_PLACES),
+        "mean_token_data_coverage": round(mean_token_coverage, _COST_DECIMAL_PLACES),
         "mean_llm_latency_data_coverage": round(
             sum(r.llm_latency_data_coverage for r in rows) / episodes, _COST_DECIMAL_PLACES
         ),
@@ -255,10 +359,248 @@ def _extract_reflection_usage(reflection_lm: Any | None) -> tuple[int, float]:
     return (total_tokens, total_cost)
 
 
-def _extract_task_usage(results: list[GEMEpisodeResult]) -> tuple[int, float]:
-    tokens = sum(result.trajectory.total_tokens for result in results)
-    cost = sum(result.trajectory.total_cost_usd for result in results)
-    return (tokens, cost)
+def _result_success(result: GEMEpisodeResult) -> bool | None:
+    if result.raw_metrics is not None:
+        return result.raw_metrics.success
+    if result.trajectory is not None and result.trajectory.episode_outcome is not None:
+        return result.trajectory.episode_outcome == "success"
+    return None
+
+
+def _results_logging_summary(results: list[GEMEpisodeResult]) -> LoggingSummary:
+    return aggregate_logging_summary([result.logging_summary for result in results])
+
+
+def _persist_training_trajectories(
+    results: list[GEMEpisodeResult],
+    *,
+    experiment_run_id: str,
+    db_path: Path = _DB_PATH,
+) -> list[GEMEpisodeResult]:
+    persisted_results: list[GEMEpisodeResult] = []
+    for result in results:
+        trajectory = result.trajectory
+        if not isinstance(trajectory, TrajectoryLog):
+            persisted_results.append(result)
+            continue
+
+        logging_summary = result.logging_summary.model_copy(deep=True)
+        logging_summary.persistence_requested = True
+        log_path = result.log_path
+
+        try:
+            if not episode_exists(db_path, trajectory.run_id):
+                save_trajectory(
+                    db_path,
+                    trajectory,
+                    experiment_run_id=experiment_run_id,
+                )
+            log_path = db_path
+            logging_summary.trajectory_persisted = True
+            if logging_summary.status == "failed":
+                logging_summary.status = "partial"
+        except Exception as exc:  # noqa: BLE001
+            if logging_summary.status == "complete":
+                logging_summary.status = "partial"
+            logging_summary.events.append(
+                LoggingEvent(
+                    stage="save",
+                    kind="persistence_failed",
+                    episode_run_id=trajectory.run_id,
+                    message=(f"Failed to persist a GEPA training trajectory to SQLite: {exc!r}"),
+                )
+            )
+
+        persisted_results.append(
+            replace(
+                result,
+                log_path=log_path,
+                logging_summary=logging_summary,
+            )
+        )
+
+    return persisted_results
+
+
+def _merge_logging_summaries(
+    summaries: list[LoggingSummary],
+    *,
+    max_events: int = 100,
+) -> LoggingSummary:
+    if not summaries:
+        return LoggingSummary()
+
+    events: list[LoggingEvent] = []
+    events_truncated = any(summary.events_truncated for summary in summaries)
+    for summary in summaries:
+        for event in summary.events:
+            if len(events) < max_events:
+                events.append(event)
+            else:
+                events_truncated = True
+                break
+
+    if summaries and all(summary.status == "failed" for summary in summaries):
+        status: LoggingStatus = "failed"
+    elif any(summary.status != "complete" for summary in summaries) or events:
+        status = "partial"
+    else:
+        status = "complete"
+
+    return LoggingSummary(
+        status=status,
+        trajectory_persisted_episodes=sum(
+            summary.trajectory_persisted_episodes for summary in summaries
+        ),
+        trajectory_failed_episodes=sum(summary.trajectory_failed_episodes for summary in summaries),
+        metrics_unavailable_episodes=sum(
+            summary.metrics_unavailable_episodes for summary in summaries
+        ),
+        numeric_anomaly_count=sum(summary.numeric_anomaly_count for summary in summaries),
+        events=events,
+        events_truncated=events_truncated,
+    )
+
+
+def _summarize_task_usage_rows(
+    rows: list[EpisodeRawMetrics],
+    *,
+    metrics_unavailable_episodes: int,
+) -> dict[str, float | int | bool | None]:
+    episodes = len(rows) + metrics_unavailable_episodes
+    if episodes == 0:
+        return {
+            "episodes": 0,
+            "total_tokens": 0,
+            "known_total_tokens": 0,
+            "token_data_coverage": 1.0,  # nosec B105 - coverage metric, not a credential
+            "total_cost_usd": 0.0,
+            "known_cost_usd": 0.0,
+            "cost_data_coverage": 1.0,
+            "has_missing_cost_data": False,
+            "metrics_unavailable_episodes": 0,
+        }
+
+    known_total_tokens = int(sum(row.total_tokens for row in rows if row.total_tokens is not None))
+    known_cost_usd = float(sum(row.llm_cost_usd for row in rows if row.llm_cost_usd is not None))
+    token_coverage = sum((row.token_data_coverage for row in rows), 0.0) / episodes
+    cost_coverage = sum((row.cost_data_coverage for row in rows), 0.0) / episodes
+    complete_tokens = (
+        metrics_unavailable_episodes == 0
+        and all(row.token_data_coverage == 1.0 for row in rows)
+        and all(row.total_tokens is not None for row in rows)
+    )
+    complete_cost = (
+        metrics_unavailable_episodes == 0
+        and all(row.cost_data_coverage == 1.0 for row in rows)
+        and all(row.llm_cost_usd is not None for row in rows)
+    )
+
+    return {
+        "episodes": episodes,
+        "total_tokens": known_total_tokens if complete_tokens else None,
+        "known_total_tokens": known_total_tokens,
+        "token_data_coverage": round(token_coverage, _COST_DECIMAL_PLACES),
+        "total_cost_usd": round(known_cost_usd, _COST_DECIMAL_PLACES) if complete_cost else None,
+        "known_cost_usd": round(known_cost_usd, _COST_DECIMAL_PLACES),
+        "cost_data_coverage": round(cost_coverage, _COST_DECIMAL_PLACES),
+        "has_missing_cost_data": not complete_cost,
+        "metrics_unavailable_episodes": metrics_unavailable_episodes,
+    }
+
+
+def _merge_task_usage_summaries(
+    summaries: list[dict[str, float | int | bool | None]],
+) -> dict[str, float | int | bool | None]:
+    def as_int(summary: dict[str, float | int | bool | None], key: str) -> int | None:
+        value = summary.get(key)
+        return int(value) if isinstance(value, int | float) else None
+
+    def as_float(summary: dict[str, float | int | bool | None], key: str) -> float | None:
+        value = summary.get(key)
+        return float(value) if isinstance(value, int | float) else None
+
+    total_episodes = sum(
+        episodes for summary in summaries if (episodes := as_int(summary, "episodes")) is not None
+    )
+    if total_episodes == 0:
+        return _summarize_task_usage_rows([], metrics_unavailable_episodes=0)
+
+    known_total_tokens = sum(
+        tokens
+        for summary in summaries
+        if (tokens := as_int(summary, "known_total_tokens")) is not None
+    )
+    known_cost_usd = sum(
+        cost for summary in summaries if (cost := as_float(summary, "known_cost_usd")) is not None
+    )
+    metrics_unavailable = sum(
+        unavailable
+        for summary in summaries
+        if (unavailable := as_int(summary, "metrics_unavailable_episodes")) is not None
+    )
+    token_coverage = (
+        sum(
+            coverage * episodes
+            for summary in summaries
+            if (coverage := as_float(summary, "token_data_coverage")) is not None
+            and (episodes := as_int(summary, "episodes")) is not None
+        )
+        / total_episodes
+    )
+    cost_coverage = (
+        sum(
+            coverage * episodes
+            for summary in summaries
+            if (coverage := as_float(summary, "cost_data_coverage")) is not None
+            and (episodes := as_int(summary, "episodes")) is not None
+        )
+        / total_episodes
+    )
+    complete_tokens = metrics_unavailable == 0 and all(
+        summary.get("total_tokens") is not None
+        for summary in summaries
+        if (episodes := as_int(summary, "episodes")) is not None and episodes > 0
+    )
+    complete_cost = metrics_unavailable == 0 and all(
+        summary.get("total_cost_usd") is not None
+        for summary in summaries
+        if (episodes := as_int(summary, "episodes")) is not None and episodes > 0
+    )
+
+    return {
+        "episodes": total_episodes,
+        "total_tokens": known_total_tokens if complete_tokens else None,
+        "known_total_tokens": known_total_tokens,
+        "token_data_coverage": round(token_coverage, _COST_DECIMAL_PLACES),
+        "total_cost_usd": round(known_cost_usd, _COST_DECIMAL_PLACES) if complete_cost else None,
+        "known_cost_usd": round(known_cost_usd, _COST_DECIMAL_PLACES),
+        "cost_data_coverage": round(cost_coverage, _COST_DECIMAL_PLACES),
+        "has_missing_cost_data": not complete_cost,
+        "metrics_unavailable_episodes": metrics_unavailable,
+    }
+
+
+def _summarize_task_usage(results: list[GEMEpisodeResult]) -> dict[str, float | int | bool | None]:
+    rows = [result.raw_metrics for result in results if result.raw_metrics is not None]
+    metrics_unavailable = len(results) - len(rows)
+    return _summarize_task_usage_rows(rows, metrics_unavailable_episodes=metrics_unavailable)
+
+
+def _load_gepa_result(metadata: dict[str, Any]) -> GEPARunResult | None:
+    payload = metadata.get("result")
+    if not isinstance(payload, dict):
+        return None
+    try:
+        return GEPARunResult.model_validate(payload)
+    except Exception:  # noqa: BLE001
+        logger.warning("Failed to parse saved GEPA result from metadata", exc_info=True)
+        return None
+
+
+def _extract_task_usage(results: list[GEMEpisodeResult]) -> dict[str, float | int | bool | None]:
+    """Backward-compatible alias for task-usage aggregation."""
+    return _summarize_task_usage(results)
 
 
 def _extract_fitness_history(optimized_module: Any) -> list[dict[str, Any]]:
@@ -304,16 +646,59 @@ def _extract_pareto_frontier(optimized_module: Any) -> list[dict[str, Any]]:
     return []
 
 
-def _replication_status(replication_dir: Path) -> str | None:
-    """Return the status from run_metadata.json, or None if missing/corrupt."""
-    metadata_path = replication_dir / "run_metadata.json"
-    if not metadata_path.exists():
+def _build_validation_summary(*, accuracy: float, episodes: int) -> dict[str, Any]:
+    return {
+        "episodes": episodes,
+        "correct": round(accuracy * episodes),
+        "accuracy": accuracy,
+    }
+
+
+def _load_json_dict(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
         return None
     try:
-        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
         return None
-    return payload.get("status")
+    return payload if isinstance(payload, dict) else None
+
+
+def _build_effective_config_snapshot(
+    config: ExperimentConfig,
+    *,
+    seed_prompt: str,
+    budget_mode: Literal["light", "medium", "heavy"],
+    seed_prompt_override: str | None,
+    budget_mode_override: Literal["light", "medium", "heavy"] | None,
+    max_metric_calls_override: int | None,
+) -> dict[str, Any]:
+    """Capture the effective runtime config, including CLI overrides."""
+
+    snapshot = config.model_dump(mode="json", by_alias=True, exclude_none=True)
+    snapshot["seed_prompt"] = seed_prompt
+    snapshot["gepa_budget"]["mode"] = budget_mode
+
+    runtime_overrides: dict[str, Any] = {}
+    if seed_prompt_override is not None:
+        runtime_overrides["seed_prompt"] = seed_prompt_override
+    if budget_mode_override is not None:
+        runtime_overrides["budget_mode"] = budget_mode_override
+    if max_metric_calls_override is not None:
+        runtime_overrides["max_metric_calls"] = max_metric_calls_override
+    if runtime_overrides:
+        snapshot["runtime_overrides"] = runtime_overrides
+
+    return snapshot
+
+
+def _replication_status(replication_dir: Path) -> str | None:
+    """Return the status from run_metadata.json, or None if missing/corrupt."""
+    payload = _load_json_dict(replication_dir / "run_metadata.json")
+    if payload is None:
+        return None
+    status = payload.get("status")
+    return status if isinstance(status, str) else None
 
 
 def _is_replication_completed(replication_dir: Path) -> bool:
@@ -445,6 +830,7 @@ def _run_eval_task(
     task: _EvalTask,
     config: ExperimentConfig,
     task_model_id: str,
+    experiment_run_id: str | None = None,
 ) -> GEMEpisodeResult:
     """Run a single eval episode. Thread-safe: creates its own runner/env."""
     runner = GEMEpisodeRunner(
@@ -456,13 +842,14 @@ def _run_eval_task(
         seed=config.seeds.data_seed + config.environment.train_size,
         experiment_name=config.name,
         tools=config.environment.active_tool_names,
+        experiment_run_id=experiment_run_id,
     )
     return runner.run_episode(
         task.instructions,
         episode_index=task.episode_index,
         seed_override=task.seed,
         expected_observation=task.expected_observation,
-        persist=False,
+        persist=True,
     )
 
 
@@ -471,6 +858,7 @@ def _run_heldout_eval(
     config: ExperimentConfig,
     task_model_id: str,
     instructions: str,
+    experiment_run_id: str | None = None,
 ) -> tuple[list[GEMEpisodeResult], dict[str, Any]]:
     eval_examples = _eval_examples(config)
     rollouts = config.eval_protocol.rollouts_per_task
@@ -509,7 +897,7 @@ def _run_heldout_eval(
     executor = ThreadPoolExecutor(max_workers=max_workers)
     try:
         future_to_idx = {
-            executor.submit(_run_eval_task, task, config, task_model_id): idx
+            executor.submit(_run_eval_task, task, config, task_model_id, experiment_run_id): idx
             for idx, task in enumerate(tasks)
         }
         try:
@@ -563,14 +951,17 @@ def _run_heldout_eval(
             total_tasks,
             len(completed),
         )
-    successes = sum(1 for r in completed if r.raw_metrics.success)
-    correct = sum(1 for r in completed if r.raw_metrics.total_reward > 0)
-    total = len(completed)
+    scorable = [result for result in completed if _result_success(result) is not None]
+    metrics_unavailable = len(completed) - len(scorable)
+    successes = sum(1 for result in scorable if _result_success(result))
+    correct = successes
+    total = len(scorable)
     summary = {
         "episodes_attempted": total_tasks,
         "episodes": total,
         "failed": failed,
         "timed_out": len(timed_out_episodes),
+        "metrics_unavailable": metrics_unavailable,
         "successes": successes,
         "success_rate": (successes / total) if total else 0.0,
         "correct": correct,
@@ -599,6 +990,14 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
     # computes the true budget internally from trainset/valset sizes.
     budget_override = gepa_budget_kwargs.get("max_metric_calls")
     effective_budget_mode = gepa_budget_kwargs.get("auto", config.gepa_budget.mode)
+    effective_config_snapshot = _build_effective_config_snapshot(
+        config,
+        seed_prompt=seed_prompt,
+        budget_mode=effective_budget_mode,
+        seed_prompt_override=args.seed_prompt_override,
+        budget_mode_override=args.budget_mode,
+        max_metric_calls_override=args.max_metric_calls,
+    )
 
     if args.purge:
         purge_target = args.results_root / _safe_segment(config.name)
@@ -625,26 +1024,45 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
         else:
             run_timestamp = global_started.strftime("%Y%m%dT%H%M%SZ")
 
-    run_id = f"{_safe_segment(config.name)}-{run_timestamp}"
-    config_hash = _config_hash(config)
-    git_commit = _git_commit_hash()
-
-    run_summary: dict[str, Any] = {
-        "run_id": run_id,
-        "config": config.name,
-        "config_hash": config_hash,
-        "git_commit": git_commit,
-        "started_at": _format_iso(global_started),
-        "finished_at": None,
-        "gepa_budget_mode": effective_budget_mode,
-        "max_metric_calls_override": budget_override,
-        "models": {},
-    }
-
-    # Write run_summary.json at start so _find_resumable_run can detect it.
     experiment_summary_path = (
         args.results_root / _safe_segment(config.name) / run_timestamp / "run_summary.json"
     )
+    run_dir_id = f"{_safe_segment(config.name)}-{run_timestamp}"
+    config_hash = _config_hash(effective_config_snapshot)
+    operator = get_operator()
+    git_commit, git_branch = get_git_info()
+
+    existing_run_summary = _load_json_dict(experiment_summary_path)
+    if existing_run_summary is not None:
+        existing_hash = existing_run_summary.get("config_hash")
+        if isinstance(existing_hash, str) and existing_hash != config_hash:
+            raise ValueError(
+                "Cannot resume run with different effective config. "
+                f"{existing_hash=} {config_hash=}"
+            )
+        preserved_started_at = existing_run_summary.get("started_at")
+        if isinstance(preserved_started_at, str):
+            maybe_started = _parse_iso(preserved_started_at)
+            if maybe_started is not None:
+                global_started = maybe_started
+
+    run_summary: dict[str, Any] = existing_run_summary or {}
+    run_summary.update(
+        {
+            "run_id": run_dir_id,
+            "config": config.name,
+            "config_hash": config_hash,
+            "git_commit": git_commit,
+            "started_at": _format_iso(global_started),
+            "finished_at": None,
+            "gepa_budget_mode": effective_budget_mode,
+            "max_metric_calls_override": budget_override,
+        }
+    )
+    if not isinstance(run_summary.get("models"), dict):
+        run_summary["models"] = {}
+
+    # Write run_summary.json at start so _find_resumable_run can detect it.
     _write_json(experiment_summary_path, run_summary)
 
     def _finalize_run_summary() -> dict[str, Any]:
@@ -663,8 +1081,7 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
         for task_model in models:
             model_id = task_model.model_id
             logger.info("Starting model: %s (%s)", task_model.name, model_id)
-            model_entries: dict[str, Any] = {}
-            run_summary["models"][task_model.name] = model_entries
+            model_entries = run_summary["models"].setdefault(task_model.name, {})
 
             for replication_seed in replication_seeds:
                 replication_dir = _model_replication_dir(
@@ -678,30 +1095,100 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                         task_model.name,
                         replication_seed,
                     )
-                    model_entries[str(replication_seed)] = {"status": "skipped"}
+                    model_entries.setdefault(str(replication_seed), {"status": "skipped"})
                     continue
 
-                started_at = _utc_now()
-                metadata = {
-                    "run_id": run_id,
-                    "status": "running",
-                    "config_hash": config_hash,
-                    "git_commit": git_commit,
-                    "started_at": _format_iso(started_at),
-                    "finished_at": None,
-                    "seed": replication_seed,
-                    "model_name": task_model.name,
-                    "model_id": model_id,
-                    "gepa_budget_mode": effective_budget_mode,
-                    "max_metric_calls_override": budget_override,
-                }
-                _write_json(replication_dir / "run_metadata.json", metadata)
+                prior_metadata = _load_json_dict(replication_dir / "run_metadata.json") or {}
+                prior_hash = prior_metadata.get("config_hash")
+                if isinstance(prior_hash, str) and prior_hash != config_hash:
+                    raise ValueError(
+                        "Cannot resume replication with different effective config. "
+                        f"{prior_hash=} {config_hash=}"
+                    )
 
-                config_snapshot = config.model_dump(mode="json", by_alias=True, exclude_none=True)
+                started_at = _utc_now()
+                persisted_started_at = prior_metadata.get("started_at")
+                if isinstance(persisted_started_at, str):
+                    maybe_started = _parse_iso(persisted_started_at)
+                    if maybe_started is not None:
+                        started_at = maybe_started
+
+                prior_status = prior_metadata.get("status")
+                metadata = dict(prior_metadata)
+                metadata.pop("error", None)
+                metadata.update(
+                    {
+                        "run_id": run_dir_id,
+                        "status": "gepa_done" if prior_status == "gepa_done" else "running",
+                        "config_hash": config_hash,
+                        "git_commit": git_commit,
+                        "started_at": _format_iso(started_at),
+                        "finished_at": None,
+                        "seed": replication_seed,
+                        "model_name": task_model.name,
+                        "model_id": model_id,
+                        "gepa_budget_mode": effective_budget_mode,
+                        "max_metric_calls_override": budget_override,
+                    }
+                )
+
+                config_snapshot_yaml = yaml.dump(
+                    effective_config_snapshot,
+                    default_flow_style=False,
+                    sort_keys=False,
+                )
+
+                # --- Experiment run DB record ---
+                persisted_exp_run_id = prior_metadata.get("experiment_run_id")
+                exp_run_id = (
+                    persisted_exp_run_id
+                    if isinstance(persisted_exp_run_id, str) and persisted_exp_run_id.strip()
+                    else generate_experiment_run_id(
+                        config_name=config.name,
+                        provider=task_model.provider,
+                        model_id=model_id,
+                        operator=operator,
+                        seed=replication_seed,
+                        timestamp=started_at,
+                    )
+                )
+                metadata["experiment_run_id"] = exp_run_id
+                _write_json(replication_dir / "run_metadata.json", metadata)
                 (replication_dir / "config_snapshot.yaml").write_text(
-                    yaml.dump(config_snapshot, default_flow_style=False, sort_keys=False),
+                    config_snapshot_yaml,
                     encoding="utf-8",
                 )
+
+                exp_run_record = ExperimentRunRecord(
+                    experiment_run_id=exp_run_id,
+                    config_name=config.name,
+                    config_hash=config_hash,
+                    config_yaml=config_snapshot_yaml,
+                    operator=operator,
+                    git_commit=git_commit,
+                    git_branch=git_branch,
+                    provider=task_model.provider,
+                    task_model_id=model_id,
+                    reflection_model_id=config.reflection_model.model_id,
+                    environment_id=config.environment.gem_env_id,
+                    gepa_budget_mode=effective_budget_mode,
+                    replication_seed=replication_seed,
+                    seed_prompt=seed_prompt,
+                    started_at=started_at,
+                    status="running",
+                    hostname=socket.gethostname(),
+                    schema_version=SCHEMA_VERSION,
+                )
+                try:
+                    save_experiment_run(_DB_PATH, exp_run_record)
+                except ValueError:
+                    logger.debug("Experiment run record already exists, reusing %s", exp_run_id)
+                except Exception:  # noqa: BLE001
+                    logger.warning(
+                        "Failed to save experiment run record %s (continuing)",
+                        exp_run_id,
+                        exc_info=True,
+                    )
 
                 task_lm = _build_task_lm(config, task_model)
                 dspy.configure(lm=task_lm)
@@ -721,6 +1208,7 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                     seed=config.seeds.data_seed,
                     experiment_name=config.name,
                     tools=config.environment.active_tool_names,
+                    experiment_run_id=exp_run_id,
                 )
                 module = GEMSolverModule(runner, default_instructions=seed_prompt)
 
@@ -738,20 +1226,119 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                     reflection_lm=reflection_lm,
                 )
 
+                training_results: list[GEMEpisodeResult] = []
+                training_rows: list[EpisodeRawMetrics] = []
+                training_usage = _summarize_task_usage_rows([], metrics_unavailable_episodes=0)
+                training_logging_summary = LoggingSummary()
+                reflection_tokens: int | None = 0
+                reflection_cost: float | None = 0.0
+                baseline_eval_results: list[GEMEpisodeResult] = []
+                eval_results: list[GEMEpisodeResult] = []
                 try:
                     # --- Phase 1: GEPA optimization (skip if already done) ---
                     prior_status = _replication_status(replication_dir)
                     prompt_path = replication_dir / "optimized_prompt.txt"
+                    resumed_from_gepa_done = prior_status == "gepa_done" and prompt_path.exists()
 
-                    if prior_status == "gepa_done" and prompt_path.exists():
+                    if resumed_from_gepa_done:
                         optimized_prompt = prompt_path.read_text(encoding="utf-8")
                         logger.info(
                             "Resuming from saved GEPA result model=%s seed=%s",
                             task_model.name,
                             replication_seed,
                         )
-                        result = None
-                        training_results: list[GEMEpisodeResult] = []
+                        result = _load_gepa_result(prior_metadata)
+                        training_rows = _load_training_metrics_rows(replication_dir)
+                        training_usage = _summarize_task_usage_rows(
+                            training_rows,
+                            metrics_unavailable_episodes=0,
+                        )
+
+                        resume_phase_events: list[LoggingEvent] = []
+                        saved_gepa_phase = prior_metadata.get("gepa_phase_summary")
+                        if isinstance(saved_gepa_phase, dict):
+                            saved_training_usage = saved_gepa_phase.get("training_usage")
+                            if isinstance(saved_training_usage, dict):
+                                training_usage.update(saved_training_usage)
+                                training_usage.setdefault("episodes", len(training_rows))
+
+                            saved_training_logging = saved_gepa_phase.get("logging_summary")
+                            if isinstance(saved_training_logging, dict):
+                                try:
+                                    training_logging_summary = LoggingSummary.model_validate(
+                                        saved_training_logging
+                                    )
+                                except Exception:  # noqa: BLE001
+                                    resume_phase_events.append(
+                                        LoggingEvent(
+                                            stage="resume",
+                                            kind="gepa_logging_summary_invalid",
+                                            message=(
+                                                "Saved GEPA logging summary could not be parsed "
+                                                "during resume; later summaries may be incomplete."
+                                            ),
+                                        )
+                                    )
+                            else:
+                                resume_phase_events.append(
+                                    LoggingEvent(
+                                        stage="resume",
+                                        kind="gepa_logging_summary_missing",
+                                        message=(
+                                            "Saved GEPA logging summary missing during resume; "
+                                            "later summaries may be incomplete."
+                                        ),
+                                    )
+                                )
+
+                            saved_reflection_tokens = saved_gepa_phase.get("reflection_tokens")
+                            saved_reflection_cost = saved_gepa_phase.get("reflection_cost")
+                            reflection_tokens = (
+                                int(saved_reflection_tokens)
+                                if isinstance(saved_reflection_tokens, int | float)
+                                else None
+                            )
+                            reflection_cost = (
+                                float(saved_reflection_cost)
+                                if isinstance(saved_reflection_cost, int | float)
+                                else None
+                            )
+                            if reflection_tokens is None or reflection_cost is None:
+                                resume_phase_events.append(
+                                    LoggingEvent(
+                                        stage="resume",
+                                        kind="gepa_reflection_usage_missing",
+                                        message=(
+                                            "Saved GEPA reflection usage missing during resume; "
+                                            "final cost totals will remain partial."
+                                        ),
+                                    )
+                                )
+                        else:
+                            training_logging_summary = LoggingSummary(
+                                status="partial",
+                                events=[
+                                    LoggingEvent(
+                                        stage="resume",
+                                        kind="gepa_phase_summary_missing",
+                                        message=(
+                                            "Resumed from gepa_done without a saved GEPA phase "
+                                            "summary; final logging and reflection totals may be "
+                                            "incomplete."
+                                        ),
+                                    )
+                                ],
+                            )
+                            reflection_tokens = None
+                            reflection_cost = None
+
+                        if resume_phase_events:
+                            training_logging_summary = _merge_logging_summaries(
+                                [
+                                    training_logging_summary,
+                                    LoggingSummary(status="partial", events=resume_phase_events),
+                                ]
+                            )
                     else:
                         compile_start = time.monotonic()
                         optimized_module = optimizer.compile(
@@ -785,21 +1372,79 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                             replication_dir / "pareto_frontier.json",
                             {"pareto_frontier": _extract_pareto_frontier(optimized_module)},
                         )
-                        training_results = list(runner.episode_history)
+                        training_results = _persist_training_trajectories(
+                            list(runner.episode_history),
+                            experiment_run_id=exp_run_id,
+                        )
+                        training_rows = [
+                            episode.raw_metrics
+                            for episode in training_results
+                            if episode.raw_metrics is not None
+                        ]
+                        training_usage = _summarize_task_usage(training_results)
+                        training_logging_summary = _results_logging_summary(training_results)
+                        reflection_tokens, reflection_cost = _extract_reflection_usage(
+                            reflection_lm
+                        )
                         _write_csv(
                             replication_dir / "training_metrics.csv",
-                            [r.raw_metrics for r in training_results],
+                            training_rows,
+                        )
+                        _write_jsonl(
+                            replication_dir / "training_metrics.jsonl",
+                            training_rows,
+                        )
+                        _write_json(
+                            replication_dir / "training_metrics_summary.json",
+                            _raw_metrics_summary_for_results(training_results),
                         )
 
                         metadata["status"] = "gepa_done"
                         if result is not None:
                             metadata["result"] = result.model_dump(mode="json")
+                        metadata["gepa_phase_summary"] = {
+                            "training_usage": training_usage,
+                            "logging_summary": training_logging_summary.model_dump(mode="json"),
+                            "reflection_tokens": reflection_tokens,
+                            "reflection_cost": (
+                                round(reflection_cost, _COST_DECIMAL_PLACES)
+                                if isinstance(reflection_cost, int | float)
+                                else None
+                            ),
+                        }
                         _write_json(replication_dir / "run_metadata.json", metadata)
+                        try:
+                            update_experiment_run(
+                                _DB_PATH,
+                                exp_run_id,
+                                status="gepa_done",
+                                optimized_prompt=optimized_prompt,
+                            )
+                        except Exception:  # noqa: BLE001
+                            logger.warning(
+                                "update_experiment_run(gepa_done) failed",
+                                exc_info=True,
+                            )
                         logger.info(
                             "Saved GEPA artifacts model=%s seed=%s",
                             task_model.name,
                             replication_seed,
                         )
+
+                    training_metrics_unavailable = training_usage.get(
+                        "metrics_unavailable_episodes", 0
+                    )
+                    _write_json(
+                        replication_dir / "training_metrics_summary.json",
+                        _raw_metrics_summary_with_omissions(
+                            training_rows,
+                            metrics_unavailable_episodes=(
+                                int(training_metrics_unavailable)
+                                if isinstance(training_metrics_unavailable, int | float)
+                                else 0
+                            ),
+                        ),
+                    )
 
                     # --- Phase 2: Held-out evaluation ---
                     logger.info("Running baseline eval with seed prompt...")
@@ -807,6 +1452,7 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                         config=config,
                         task_model_id=model_id,
                         instructions=seed_prompt,
+                        experiment_run_id=exp_run_id,
                     )
 
                     logger.info("Running optimized eval...")
@@ -814,53 +1460,154 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                         config=config,
                         task_model_id=model_id,
                         instructions=optimized_prompt,
+                        experiment_run_id=exp_run_id,
                     )
 
-                    all_rows = (
-                        [r.raw_metrics for r in training_results]
-                        + [r.raw_metrics for r in baseline_eval_results]
-                        + [r.raw_metrics for r in eval_results]
+                    heldout_results = baseline_eval_results + eval_results
+                    heldout_logging_summary = _results_logging_summary(heldout_results)
+                    logging_summary = _merge_logging_summaries(
+                        [training_logging_summary, heldout_logging_summary]
                     )
-                    _write_csv(replication_dir / "raw_metrics.csv", all_rows)
-                    _write_jsonl(replication_dir / "raw_metrics.jsonl", all_rows)
+                    val_total = config.environment.effective_val_size
+                    baseline_validation_summary: dict[str, Any] | None = None
+                    optimized_validation_summary: dict[str, Any] | None = None
+                    if result is not None:
+                        baseline_validation_summary = _build_validation_summary(
+                            accuracy=result.baseline_accuracy,
+                            episodes=val_total,
+                        )
+                        optimized_validation_summary = _build_validation_summary(
+                            accuracy=result.final_accuracy,
+                            episodes=val_total,
+                        )
+                    heldout_rows = [
+                        result.raw_metrics
+                        for result in heldout_results
+                        if result.raw_metrics is not None
+                    ]
+                    _write_csv(replication_dir / "raw_metrics.csv", heldout_rows)
+                    _write_jsonl(replication_dir / "raw_metrics.jsonl", heldout_rows)
                     _write_json(
                         replication_dir / "raw_metrics_summary.json",
-                        _raw_metrics_summary(all_rows),
+                        {
+                            "scope": "heldout_eval",
+                            "baseline_eval": _raw_metrics_summary_for_results(
+                                baseline_eval_results
+                            ),
+                            "optimized_eval": _raw_metrics_summary_for_results(eval_results),
+                            "heldout_total": _raw_metrics_summary_for_results(heldout_results),
+                        },
                     )
 
-                    task_tokens_train, task_cost_train = _extract_task_usage(training_results)
-                    task_tokens_baseline_eval, task_cost_baseline_eval = _extract_task_usage(
-                        baseline_eval_results
+                    baseline_usage = _summarize_task_usage(baseline_eval_results)
+                    eval_usage = _summarize_task_usage(eval_results)
+                    task_usage = _merge_task_usage_summaries(
+                        [training_usage, baseline_usage, eval_usage]
                     )
-                    task_tokens_eval, task_cost_eval = _extract_task_usage(eval_results)
-                    reflection_tokens, reflection_cost = _extract_reflection_usage(reflection_lm)
 
-                    task_tokens = task_tokens_train + task_tokens_baseline_eval + task_tokens_eval
-                    task_cost = task_cost_train + task_cost_baseline_eval + task_cost_eval
-                    total_tokens = task_tokens + reflection_tokens
-                    total_cost = task_cost + reflection_cost
+                    task_tokens = task_usage["total_tokens"]
+                    task_tokens_known_value = task_usage["known_total_tokens"]
+                    task_tokens_known = (
+                        int(task_tokens_known_value)
+                        if isinstance(task_tokens_known_value, int | float)
+                        else 0
+                    )
+                    task_cost = task_usage["total_cost_usd"]
+                    task_cost_known_value = task_usage["known_cost_usd"]
+                    task_cost_known = (
+                        float(task_cost_known_value)
+                        if isinstance(task_cost_known_value, int | float)
+                        else 0.0
+                    )
+                    total_tokens = (
+                        int(task_tokens) + reflection_tokens
+                        if isinstance(task_tokens, int) and isinstance(reflection_tokens, int)
+                        else None
+                    )
+                    total_tokens_known = task_tokens_known + (
+                        reflection_tokens if isinstance(reflection_tokens, int) else 0
+                    )
+                    total_cost_known = task_cost_known + (
+                        reflection_cost if isinstance(reflection_cost, int | float) else 0.0
+                    )
+                    total_cost = (
+                        round(total_cost_known, _COST_DECIMAL_PLACES)
+                        if isinstance(task_cost, int | float)
+                        and isinstance(reflection_cost, int | float)
+                        else None
+                    )
+                    cost_type = (
+                        "actual"
+                        if total_cost is not None
+                        else "partial"
+                        if total_cost_known > 0
+                        else "unavailable"
+                    )
 
                     cost_summary = {
                         "task_model_tokens": task_tokens,
-                        "task_model_cost": round(task_cost, _COST_DECIMAL_PLACES),
+                        "task_model_tokens_known": task_tokens_known,
+                        "task_model_token_data_coverage": task_usage["token_data_coverage"],
+                        "task_model_metrics_unavailable_episodes": task_usage[
+                            "metrics_unavailable_episodes"
+                        ],
+                        "task_model_cost": task_cost,
+                        "task_model_cost_known": round(task_cost_known, _COST_DECIMAL_PLACES),
+                        "task_model_cost_data_coverage": task_usage["cost_data_coverage"],
                         "reflection_tokens": reflection_tokens,
-                        "reflection_cost": round(reflection_cost, _COST_DECIMAL_PLACES),
-                        "total_tokens": total_tokens,
-                        "total_cost": round(total_cost, _COST_DECIMAL_PLACES),
-                        "effective_budget_usd": config.cost_budget.effective_budget_usd,
-                        "training_task_model_tokens": task_tokens_train,
-                        "training_task_model_cost": round(task_cost_train, _COST_DECIMAL_PLACES),
-                        "baseline_eval_task_model_tokens": task_tokens_baseline_eval,
-                        "baseline_eval_task_model_cost": round(
-                            task_cost_baseline_eval, _COST_DECIMAL_PLACES
+                        "reflection_cost": (
+                            round(reflection_cost, _COST_DECIMAL_PLACES)
+                            if isinstance(reflection_cost, int | float)
+                            else None
                         ),
-                        "eval_task_model_tokens": task_tokens_eval,
-                        "eval_task_model_cost": round(task_cost_eval, _COST_DECIMAL_PLACES),
+                        "total_tokens": total_tokens,
+                        "total_tokens_known": total_tokens_known,
+                        "total_cost": total_cost,
+                        "total_cost_known": round(total_cost_known, _COST_DECIMAL_PLACES),
+                        "cost_type": cost_type,
+                        "effective_budget_usd": config.cost_budget.effective_budget_usd,
+                        "training_task_model_tokens": training_usage["total_tokens"],
+                        "training_task_model_tokens_known": training_usage["known_total_tokens"],
+                        "training_task_model_token_data_coverage": training_usage[
+                            "token_data_coverage"
+                        ],
+                        "training_metrics_unavailable_episodes": training_usage[
+                            "metrics_unavailable_episodes"
+                        ],
+                        "training_task_model_cost": training_usage["total_cost_usd"],
+                        "training_task_model_cost_known": training_usage["known_cost_usd"],
+                        "training_task_model_cost_data_coverage": training_usage[
+                            "cost_data_coverage"
+                        ],
+                        "baseline_eval_task_model_tokens": baseline_usage["total_tokens"],
+                        "baseline_eval_task_model_tokens_known": baseline_usage[
+                            "known_total_tokens"
+                        ],
+                        "baseline_eval_task_model_token_data_coverage": baseline_usage[
+                            "token_data_coverage"
+                        ],
+                        "baseline_eval_metrics_unavailable_episodes": baseline_usage[
+                            "metrics_unavailable_episodes"
+                        ],
+                        "baseline_eval_task_model_cost": baseline_usage["total_cost_usd"],
+                        "baseline_eval_task_model_cost_known": baseline_usage["known_cost_usd"],
+                        "baseline_eval_task_model_cost_data_coverage": baseline_usage[
+                            "cost_data_coverage"
+                        ],
+                        "eval_task_model_tokens": eval_usage["total_tokens"],
+                        "eval_task_model_tokens_known": eval_usage["known_total_tokens"],
+                        "eval_task_model_token_data_coverage": eval_usage["token_data_coverage"],
+                        "eval_metrics_unavailable_episodes": eval_usage[
+                            "metrics_unavailable_episodes"
+                        ],
+                        "eval_task_model_cost": eval_usage["total_cost_usd"],
+                        "eval_task_model_cost_known": eval_usage["known_cost_usd"],
+                        "eval_task_model_cost_data_coverage": eval_usage["cost_data_coverage"],
                     }
                     _write_json(replication_dir / "cost_summary.json", cost_summary)
 
                     alert_level = config.cost_budget.effective_budget_usd * _budget_alert_fraction()
-                    if total_cost >= alert_level:
+                    if isinstance(total_cost, int | float) and total_cost >= alert_level:
                         logger.warning(
                             "Cost alert model=%s seed=%s total_cost=%.6f budget=%.6f",
                             task_model.name,
@@ -868,8 +1615,21 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                             total_cost,
                             config.cost_budget.effective_budget_usd,
                         )
+                    elif cost_type != "actual" and total_cost_known >= alert_level:
+                        logger.warning(
+                            "Known cost reached alert level but actual cost is incomplete "
+                            "model=%s seed=%s known_total_cost=%.6f budget=%.6f cost_type=%s",
+                            task_model.name,
+                            replication_seed,
+                            total_cost_known,
+                            config.cost_budget.effective_budget_usd,
+                            cost_type,
+                        )
 
-                    if total_cost > config.cost_budget.effective_budget_usd:
+                    if (
+                        isinstance(total_cost, int | float)
+                        and total_cost > config.cost_budget.effective_budget_usd
+                    ):
                         logger.warning(
                             "Cost budget exceeded model=%s seed=%s total_cost=%.6f budget=%.6f",
                             task_model.name,
@@ -883,6 +1643,7 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                             )
 
                     finished = _utc_now()
+                    metadata["logging_summary"] = logging_summary.model_dump(mode="json")
                     metadata.update(
                         {
                             "status": "completed",
@@ -891,43 +1652,92 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                             "result": result.model_dump(mode="json")
                             if result is not None
                             else None,
+                            "baseline_validation": baseline_validation_summary,
+                            "optimized_validation": optimized_validation_summary,
                             "baseline_eval": baseline_eval_summary,
                             "eval": eval_summary,
                         }
                     )
                     _write_json(replication_dir / "run_metadata.json", metadata)
 
+                    # Update experiment_run DB record to "completed".
+                    try:
+                        update_experiment_run(
+                            _DB_PATH,
+                            exp_run_id,
+                            status="completed",
+                            finished_at=_format_iso(finished),
+                            result_summary=eval_summary,
+                            cost_summary=cost_summary,
+                            logging_summary=logging_summary,
+                        )
+                    except Exception:  # noqa: BLE001
+                        logger.warning(
+                            "update_experiment_run(completed) failed",
+                            exc_info=True,
+                        )
+
+                    # Generate unified run report.
+                    try:
+                        run_report = build_run_report(
+                            experiment_run_id=exp_run_id,
+                            db_path=_DB_PATH,
+                            cost_summary=cost_summary,
+                            baseline_validation_summary=baseline_validation_summary,
+                            optimized_validation_summary=optimized_validation_summary,
+                            baseline_eval_summary=baseline_eval_summary,
+                            eval_summary=eval_summary,
+                            wall_clock_seconds=round((finished - started_at).total_seconds(), 3),
+                            reference_prices=settings.cost_normalization.reference_prices,
+                            prompt_token_ratio=settings.cost_normalization.prompt_token_ratio,
+                            logging_summary=logging_summary.model_dump(mode="json"),
+                        )
+                        _write_json(
+                            replication_dir / "run_report.json",
+                            json.loads(run_report.model_dump_json()),
+                        )
+                    except Exception:  # noqa: BLE001
+                        logger.warning(
+                            "Failed to generate run report for %s",
+                            exp_run_id,
+                            exc_info=True,
+                        )
+
                     model_entries[str(replication_seed)] = {
                         "status": "completed",
+                        "experiment_run_id": exp_run_id,
                         "cost_summary": cost_summary,
+                        "baseline_validation": baseline_validation_summary,
+                        "optimized_validation": optimized_validation_summary,
                         "baseline_eval": baseline_eval_summary,
                         "eval": eval_summary,
+                        "logging_summary": logging_summary.model_dump(mode="json"),
                     }
 
-                    val_total = config.environment.effective_val_size
                     train_bench = config.environment.gem_env_id.split(":")[-1]
                     eval_bench = (
                         config.environment.dataset.eval_split
                         if config.environment.dataset
                         else train_bench
                     )
-                    if result is not None:
-                        baseline_acc = result.baseline_accuracy
-                        final_acc = result.final_accuracy
-                        bl_val_correct = round(baseline_acc * val_total)
-                        opt_val_correct = round(final_acc * val_total)
-                        train_val_lines = (
-                            f"  Train/val: Baseline accuracy:  {baseline_acc:.1%} "
-                            f"({bl_val_correct}/{val_total}) ({train_bench})\n"
-                            f"  Train/val: Optimized accuracy: {final_acc:.1%} "
-                            f"({opt_val_correct}/{val_total}) ({train_bench})\n"
+                    if (
+                        baseline_validation_summary is not None
+                        and optimized_validation_summary is not None
+                    ):
+                        validation_lines = (
+                            f"  Validation: Baseline accuracy:  "
+                            f"{baseline_validation_summary['accuracy']:.1%} "
+                            f"({baseline_validation_summary['correct']}/{val_total}) "
+                            f"({train_bench})\n"
+                            f"  Validation: Optimized accuracy: "
+                            f"{optimized_validation_summary['accuracy']:.1%} "
+                            f"({optimized_validation_summary['correct']}/{val_total}) "
+                            f"({train_bench})\n"
                         )
                     else:
-                        # GEPA was resumed from a prior run; train/val accuracies
-                        # were not recomputed and live in the original run's metadata.
-                        train_val_lines = (
-                            f"  Train/val: Baseline accuracy:  N/A (resumed) ({train_bench})\n"
-                            f"  Train/val: Optimized accuracy: N/A (resumed) ({train_bench})\n"
+                        validation_lines = (
+                            f"  Validation: Baseline accuracy:  N/A ({train_bench})\n"
+                            f"  Validation: Optimized accuracy: N/A ({train_bench})\n"
                         )
                     bl_eval_acc = baseline_eval_summary["accuracy"]
                     bl_eval_correct = baseline_eval_summary["correct"]
@@ -935,34 +1745,67 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                     eval_acc = eval_summary["accuracy"]
                     eval_correct = eval_summary["correct"]
                     eval_total = eval_summary["episodes"]
+                    total_cost_display = (
+                        f"${total_cost:.4f}"
+                        if isinstance(total_cost, int | float)
+                        else f"unknown (known ${total_cost_known:.4f}, {cost_type})"
+                    )
+                    total_tokens_display = (
+                        f"{total_tokens:,}"
+                        if isinstance(total_tokens, int)
+                        else f"unknown (known {total_tokens_known:,})"
+                    )
                     print(
                         f"\n{'=' * 60}\n"
                         f"  Replication complete: {task_model.name} seed={replication_seed}\n"
-                        f"{train_val_lines}"
+                        f"{validation_lines}"
                         f"  Test/eval: Baseline accuracy:  {bl_eval_acc:.1%} "
                         f"({bl_eval_correct}/{bl_eval_total}) ({eval_bench})\n"
                         f"  Test/eval: Optimized accuracy: {eval_acc:.1%} "
                         f"({eval_correct}/{eval_total}) ({eval_bench})\n"
-                        f"  Total cost:         ${total_cost:.4f}\n"
-                        f"  Total tokens:       {total_tokens:,}\n"
+                        f"  Total cost:         {total_cost_display}\n"
+                        f"  Total tokens:       {total_tokens_display}\n"
                         f"  Elapsed:            {(finished - started_at).total_seconds():.1f}s\n"
                         f"{'=' * 60}",
                         flush=True,
                     )
                 except Exception as exc:
                     finished = _utc_now()
+                    partial_logging_summary = _merge_logging_summaries(
+                        [
+                            training_logging_summary,
+                            _results_logging_summary(baseline_eval_results + eval_results),
+                        ]
+                    )
                     metadata.update(
                         {
                             "status": "failed",
                             "finished_at": _format_iso(finished),
                             "elapsed_seconds": round((finished - started_at).total_seconds(), 3),
                             "error": repr(exc),
+                            "logging_summary": partial_logging_summary.model_dump(mode="json"),
                         }
                     )
                     _write_json(replication_dir / "run_metadata.json", metadata)
+                    try:
+                        update_experiment_run(
+                            _DB_PATH,
+                            exp_run_id,
+                            status="failed",
+                            finished_at=_format_iso(finished),
+                            error_summary=repr(exc),
+                            logging_summary=partial_logging_summary,
+                        )
+                    except Exception:  # noqa: BLE001
+                        logger.warning(
+                            "update_experiment_run(failed) failed",
+                            exc_info=True,
+                        )
                     model_entries[str(replication_seed)] = {
                         "status": "failed",
+                        "experiment_run_id": exp_run_id,
                         "error": repr(exc),
+                        "logging_summary": partial_logging_summary.model_dump(mode="json"),
                     }
                     logger.exception(
                         "Replication failed model=%s seed=%s (fail_fast=%s)",

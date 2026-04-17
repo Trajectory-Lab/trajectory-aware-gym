@@ -179,3 +179,7 @@ help = "Run tests with coverage"
 [tool.poe.tasks.run-experiment]
 cmd = "python scripts/run_experiment.py"
 help = "Run production GEPA experiment (pass --config and other flags after --)"
+
+[tool.poe.tasks.upload-artifacts]
+cmd = "python scripts/upload_experiment_artifacts.py"
+help = "Upload completed local experiment artifacts to S3"

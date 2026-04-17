@@ -7,6 +7,7 @@ Priority (highest to lowest):
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -124,6 +125,19 @@ class CostTrackingModel(BaseModel):
     alert_threshold: float
 
 
+class CostNormalizationModel(BaseModel):
+    """Reference pricing for local models without native cost APIs.
+
+    Maps Ollama model token counts to Bedrock-equivalent USD for H2
+    paper claims (compute cost comparison). Each entry uses published
+    Bedrock pricing as a proxy.
+    """
+
+    prompt_token_ratio: float = Field(default=0.7, ge=0.0, le=1.0)
+    reference_prices: dict[str, dict[str, float]] = Field(default_factory=dict)
+    # Each value: {"input_per_1m_tokens": <float>, "output_per_1m_tokens": <float>}
+
+
 class RetryModel(BaseModel):
     """Retry, backoff, and concurrency throttling for LLM inference."""
 
@@ -170,6 +184,7 @@ _SECTION_MAP: list[tuple[str, str, type[BaseModel]]] = [
     ("cost_tracking", "COST_TRACKING", CostTrackingModel),
     ("fitness", "FITNESS", FitnessModel),
     ("retry", "RETRY", RetryModel),
+    ("cost_normalization", "COST_NORMALIZATION", CostNormalizationModel),
 ]
 
 
@@ -193,6 +208,7 @@ class Settings:
     _cost_tracking: CostTrackingModel
     _fitness: FitnessModel
     _retry: RetryModel
+    _cost_normalization: CostNormalizationModel
 
     def __init__(self, yaml_path: Path | None = None) -> None:
         if not Settings._loaded:
@@ -276,6 +292,10 @@ class Settings:
     def retry(self) -> RetryModel:
         return self._retry
 
+    @property
+    def cost_normalization(self) -> CostNormalizationModel:
+        return self._cost_normalization
+
     @classmethod
     @contextmanager
     def override_fitness(cls, override: dict[str, Any]) -> Iterator[None]:
@@ -327,12 +347,15 @@ def _with_env_overrides(
 
 def _coerce(value: str, annotation: Any) -> Any:
     """Coerce a string env var to the target type."""
+    origin = get_origin(annotation)
     if annotation is bool:
         return value.lower() in ("true", "1", "yes")
     if annotation is int:
         return int(value)
     if annotation is float:
         return float(value)
-    if get_origin(annotation) is Literal:
+    if origin is Literal:
         return value
+    if origin in (dict, list):
+        return json.loads(value)
     return value
