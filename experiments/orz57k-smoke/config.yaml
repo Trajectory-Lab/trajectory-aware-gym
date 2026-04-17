@@ -1,0 +1,93 @@
+# Minimal real production smoke for logging/observability validation
+# Keeps the real Orz57K + GEPA + Bedrock reflection path while shrinking
+# train/val/eval sizes enough for an operationally cheap end-to-end check.
+
+name: orz57k-smoke
+description: >
+  Minimal real production smoke for logging-v2 validation.
+  Uses Orz57K with Python tool access, Qwen3-1.7B Base via Ollama as the
+  task model, and Claude Sonnet 4.5 via Bedrock as the reflection model.
+
+seed_prompt: |
+  You are a math problem solver with access to a Python execution tool.
+
+  How to respond on each turn, pick exactly ONE of:
+
+  1. Call the `python_exec` tool to compute a value. The `code` argument must
+     be a valid Python snippet that PRINTS the values you want to see back —
+     values that are not printed are invisible to you.
+     Example tool call:
+       {"tool": "python_exec", "arguments": {"code": "print(sum(i for i in range(1, 101) if i % 3 == 0))"}}
+
+  2. Commit your final answer by responding with ONLY \boxed{...}, nothing
+     else. Example: \boxed{42}
+
+  Never mix these two modes in a single response. Never write Python code in
+  a markdown fence — the only way to execute code is via the tool call.
+
+  Use the tool whenever arithmetic, enumeration, or verification would help.
+  When you are confident in the answer, emit the \boxed{} response.
+
+environment:
+  gem_env_id: "math:Orz57K"
+  env_type: math
+  dspy_module: react
+  train_size: 4
+  val_size: 1
+  max_steps: 10
+  discount_gamma: 1.0
+  tools: [python_exec]
+  dataset:
+    hf_dataset_id: "axon-rl/ORZ-57k"
+    total_train_size: 57000
+    subsample_size: 4
+    subsample_strategy: uniform
+    eval_dataset_id: "axon-rl/math-eval"
+    eval_split: MATH500
+    eval_size: 2
+
+eval_protocol:
+  max_response_tokens: 4096
+  temperature_train: 1.0
+  temperature_eval: 0.0
+  top_p: 1.0
+  top_k: -1
+  rollouts_per_task: 1
+  max_eval_workers: 1
+  eval_episode_timeout_seconds: 120
+  tost_margin: 0.05
+  tost_alpha: 0.05
+  bootstrap_iterations: 100
+
+task_models:
+  - name: Qwen3-1.7B-Base
+    model_id: "ollama/qwen3-1.7b-base"
+    provider: ollama
+    parameter_count: "1.7B"
+
+reflection_model:
+  model_id: "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+  provider: bedrock
+  temperature: 1.0
+  max_tokens: 4096
+
+gepa_budget:
+  mode: light
+  tasks_per_minibatch: 1
+
+seeds:
+  data_seed: 42
+  replication_seeds: [42]
+
+num_replications: 1
+
+fitness_override:
+  gamma: 1.0
+  max_steps: 10
+
+cost_budget:
+  estimated_tokens_per_experiment: 250000
+  total_budget_usd: 5.0
+  buffer_pct: 0.25
+
+rl_baselines: []

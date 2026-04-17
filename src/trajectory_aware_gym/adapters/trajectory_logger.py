@@ -57,7 +57,7 @@ from trajectory_aware_gym.config import ProjectPaths
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = "1.1.0"
+SCHEMA_VERSION = "1.3.0"
 
 type EpisodeOutcome = Literal["success", "failure", "truncated"]
 
@@ -80,6 +80,17 @@ class ToolCall(BaseModel):
         return normalized
 
 
+_PROVIDER_PREFIXES = ("ollama/", "bedrock/", "sagemaker/")
+
+
+def _derive_provider(model_id: str) -> str | None:
+    """Derive the LLM provider from the model_id prefix."""
+    for prefix in _PROVIDER_PREFIXES:
+        if model_id.startswith(prefix):
+            return prefix.rstrip("/")
+    return None
+
+
 class LLMCallMetadata(BaseModel):
     """Token usage and cost metadata for a single LLM call."""
 
@@ -88,7 +99,9 @@ class LLMCallMetadata(BaseModel):
     completion_tokens: int = Field(ge=0)
     total_tokens: int = Field(ge=0)
     cost_usd: float | None = None
+    cost_type: Literal["actual", "estimated", "unavailable"] | None = None
     latency_ms: float | None = None
+    provider: str | None = None
 
     @model_validator(mode="after")
     def validate_token_sum(self) -> LLMCallMetadata:
@@ -98,6 +111,12 @@ class LLMCallMetadata(BaseModel):
                 f"total_tokens ({self.total_tokens}) must be at least "
                 f"prompt_tokens + completion_tokens ({expected})"
             )
+        return self
+
+    @model_validator(mode="after")
+    def derive_provider_from_model_id(self) -> LLMCallMetadata:
+        if self.provider is None:
+            self.provider = _derive_provider(self.model_id)
         return self
 
 
@@ -163,8 +182,38 @@ class TrajectoryLog(BaseModel):
 
     @computed_field
     @property
-    def total_cost_usd(self) -> float:
-        return sum(call.cost_usd or 0.0 for step in self.steps for call in step.llm_calls)
+    def known_cost_usd(self) -> float:
+        return sum(
+            call.cost_usd
+            for step in self.steps
+            for call in step.llm_calls
+            if call.cost_usd is not None
+        )
+
+    @computed_field
+    @property
+    def has_missing_cost_data(self) -> bool:
+        calls = [call for step in self.steps for call in step.llm_calls]
+        return any(call.cost_usd is None for call in calls)
+
+    @computed_field
+    @property
+    def cost_data_coverage(self) -> float:
+        calls = [call for step in self.steps for call in step.llm_calls]
+        if not calls:
+            return 1.0
+        known_cost_calls = sum(1 for call in calls if call.cost_usd is not None)
+        return known_cost_calls / len(calls)
+
+    @computed_field
+    @property
+    def total_cost_usd(self) -> float | None:
+        calls = [call for step in self.steps for call in step.llm_calls]
+        if not calls:
+            return 0.0
+        if any(call.cost_usd is None for call in calls):
+            return None
+        return sum(call.cost_usd for call in calls if call.cost_usd is not None)
 
     @field_validator("environment_id", "initial_observation")
     @classmethod
@@ -229,9 +278,11 @@ class TrajectoryLogger:
         self,
         environment_id: str,
         seed: int | None = None,
+        experiment_run_id: str | None = None,
     ):
         self.environment_id = environment_id
         self.seed = seed
+        self.experiment_run_id = experiment_run_id
         self.system_prompt: str | None = None
         self.started_at = datetime.now(UTC)
         self.initial_observation: str | None = None
@@ -309,7 +360,7 @@ class TrajectoryLogger:
         paths = project_paths or ProjectPaths()
 
         db_path = paths.logs / "trajectories.db"
-        save_trajectory(db_path, trajectory_log)
+        save_trajectory(db_path, trajectory_log, experiment_run_id=self.experiment_run_id)
         self._last_run_id = trajectory_log.run_id
         return db_path
 

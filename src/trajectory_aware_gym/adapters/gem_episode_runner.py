@@ -5,24 +5,26 @@ from __future__ import annotations
 import importlib
 import json
 import logging
+import math
 import threading
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
 from litellm import completion, completion_cost  # type: ignore[import-untyped]
-from litellm.exceptions import (  # type: ignore[import-untyped]
+from litellm.exceptions import (  # pyright: ignore[reportMissingImports]
     APIConnectionError as LiteLLMConnectionError,
 )
-from litellm.exceptions import (
+from litellm.exceptions import (  # pyright: ignore[reportMissingImports]
     InternalServerError,
     RateLimitError,
     ServiceUnavailableError,
 )
-from litellm.exceptions import (
+from litellm.exceptions import (  # pyright: ignore[reportMissingImports]
     Timeout as LiteLLMTimeout,
 )
-from tenacity import (
+from tenacity import (  # pyright: ignore[reportMissingImports]
     Retrying,
     before_sleep_log,
     retry_if_exception_type,
@@ -37,10 +39,10 @@ from trajectory_aware_gym.adapters.trajectory_logger import (
     ToolCall,
     TrajectoryLog,
     TrajectoryLogger,
-    load_trajectory,
 )
-from trajectory_aware_gym.config import settings
+from trajectory_aware_gym.config import ProjectPaths, settings
 from trajectory_aware_gym.metrics import EpisodeRawMetrics, extract_episode_raw_metrics
+from trajectory_aware_gym.storage.models import EpisodeLoggingSummary, LoggingEvent
 
 logger = logging.getLogger(__name__)
 
@@ -133,9 +135,10 @@ def _completion_with_retry(
 class GEMEpisodeResult:
     """Structured output for one persisted GEM episode."""
 
-    trajectory: TrajectoryLog
+    trajectory: TrajectoryLog | None
     log_path: Path | None
-    raw_metrics: EpisodeRawMetrics
+    raw_metrics: EpisodeRawMetrics | None
+    logging_summary: EpisodeLoggingSummary = field(default_factory=EpisodeLoggingSummary)
 
 
 @dataclass(frozen=True)
@@ -146,6 +149,8 @@ class AgentStepResult:
     llm_calls: list[LLMCallMetadata]
     tool_calls: list[ToolCall]
     conversation: list[ChatMessage]
+    logging_events: list[LoggingEvent]
+    numeric_anomaly_count: int = 0
 
 
 def build_smoke_messages(
@@ -225,6 +230,7 @@ def generate_smoke_action(
     if model_id.startswith("bedrock/"):
         settings.validate_aws()
 
+    t0 = time.monotonic()
     response = _completion_with_retry(
         messages=messages,
         completion_kwargs=_build_completion_kwargs(
@@ -233,6 +239,7 @@ def generate_smoke_action(
             max_tokens=max_tokens,
         ),
     )
+    latency_ms = (time.monotonic() - t0) * 1000.0
     response_payload = cast(Any, response)
     msg = response_payload.choices[0].message
     action = _extract_text_content(msg.content)
@@ -255,11 +262,14 @@ def generate_smoke_action(
     total_tokens = int(getattr(usage, "total_tokens", 0) or (prompt_tokens + completion_tokens))
 
     cost_usd: float | None = None
+    cost_type: str = "unavailable"
     try:
         maybe_cost = completion_cost(completion_response=response)
         cost_usd = float(maybe_cost)
+        cost_type = "actual"
     except Exception:  # noqa: BLE001  # LiteLLM raises bare Exception for unmapped models
         cost_usd = None
+        cost_type = "unavailable"
 
     return action, LLMCallMetadata(
         model_id=model_id,
@@ -267,6 +277,8 @@ def generate_smoke_action(
         completion_tokens=completion_tokens,
         total_tokens=total_tokens,
         cost_usd=cost_usd,
+        cost_type=cost_type,
+        latency_ms=latency_ms,
     )
 
 
@@ -314,6 +326,110 @@ def _build_tool_descriptions(
         parts.append(block)
 
     return "\n\n".join(parts)
+
+
+def _is_non_finite_number(value: Any) -> bool:
+    return (
+        isinstance(value, int | float)
+        and not isinstance(value, bool)
+        and not math.isfinite(float(value))
+    )
+
+
+def _make_logging_event(
+    *,
+    stage: str,
+    kind: str,
+    message: str,
+    episode_run_id: str | None = None,
+    step_index: int | None = None,
+    field: str | None = None,
+    value: Any = None,
+) -> LoggingEvent:
+    return LoggingEvent(
+        stage=stage,
+        kind=kind,
+        episode_run_id=episode_run_id,
+        step_index=step_index,
+        field=field,
+        value_repr=None if value is None else repr(value),
+        message=message,
+    )
+
+
+def _attach_episode_run_id(events: list[LoggingEvent], episode_run_id: str | None) -> None:
+    if episode_run_id is None:
+        return
+    for event in events:
+        if event.episode_run_id is None:
+            event.episode_run_id = episode_run_id
+
+
+def _sanitize_llm_calls_for_logging(
+    llm_calls: list[LLMCallMetadata],
+    *,
+    step_index: int,
+) -> tuple[list[LLMCallMetadata], list[LoggingEvent]]:
+    sanitized_calls: list[LLMCallMetadata] = []
+    events: list[LoggingEvent] = []
+
+    for call in llm_calls:
+        updates: dict[str, Any] = {}
+        if _is_non_finite_number(call.cost_usd):
+            updates["cost_usd"] = None
+            updates["cost_type"] = "unavailable"
+            events.append(
+                _make_logging_event(
+                    stage="llm_call",
+                    kind="numeric_sanitized",
+                    step_index=step_index,
+                    field="cost_usd",
+                    value=call.cost_usd,
+                    message="Non-finite LLM cost was sanitized to None for logging.",
+                )
+            )
+        if _is_non_finite_number(call.latency_ms):
+            updates["latency_ms"] = None
+            events.append(
+                _make_logging_event(
+                    stage="llm_call",
+                    kind="numeric_sanitized",
+                    step_index=step_index,
+                    field="latency_ms",
+                    value=call.latency_ms,
+                    message="Non-finite LLM latency was sanitized to None for logging.",
+                )
+            )
+        sanitized_calls.append(call.model_copy(update=updates) if updates else call)
+
+    return sanitized_calls, events
+
+
+def _sanitize_tool_calls_for_logging(
+    tool_calls: list[ToolCall],
+    *,
+    step_index: int,
+) -> tuple[list[ToolCall], list[LoggingEvent]]:
+    sanitized_calls: list[ToolCall] = []
+    events: list[LoggingEvent] = []
+
+    for call in tool_calls:
+        if _is_non_finite_number(call.duration_ms):
+            sanitized_calls.append(call.model_copy(update={"duration_ms": None}))
+            events.append(
+                _make_logging_event(
+                    stage="tool_call",
+                    kind="numeric_sanitized",
+                    step_index=step_index,
+                    field="duration_ms",
+                    value=call.duration_ms,
+                    message="Non-finite tool duration was sanitized to None for logging.",
+                )
+            )
+        else:
+            sanitized_calls.append(call)
+
+    return sanitized_calls, events
 
 
 def _build_litellm_tools(
@@ -388,6 +504,10 @@ def _format_tool_result(tool_name: str, result: dict[str, Any]) -> str:
     )
 
 
+def _raise_missing_trajectory() -> TrajectoryLog:
+    raise RuntimeError("A faithful training trajectory could not be constructed.")
+
+
 class GEMEpisodeRunner:
     """Run prompt-conditioned GEM episodes and persist trajectory logs."""
 
@@ -404,6 +524,7 @@ class GEMEpisodeRunner:
         tools: list[str] | None = None,
         tool_runtime: ToolRuntime | None = None,
         max_tool_rounds: int = DEFAULT_MAX_TOOL_ROUNDS,
+        experiment_run_id: str | None = None,
     ):
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
@@ -422,6 +543,7 @@ class GEMEpisodeRunner:
         self._tools = [_normalize_tool_name(tool_name) for tool_name in (tools or [])]
         self._tool_runtime = tool_runtime or ToolRuntime()
         self._max_tool_rounds = max_tool_rounds
+        self._experiment_run_id = experiment_run_id
         self._episode_history: list[GEMEpisodeResult] = []
 
         # Pre-build tool descriptions for the text-based prompt path.
@@ -460,13 +582,16 @@ class GEMEpisodeRunner:
         disabled to avoid DB thrash across hundreds of GEPA rollouts —
         use ``run_episode(persist=True)`` for eval or debugging.
         """
-        return self.run_episode(
-            prompt,
-            episode_index=episode_index,
-            seed_override=seed_override,
-            expected_observation=expected_observation,
-            persist=False,
-        ).trajectory
+        return (
+            self.run_episode(
+                prompt,
+                episode_index=episode_index,
+                seed_override=seed_override,
+                expected_observation=expected_observation,
+                persist=False,
+            ).trajectory
+            or _raise_missing_trajectory()
+        )
 
     def run_episode(
         self,
@@ -502,7 +627,11 @@ class GEMEpisodeRunner:
             )
             raise ValueError(msg)
 
-        logger = TrajectoryLogger(environment_id=self._environment_id, seed=resolved_seed)
+        logger = TrajectoryLogger(
+            environment_id=self._environment_id,
+            seed=resolved_seed,
+            experiment_run_id=self._experiment_run_id,
+        )
         logger.set_system_prompt(prompt)
         logger.set_initial_state(
             observation=str(observation),
@@ -510,6 +639,12 @@ class GEMEpisodeRunner:
         )
 
         conversation: list[ChatMessage] = []
+        episode_logging = EpisodeLoggingSummary(persistence_requested=persist)
+        episode_events: list[LoggingEvent] = []
+        trajectory_logging_broken = False
+        trajectory: TrajectoryLog | None = None
+        raw_metrics: EpisodeRawMetrics | None = None
+        log_path: Path | None = None
         try:
             current_observation = str(observation)
             for _ in range(self._max_steps):
@@ -518,6 +653,10 @@ class GEMEpisodeRunner:
                     system_prompt=prompt,
                     history=conversation,
                 )
+                episode_events.extend(agent_step.logging_events)
+                episode_logging.numeric_anomaly_count += agent_step.numeric_anomaly_count
+                if agent_step.logging_events and episode_logging.status == "complete":
+                    episode_logging.status = "partial"
                 next_observation, reward, terminated, truncated, step_info = env.step(
                     agent_step.action
                 )
@@ -526,29 +665,134 @@ class GEMEpisodeRunner:
                     terminated=terminated,
                     truncated=truncated,
                 )
-                logger.add_step(
-                    action=agent_step.action,
-                    observation=normalized_observation,
-                    reward=reward,
-                    terminated=terminated,
-                    truncated=truncated,
-                    info=dict(step_info) if isinstance(step_info, dict) else {},
-                    tool_calls=agent_step.tool_calls,
-                    llm_calls=agent_step.llm_calls,
-                )
+                step_index = len(logger.steps) + 1
+                if not trajectory_logging_broken:
+                    if _is_non_finite_number(reward):
+                        episode_logging.numeric_anomaly_count += 1
+                        trajectory_logging_broken = True
+                        episode_logging.status = "failed"
+                        episode_events.append(
+                            _make_logging_event(
+                                stage="add_step",
+                                kind="numeric_invalid",
+                                step_index=step_index,
+                                field="reward",
+                                value=reward,
+                                message=(
+                                    "Non-finite reward cannot be serialized faithfully; "
+                                    "trajectory persistence is disabled for this episode."
+                                ),
+                            )
+                        )
+                    else:
+                        sanitized_llm_calls, llm_events = _sanitize_llm_calls_for_logging(
+                            agent_step.llm_calls,
+                            step_index=step_index,
+                        )
+                        sanitized_tool_calls, tool_events = _sanitize_tool_calls_for_logging(
+                            agent_step.tool_calls,
+                            step_index=step_index,
+                        )
+                        episode_events.extend(llm_events)
+                        episode_events.extend(tool_events)
+                        episode_logging.numeric_anomaly_count += len(llm_events) + len(tool_events)
+                        try:
+                            logger.add_step(
+                                action=agent_step.action,
+                                observation=normalized_observation,
+                                reward=reward,
+                                terminated=terminated,
+                                truncated=truncated,
+                                info=dict(step_info) if isinstance(step_info, dict) else {},
+                                tool_calls=sanitized_tool_calls,
+                                llm_calls=sanitized_llm_calls,
+                            )
+                        except Exception as exc:
+                            trajectory_logging_broken = True
+                            episode_logging.status = "failed"
+                            episode_events.append(
+                                _make_logging_event(
+                                    stage="add_step",
+                                    kind="logging_failed",
+                                    step_index=step_index,
+                                    message=(
+                                        "Failed to append a trajectory step; "
+                                        f"trajectory persistence is disabled for this episode: {exc!r}"
+                                    ),
+                                )
+                            )
                 conversation = agent_step.conversation
                 if terminated or truncated:
                     break
                 current_observation = str(next_observation)
 
-            log_path = logger.save() if persist else None
-            if log_path is not None:
-                trajectory = load_trajectory(log_path, run_id=logger.last_run_id)
-            else:
-                trajectory = logger.build_log()
-            raw_metrics = extract_episode_raw_metrics(trajectory)
+            if not trajectory_logging_broken:
+                try:
+                    trajectory = logger.build_log()
+                except Exception as exc:
+                    trajectory_logging_broken = True
+                    episode_logging.status = "failed"
+                    episode_events.append(
+                        _make_logging_event(
+                            stage="build_log",
+                            kind="logging_failed",
+                            message=f"Failed to build a faithful trajectory log: {exc!r}",
+                        )
+                    )
+
+            _attach_episode_run_id(episode_events, trajectory.run_id if trajectory else None)
+
+            if trajectory is not None:
+                try:
+                    raw_metrics = extract_episode_raw_metrics(trajectory)
+                    episode_logging.metrics_available = True
+                    if episode_logging.status == "failed":
+                        episode_logging.status = "partial"
+                except Exception as exc:
+                    episode_logging.status = "partial"
+                    episode_events.append(
+                        _make_logging_event(
+                            stage="raw_metrics",
+                            kind="metrics_omitted",
+                            episode_run_id=trajectory.run_id,
+                            message=f"Failed to extract raw metrics from trajectory: {exc!r}",
+                        )
+                    )
+
+                if persist:
+                    try:
+                        from trajectory_aware_gym.storage import save_trajectory
+
+                        db_path = ProjectPaths().logs / "trajectories.db"
+                        save_trajectory(
+                            db_path, trajectory, experiment_run_id=self._experiment_run_id
+                        )
+                        log_path = db_path
+                        episode_logging.trajectory_persisted = True
+                        if episode_logging.status == "failed":
+                            episode_logging.status = "partial"
+                    except Exception as exc:
+                        episode_logging.status = "partial"
+                        episode_events.append(
+                            _make_logging_event(
+                                stage="save",
+                                kind="persistence_failed",
+                                episode_run_id=trajectory.run_id,
+                                message=f"Failed to persist trajectory to SQLite: {exc!r}",
+                            )
+                        )
+
+            if episode_logging.status == "complete" and (
+                not episode_logging.trajectory_persisted if persist else False
+            ):
+                episode_logging.status = "partial"
+
+            episode_logging.events = episode_events
             result = GEMEpisodeResult(
-                trajectory=trajectory, log_path=log_path, raw_metrics=raw_metrics
+                trajectory=trajectory,
+                log_path=log_path,
+                raw_metrics=raw_metrics,
+                logging_summary=episode_logging,
             )
             self._episode_history.append(result)
             return result
@@ -561,7 +805,7 @@ class GEMEpisodeRunner:
         messages: list[ChatMessage],
         *,
         include_tools: bool = True,
-    ) -> tuple[str, LLMCallMetadata, list[dict[str, Any]]]:
+    ) -> tuple[str, LLMCallMetadata, list[dict[str, Any]], list[LoggingEvent]]:
         """Run one LLM completion, returning text, metadata, and native tool calls.
 
         When the provider supports native tool calling and tool schemas are
@@ -584,10 +828,13 @@ class GEMEpisodeRunner:
         if include_tools and self._litellm_tools:
             completion_kwargs["tools"] = self._litellm_tools
 
+        logging_events: list[LoggingEvent] = []
+        t0 = time.monotonic()
         response = _completion_with_retry(
             messages=messages,
             completion_kwargs=completion_kwargs,
         )
+        latency_ms = (time.monotonic() - t0) * 1000.0
         response_payload = cast(Any, response)
         msg = response_payload.choices[0].message
         action = _extract_text_content(msg.content) if msg.content else ""
@@ -625,11 +872,38 @@ class GEMEpisodeRunner:
         total_tokens = int(getattr(usage, "total_tokens", 0) or (prompt_tokens + completion_tokens))
 
         cost_usd: float | None = None
+        cost_type: str = "unavailable"
         try:
             maybe_cost = completion_cost(completion_response=response)
             cost_usd = float(maybe_cost)
+            cost_type = "actual"
         except Exception:  # noqa: BLE001  # LiteLLM raises bare Exception for unmapped models
             cost_usd = None
+            cost_type = "unavailable"
+
+        if _is_non_finite_number(latency_ms):
+            logging_events.append(
+                _make_logging_event(
+                    stage="llm_call",
+                    kind="numeric_sanitized",
+                    field="latency_ms",
+                    value=latency_ms,
+                    message="Non-finite completion latency was sanitized to None for logging.",
+                )
+            )
+            latency_ms = None
+        if _is_non_finite_number(cost_usd):
+            logging_events.append(
+                _make_logging_event(
+                    stage="llm_call",
+                    kind="numeric_sanitized",
+                    field="cost_usd",
+                    value=cost_usd,
+                    message="Non-finite completion cost was sanitized to None for logging.",
+                )
+            )
+            cost_usd = None
+            cost_type = "unavailable"
 
         metadata = LLMCallMetadata(
             model_id=self._model_id,
@@ -637,8 +911,10 @@ class GEMEpisodeRunner:
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
             cost_usd=cost_usd,
+            cost_type=cost_type,
+            latency_ms=latency_ms,
         )
-        return action, metadata, native_tool_calls
+        return action, metadata, native_tool_calls, logging_events
 
     def _run_agent_step(
         self,
@@ -652,6 +928,8 @@ class GEMEpisodeRunner:
         step_history = list(history)
         current_observation = observation
         action = "[empty-action]"
+        logging_events: list[LoggingEvent] = []
+        numeric_anomaly_count = 0
 
         for _ in range(self._max_tool_rounds):
             messages = build_smoke_messages(
@@ -659,8 +937,12 @@ class GEMEpisodeRunner:
                 system_prompt=self._compose_system_prompt(system_prompt),
                 history=step_history,
             )
-            response_text, llm_call, native_tool_calls = self._generate_action(messages)
+            response_text, llm_call, native_tool_calls, llm_logging_events = self._generate_action(
+                messages
+            )
             llm_calls.append(llm_call)
+            logging_events.extend(llm_logging_events)
+            numeric_anomaly_count += len(llm_logging_events)
 
             # Native tool calls take priority; fall back to text-based parsing.
             parsed_tool_call = self._resolve_tool_call(response_text, native_tool_calls)
@@ -675,13 +957,28 @@ class GEMEpisodeRunner:
                 break
 
             tool_name = parsed_tool_call["tool"]
+            t0_tool = time.monotonic()
             tool_result = self._tool_runtime.execute(parsed_tool_call)
+            tool_duration_ms = (time.monotonic() - t0_tool) * 1000.0
+            if _is_non_finite_number(tool_duration_ms):
+                logging_events.append(
+                    _make_logging_event(
+                        stage="tool_call",
+                        kind="numeric_sanitized",
+                        field="duration_ms",
+                        value=tool_duration_ms,
+                        message="Non-finite tool duration was sanitized to None for logging.",
+                    )
+                )
+                numeric_anomaly_count += 1
+                tool_duration_ms = None
             tool_calls.append(
                 ToolCall(
                     tool_name=tool_name,
                     tool_input=json.dumps(parsed_tool_call.get("arguments", {}), ensure_ascii=True),
                     tool_output=json.dumps(tool_result, ensure_ascii=True, sort_keys=True),
                     success=tool_result.get("status") == "success",
+                    duration_ms=tool_duration_ms,
                 )
             )
             step_history.extend(
@@ -700,8 +997,13 @@ class GEMEpisodeRunner:
                 system_prompt=system_prompt,
                 history=step_history,
             )
-            response_text, llm_call, _ = self._generate_action(messages, include_tools=False)
+            response_text, llm_call, _, llm_logging_events = self._generate_action(
+                messages,
+                include_tools=False,
+            )
             llm_calls.append(llm_call)
+            logging_events.extend(llm_logging_events)
+            numeric_anomaly_count += len(llm_logging_events)
             action = response_text
             step_history.extend(
                 [
@@ -715,6 +1017,8 @@ class GEMEpisodeRunner:
             llm_calls=llm_calls,
             tool_calls=tool_calls,
             conversation=step_history,
+            logging_events=logging_events,
+            numeric_anomaly_count=numeric_anomaly_count,
         )
 
     def _compose_system_prompt(self, prompt: str) -> str:

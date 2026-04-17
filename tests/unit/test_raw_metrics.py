@@ -25,6 +25,7 @@ def _build_trajectory(
     steps: list[TrajectoryStep],
     total_reward: float,
     elapsed_seconds: float,
+    episode_outcome: str | None = None,
 ) -> TrajectoryLog:
     start = datetime(2026, 2, 14, 11, 5, 59, tzinfo=UTC)
     finish = start + timedelta(seconds=elapsed_seconds)
@@ -37,6 +38,7 @@ def _build_trajectory(
         initial_observation="start",
         steps=steps,
         total_reward=total_reward,
+        episode_outcome=episode_outcome,
     )
 
 
@@ -115,7 +117,7 @@ def test_extract_episode_raw_metrics_with_step_level_llm_data() -> None:
 def test_success_logic(
     terminated: bool, truncated: bool, total_reward: float, expected_success: bool
 ) -> None:
-    """Success requires episode end (terminated or truncated) plus positive reward."""
+    """Legacy trajectories fall back to end-of-episode plus positive reward."""
     steps = [
         TrajectoryStep(
             step_index=1,
@@ -132,6 +134,30 @@ def test_success_logic(
     metrics = extract_episode_raw_metrics(trajectory)
 
     assert metrics.success is expected_success
+
+
+def test_episode_outcome_overrides_positive_reward_heuristic() -> None:
+    steps = [
+        TrajectoryStep(
+            step_index=1,
+            action="action",
+            observation="obs",
+            reward=1.0,
+            terminated=True,
+            truncated=False,
+            info={},
+        )
+    ]
+    trajectory = _build_trajectory(
+        steps=steps,
+        total_reward=1.0,
+        elapsed_seconds=1.0,
+        episode_outcome="failure",
+    )
+
+    metrics = extract_episode_raw_metrics(trajectory)
+
+    assert metrics.success is False
 
 
 def test_extract_episode_raw_metrics_without_llm_data() -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -17,13 +18,18 @@ from trajectory_aware_gym.adapters.trajectory_logger import (
     load_trajectory,
 )
 from trajectory_aware_gym.config import ProjectPaths
+from trajectory_aware_gym.storage.models import ExperimentRunRecord
 from trajectory_aware_gym.storage.trajectory_db import (
     close_connection,
     episode_exists,
+    load_experiment_run,
     load_trajectory_by_id,
+    query_experiment_runs,
     query_trajectories,
+    save_experiment_run,
     save_tool_call_entry,
     save_trajectory,
+    update_experiment_run,
 )
 from trajectory_aware_gym.storage.trajectory_db import (
     load_all_trajectories as db_load_all,
@@ -75,6 +81,75 @@ def _make_log(
     }
     defaults.update(overrides)
     return TrajectoryLog(**defaults)
+
+
+def _create_legacy_v11_db(db_path) -> None:
+    """Create a pre-v1.2 SQLite schema to exercise migration-on-open."""
+
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE episodes (
+            run_id              TEXT PRIMARY KEY,
+            schema_version      TEXT NOT NULL,
+            environment_id      TEXT NOT NULL,
+            seed                INTEGER,
+            system_prompt       TEXT,
+            started_at          TEXT NOT NULL,
+            finished_at         TEXT NOT NULL,
+            initial_observation TEXT NOT NULL,
+            initial_info        TEXT NOT NULL,
+            total_reward        REAL NOT NULL,
+            episode_outcome     TEXT
+        );
+
+        CREATE TABLE steps (
+            run_id      TEXT    NOT NULL,
+            step_index  INTEGER NOT NULL,
+            action      TEXT    NOT NULL,
+            observation TEXT    NOT NULL,
+            reward      REAL    NOT NULL,
+            terminated  INTEGER NOT NULL,
+            truncated   INTEGER NOT NULL,
+            info        TEXT    NOT NULL,
+            timestamp   TEXT,
+            PRIMARY KEY (run_id, step_index)
+        );
+
+        CREATE TABLE llm_calls (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id            TEXT    NOT NULL,
+            step_index        INTEGER NOT NULL,
+            model_id          TEXT    NOT NULL,
+            prompt_tokens     INTEGER NOT NULL,
+            completion_tokens INTEGER NOT NULL,
+            total_tokens      INTEGER NOT NULL,
+            cost_usd          REAL,
+            latency_ms        REAL,
+            FOREIGN KEY (run_id, step_index) REFERENCES steps(run_id, step_index)
+        );
+
+        CREATE TABLE tool_calls (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id      TEXT    NOT NULL,
+            step_index  INTEGER NOT NULL,
+            tool_name   TEXT    NOT NULL,
+            tool_input  TEXT    NOT NULL,
+            tool_output TEXT    NOT NULL,
+            success     INTEGER NOT NULL,
+            FOREIGN KEY (run_id, step_index) REFERENCES steps(run_id, step_index)
+        );
+
+        CREATE TABLE tool_call_log (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            tool      TEXT NOT NULL,
+            args      TEXT NOT NULL,
+            result    TEXT NOT NULL
+        );
+        """
+    )
+    conn.close()
 
 
 @pytest.fixture
@@ -144,8 +219,57 @@ class TestSaveAndLoad:
         assert loaded.steps[0].tool_calls[0].tool_name == "python_exec"
         assert loaded.steps[0].tool_calls[0].duration_ms == 42.0
         assert len(loaded.steps[0].llm_calls) == 1
+        assert loaded.steps[0].llm_calls[0].provider == "bedrock"
         assert len(loaded.steps[1].llm_calls) == 2
         assert loaded.steps[1].llm_calls[0].cost_usd == 0.001
+
+    @pytest.mark.parametrize(
+        ("model_id", "expected_provider"),
+        [
+            ("bedrock/llama-8b", "bedrock"),
+            ("ollama/qwen3-1.7b", "ollama"),
+            ("sagemaker/qwen3-4b", "sagemaker"),
+            ("unknown-model", None),
+        ],
+    )
+    def test_llm_call_provider_round_trip(self, db_path, model_id, expected_provider):
+        lc = LLMCallMetadata(
+            model_id=model_id,
+            prompt_tokens=5,
+            completion_tokens=5,
+            total_tokens=10,
+        )
+        step = _make_step(reward=0.0, terminated=True, llm_calls=[lc])
+        log = _make_log(steps=[step])
+        save_trajectory(db_path, log)
+        loaded = load_trajectory_by_id(db_path, log.run_id)
+        assert loaded.steps[0].llm_calls[0].provider == expected_provider
+
+    @pytest.mark.parametrize(
+        ("cost_usd", "cost_type"),
+        [
+            (0.005, "actual"),
+            (None, "unavailable"),
+            (0.0, "actual"),
+            (None, None),
+        ],
+    )
+    def test_llm_call_cost_type_round_trip(self, db_path, cost_usd, cost_type):
+        lc = LLMCallMetadata(
+            model_id="bedrock/llama-8b",
+            prompt_tokens=5,
+            completion_tokens=5,
+            total_tokens=10,
+            cost_usd=cost_usd,
+            cost_type=cost_type,
+        )
+        step = _make_step(reward=0.0, terminated=True, llm_calls=[lc])
+        log = _make_log(steps=[step])
+        save_trajectory(db_path, log)
+        loaded = load_trajectory_by_id(db_path, log.run_id)
+        loaded_lc = loaded.steps[0].llm_calls[0]
+        assert loaded_lc.cost_usd == cost_usd
+        assert loaded_lc.cost_type == cost_type
 
     def test_seed_none_preserved(self, db_path):
         log = _make_log(seed=None)
@@ -453,6 +577,23 @@ class TestQueryEdgeCases:
         results = query_trajectories(db_path, outcome="failure")
         assert results == []
 
+    def test_query_by_experiment_run_id(self, db_path):
+        run_a = _make_experiment_run(experiment_run_id="exp-a")
+        run_b = _make_experiment_run(experiment_run_id="exp-b")
+        save_experiment_run(db_path, run_a)
+        save_experiment_run(db_path, run_b)
+
+        save_trajectory(
+            db_path, _make_log(steps=[_make_step(terminated=True)]), experiment_run_id="exp-a"
+        )
+        save_trajectory(
+            db_path, _make_log(steps=[_make_step(terminated=True)]), experiment_run_id="exp-b"
+        )
+
+        results = query_trajectories(db_path, experiment_run_id="exp-a")
+
+        assert len(results) == 1
+
 
 # ===========================================================================
 # Concurrent WAL access
@@ -496,6 +637,46 @@ class TestConcurrentAccess:
 
         assert errors == [], f"Concurrent access errors: {errors}"
         assert len(written_ids) == 5
+
+
+class TestSchemaMigration:
+    def test_legacy_db_is_migrated_on_first_write(self, db_path):
+        _create_legacy_v11_db(db_path)
+
+        run = _make_experiment_run(experiment_run_id="migrated-run")
+        save_experiment_run(db_path, run)
+
+        step = _make_step(
+            reward=1.0,
+            terminated=True,
+            llm_calls=[
+                LLMCallMetadata(
+                    model_id="bedrock/llama-8b",
+                    prompt_tokens=5,
+                    completion_tokens=5,
+                    total_tokens=10,
+                    cost_type="actual",
+                )
+            ],
+        )
+        log = _make_log(steps=[step])
+        save_trajectory(db_path, log, experiment_run_id="migrated-run")
+
+        from trajectory_aware_gym.storage.trajectory_db import get_connection
+
+        conn = get_connection(db_path)
+        episode_columns = {row["name"] for row in conn.execute("PRAGMA table_info(episodes)")}
+        llm_call_columns = {row["name"] for row in conn.execute("PRAGMA table_info(llm_calls)")}
+        tool_call_columns = {row["name"] for row in conn.execute("PRAGMA table_info(tool_calls)")}
+
+        assert "experiment_run_id" in episode_columns
+        assert "provider" in llm_call_columns
+        assert "cost_type" in llm_call_columns
+        assert "duration_ms" in tool_call_columns
+
+        loaded = load_trajectory_by_id(db_path, log.run_id)
+        assert loaded.steps[0].llm_calls[0].provider == "bedrock"
+        assert loaded.steps[0].llm_calls[0].cost_type == "actual"
 
 
 # ===========================================================================
@@ -653,3 +834,304 @@ class TestVerifyAndClean:
         assert deleted == 0
         assert failed == 1
         assert outside_file.exists()  # was not deleted
+
+
+# ===========================================================================
+# Experiment run CRUD
+# ===========================================================================
+
+
+def _make_experiment_run(**overrides: Any) -> ExperimentRunRecord:
+    """Build a minimal ExperimentRunRecord for testing."""
+    now = datetime.now(UTC)
+    defaults: dict[str, Any] = {
+        "experiment_run_id": f"test-run-{now.timestamp()}",
+        "config_name": "quick-test",
+        "config_hash": "abc123",
+        "config_yaml": "model: ollama/qwen3-1.7b\n",
+        "operator": "test-user",
+        "provider": "ollama",
+        "task_model_id": "ollama/qwen3-1.7b",
+        "environment_id": "math:Orz57K",
+        "started_at": now,
+        "schema_version": "1.2.0",
+    }
+    defaults.update(overrides)
+    return ExperimentRunRecord(**defaults)
+
+
+class TestExperimentRunCRUD:
+    """Tests for save/load/query/update of experiment_runs."""
+
+    def test_save_and_load_round_trip(self, db_path):
+        """5.11: save → load → assert all fields match."""
+        run = _make_experiment_run(
+            experiment_run_id="run-rt-001",
+            config_name="orz57k-gepa-light",
+            config_hash="sha256abc",
+            config_yaml="budget: light\nmodel: ollama/qwen3\n",
+            operator="jinyuhan",
+            git_commit="abc1234",
+            git_branch="feat/logging-v2",
+            provider="ollama",
+            task_model_id="ollama/qwen3-1.7b",
+            reflection_model_id="bedrock/gpt-oss-120b",
+            environment_id="math:Orz57K",
+            gepa_budget_mode="light",
+            replication_seed=42,
+            seed_prompt="Solve the problem step by step.",
+            hostname="macbook-pro.local",
+            schema_version="1.2.0",
+        )
+        save_experiment_run(db_path, run)
+        loaded = load_experiment_run(db_path, "run-rt-001")
+
+        assert loaded.experiment_run_id == run.experiment_run_id
+        assert loaded.config_name == run.config_name
+        assert loaded.config_hash == run.config_hash
+        assert loaded.config_yaml == run.config_yaml
+        assert loaded.operator == run.operator
+        assert loaded.git_commit == "abc1234"
+        assert loaded.git_branch == "feat/logging-v2"
+        assert loaded.provider == run.provider
+        assert loaded.task_model_id == run.task_model_id
+        assert loaded.reflection_model_id == "bedrock/gpt-oss-120b"
+        assert loaded.environment_id == run.environment_id
+        assert loaded.gepa_budget_mode == "light"
+        assert loaded.replication_seed == 42
+        assert loaded.seed_prompt == "Solve the problem step by step."
+        assert loaded.optimized_prompt is None
+        assert loaded.status == "running"
+        assert loaded.hostname == "macbook-pro.local"
+        assert loaded.result_summary is None
+        assert loaded.cost_summary is None
+        assert loaded.schema_version == "1.2.0"
+        assert abs((loaded.started_at - run.started_at).total_seconds()) < 0.01
+
+    def test_save_duplicate_raises(self, db_path):
+        run = _make_experiment_run(experiment_run_id="dup-run")
+        save_experiment_run(db_path, run)
+        with pytest.raises(ValueError, match="dup-run"):
+            save_experiment_run(db_path, run)
+
+    def test_load_nonexistent_raises(self, db_path):
+        # Initialise the DB so it doesn't fail on missing file
+        save_experiment_run(db_path, _make_experiment_run())
+        with pytest.raises(KeyError, match="no-such-run"):
+            load_experiment_run(db_path, "no-such-run")
+
+    def test_episode_linked_to_experiment_run(self, db_path):
+        """5.12: save experiment_run + episode with FK → verify linkage."""
+        run = _make_experiment_run(experiment_run_id="run-fk-001")
+        save_experiment_run(db_path, run)
+
+        step = _make_step(reward=1.0, terminated=True)
+        log = _make_log(steps=[step], environment_id="math:Orz57K")
+        save_trajectory(db_path, log, experiment_run_id="run-fk-001")
+
+        # Verify the FK was stored by querying the raw row
+        from trajectory_aware_gym.storage.trajectory_db import get_connection
+
+        conn = get_connection(db_path)
+        row = conn.execute(
+            "SELECT experiment_run_id FROM episodes WHERE run_id = ?",
+            (log.run_id,),
+        ).fetchone()
+        assert row["experiment_run_id"] == "run-fk-001"
+
+    def test_episode_without_experiment_run_fk(self, db_path):
+        """Episodes can exist without an experiment_run_id (nullable FK)."""
+        step = _make_step(reward=0.5, terminated=True)
+        log = _make_log(steps=[step])
+        save_trajectory(db_path, log)
+
+        from trajectory_aware_gym.storage.trajectory_db import get_connection
+
+        conn = get_connection(db_path)
+        row = conn.execute(
+            "SELECT experiment_run_id FROM episodes WHERE run_id = ?",
+            (log.run_id,),
+        ).fetchone()
+        assert row["experiment_run_id"] is None
+
+    def test_query_by_config_name(self, db_path):
+        """5.13a: query_experiment_runs with config_name filter."""
+        save_experiment_run(
+            db_path,
+            _make_experiment_run(
+                experiment_run_id="q-cfg-1",
+                config_name="orz57k-light",
+            ),
+        )
+        save_experiment_run(
+            db_path,
+            _make_experiment_run(
+                experiment_run_id="q-cfg-2",
+                config_name="hotpotqa-medium",
+            ),
+        )
+        save_experiment_run(
+            db_path,
+            _make_experiment_run(
+                experiment_run_id="q-cfg-3",
+                config_name="orz57k-light",
+            ),
+        )
+
+        results = query_experiment_runs(db_path, config_name="orz57k-light")
+        assert len(results) == 2
+        assert all(r.config_name == "orz57k-light" for r in results)
+
+    def test_query_by_operator(self, db_path):
+        """5.13b: query_experiment_runs with operator filter."""
+        save_experiment_run(
+            db_path,
+            _make_experiment_run(
+                experiment_run_id="q-op-1",
+                operator="alice",
+            ),
+        )
+        save_experiment_run(
+            db_path,
+            _make_experiment_run(
+                experiment_run_id="q-op-2",
+                operator="bob",
+            ),
+        )
+
+        results = query_experiment_runs(db_path, operator="alice")
+        assert len(results) == 1
+        assert results[0].operator == "alice"
+
+    def test_query_by_provider(self, db_path):
+        """5.13c: query_experiment_runs with provider filter."""
+        save_experiment_run(
+            db_path,
+            _make_experiment_run(
+                experiment_run_id="q-prov-1",
+                provider="ollama",
+            ),
+        )
+        save_experiment_run(
+            db_path,
+            _make_experiment_run(
+                experiment_run_id="q-prov-2",
+                provider="bedrock",
+            ),
+        )
+
+        results = query_experiment_runs(db_path, provider="bedrock")
+        assert len(results) == 1
+        assert results[0].provider == "bedrock"
+
+    def test_query_combined_filters(self, db_path):
+        """5.13d: query with multiple filters ANDed together."""
+        save_experiment_run(
+            db_path,
+            _make_experiment_run(
+                experiment_run_id="q-combo-1",
+                config_name="orz57k",
+                operator="alice",
+                provider="ollama",
+            ),
+        )
+        save_experiment_run(
+            db_path,
+            _make_experiment_run(
+                experiment_run_id="q-combo-2",
+                config_name="orz57k",
+                operator="bob",
+                provider="ollama",
+            ),
+        )
+        save_experiment_run(
+            db_path,
+            _make_experiment_run(
+                experiment_run_id="q-combo-3",
+                config_name="hotpotqa",
+                operator="alice",
+                provider="bedrock",
+            ),
+        )
+
+        results = query_experiment_runs(
+            db_path,
+            config_name="orz57k",
+            operator="alice",
+        )
+        assert len(results) == 1
+        assert results[0].experiment_run_id == "q-combo-1"
+
+    def test_query_no_filters_returns_all(self, db_path):
+        save_experiment_run(db_path, _make_experiment_run(experiment_run_id="q-all-1"))
+        save_experiment_run(db_path, _make_experiment_run(experiment_run_id="q-all-2"))
+
+        results = query_experiment_runs(db_path)
+        assert len(results) == 2
+
+    def test_query_no_matches_returns_empty(self, db_path):
+        save_experiment_run(db_path, _make_experiment_run(experiment_run_id="q-empty"))
+        results = query_experiment_runs(db_path, operator="nonexistent")
+        assert results == []
+
+    def test_update_status_and_finished_at(self, db_path):
+        """5.14a: update status and finished_at → reload → verify."""
+        now = datetime.now(UTC)
+        run = _make_experiment_run(experiment_run_id="upd-001", started_at=now)
+        save_experiment_run(db_path, run)
+
+        finished = now + timedelta(hours=1)
+        update_experiment_run(
+            db_path,
+            "upd-001",
+            status="completed",
+            finished_at=finished,
+        )
+
+        loaded = load_experiment_run(db_path, "upd-001")
+        assert loaded.status == "completed"
+        assert loaded.finished_at is not None
+        assert abs((loaded.finished_at - finished).total_seconds()) < 0.01
+
+    def test_update_cost_and_result_summary(self, db_path):
+        """5.14b: update cost_summary and result_summary dicts."""
+        run = _make_experiment_run(experiment_run_id="upd-002")
+        save_experiment_run(db_path, run)
+
+        update_experiment_run(
+            db_path,
+            "upd-002",
+            result_summary={"accuracy": 0.85, "total_episodes": 50},
+            cost_summary={"total_usd": 1.23, "total_tokens": 500000},
+        )
+
+        loaded = load_experiment_run(db_path, "upd-002")
+        assert loaded.result_summary == {"accuracy": 0.85, "total_episodes": 50}
+        assert loaded.cost_summary == {"total_usd": 1.23, "total_tokens": 500000}
+
+    def test_update_optimized_prompt(self, db_path):
+        """5.14c: update optimized_prompt after GEPA completes."""
+        run = _make_experiment_run(experiment_run_id="upd-003")
+        save_experiment_run(db_path, run)
+
+        update_experiment_run(
+            db_path,
+            "upd-003",
+            optimized_prompt="Think carefully, use Python.",
+        )
+
+        loaded = load_experiment_run(db_path, "upd-003")
+        assert loaded.optimized_prompt == "Think carefully, use Python."
+
+    def test_update_disallowed_field_raises(self, db_path):
+        run = _make_experiment_run(experiment_run_id="upd-bad")
+        save_experiment_run(db_path, run)
+
+        with pytest.raises(ValueError, match="Cannot update"):
+            update_experiment_run(db_path, "upd-bad", config_name="hacked")
+
+    def test_update_nonexistent_run_raises(self, db_path):
+        # Ensure DB is initialised
+        save_experiment_run(db_path, _make_experiment_run())
+        with pytest.raises(KeyError, match="no-such-run"):
+            update_experiment_run(db_path, "no-such-run", status="failed")

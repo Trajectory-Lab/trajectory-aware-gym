@@ -127,6 +127,15 @@ def parse_args() -> argparse.Namespace:
             "errors do not silently bias aggregate results across seeds."
         ),
     )
+    parser.add_argument(
+        "--skip-s3-upload",
+        action="store_true",
+        help=(
+            "Deprecated no-op retained for CLI compatibility. "
+            "Experiment runs are always local-first; use scripts/upload_experiment_artifacts.py "
+            "to sync completed artifacts to S3 later."
+        ),
+    )
     parser.set_defaults(fail_fast=True)
     return parser.parse_args()
 
@@ -172,6 +181,7 @@ def main() -> None:
             results_root=args.results_root,
             halt_on_budget_exceeded=args.halt_on_budget_exceeded,
             fail_fast=args.fail_fast,
+            skip_s3_upload=args.skip_s3_upload,
         )
     )
 

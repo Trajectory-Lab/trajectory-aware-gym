@@ -118,6 +118,11 @@ def test_run_episode_records_trajectory_and_cost(monkeypatch):
     assert len(trajectory.steps) == 1
     assert trajectory.steps[0].action == "\\boxed{4}"
     assert len(trajectory.steps[0].llm_calls) == 1
+    llm_call = trajectory.steps[0].llm_calls[0]
+    assert llm_call.latency_ms is not None
+    assert llm_call.latency_ms > 0
+    assert llm_call.cost_type == "actual"
+    assert llm_call.provider == "ollama"
 
     assert metrics.run_id == trajectory.run_id
     assert metrics.step_count == 1
@@ -202,6 +207,8 @@ def test_run_episode_executes_tool_call_before_final_action(monkeypatch):
     assert len(step.tool_calls) == 1
     assert step.tool_calls[0].tool_name == "python_exec"
     assert step.tool_calls[0].success is True
+    assert step.tool_calls[0].duration_ms is not None
+    assert step.tool_calls[0].duration_ms >= 0
     assert len(step.llm_calls) == 2
     assert trajectory.total_tokens == 24
     assert metrics.total_tokens == 24
@@ -244,6 +251,95 @@ def test_runner_tracks_episode_history(monkeypatch):
 
     runner.clear_episode_history()
     assert runner.episode_history == ()
+
+
+def test_run_episode_sanitizes_non_finite_completion_cost(monkeypatch):
+    class FakeEnv:
+        def reset(self, **kwargs):
+            return "Solve 2 + 2", {}
+
+        def step(self, action: str):
+            assert action == "\\boxed{4}"
+            return "Correct", 1.0, True, False, {"correct": True}
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(
+        "trajectory_aware_gym.adapters.gem_episode_runner.importlib.import_module",
+        _fake_import_module_factory(FakeEnv()),
+    )
+    monkeypatch.setattr(
+        "trajectory_aware_gym.adapters.gem_episode_runner.completion",
+        lambda **kwargs: _make_response("\\boxed{4}"),
+    )
+    monkeypatch.setattr(
+        "trajectory_aware_gym.adapters.gem_episode_runner.completion_cost",
+        lambda *, completion_response: float("nan"),
+    )
+
+    runner = GEMEpisodeRunner(
+        environment_id="math:Orz57K",
+        model_id="ollama/qwen3-1.7b-base",
+        temperature=0.0,
+        max_steps=1,
+    )
+
+    result = runner.run_episode("Solve carefully.", persist=False)
+
+    assert result.trajectory is not None
+    llm_call = result.trajectory.steps[0].llm_calls[0]
+    assert llm_call.cost_usd is None
+    assert llm_call.cost_type == "unavailable"
+    assert result.logging_summary.numeric_anomaly_count == 1
+    assert result.logging_summary.status == "partial"
+    assert any(event.kind == "numeric_sanitized" for event in result.logging_summary.events)
+
+
+def test_run_episode_save_failure_is_non_fatal(monkeypatch):
+    class FakeEnv:
+        def reset(self, **kwargs):
+            return "Solve 2 + 2", {}
+
+        def step(self, action: str):
+            assert action == "\\boxed{4}"
+            return "Correct", 1.0, True, False, {"correct": True}
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(
+        "trajectory_aware_gym.adapters.gem_episode_runner.importlib.import_module",
+        _fake_import_module_factory(FakeEnv()),
+    )
+    monkeypatch.setattr(
+        "trajectory_aware_gym.adapters.gem_episode_runner.completion",
+        lambda **kwargs: _make_response("\\boxed{4}"),
+    )
+    monkeypatch.setattr(
+        "trajectory_aware_gym.adapters.gem_episode_runner.completion_cost",
+        lambda *, completion_response: 0.01,
+    )
+    monkeypatch.setattr(
+        "trajectory_aware_gym.storage.save_trajectory",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("db unavailable")),
+    )
+
+    runner = GEMEpisodeRunner(
+        environment_id="math:Orz57K",
+        model_id="ollama/qwen3-1.7b-base",
+        temperature=0.0,
+        max_steps=1,
+    )
+
+    result = runner.run_episode("Solve carefully.", persist=True)
+
+    assert result.trajectory is not None
+    assert result.raw_metrics is not None
+    assert result.log_path is None
+    assert result.logging_summary.trajectory_persisted is False
+    assert result.logging_summary.status == "partial"
+    assert any(event.kind == "persistence_failed" for event in result.logging_summary.events)
 
 
 def test_run_episode_retries_transient_completion_error(monkeypatch):
@@ -608,11 +704,14 @@ class TestGenerateAction:
             temperature=0.0,
             max_steps=1,
         )
-        _, metadata, native_calls = runner._generate_action([{"role": "user", "content": "test"}])
+        _, metadata, native_calls, logging_events = runner._generate_action(
+            [{"role": "user", "content": "test"}]
+        )
         assert len(native_calls) == 1
         assert native_calls[0]["tool"] == "python_exec"
         assert native_calls[0]["arguments"] == {"code": "print(1)"}
         assert metadata.total_tokens == 15
+        assert logging_events == []
 
     def test_no_native_tool_calls(self, monkeypatch):
         response = self._make_native_response(text="\\boxed{4}")
@@ -631,9 +730,12 @@ class TestGenerateAction:
             temperature=0.0,
             max_steps=1,
         )
-        action, _, native_calls = runner._generate_action([{"role": "user", "content": "test"}])
+        action, _, native_calls, logging_events = runner._generate_action(
+            [{"role": "user", "content": "test"}]
+        )
         assert action == "\\boxed{4}"
         assert native_calls == []
+        assert logging_events == []
 
     def test_malformed_arguments_default_to_empty_dict(self, monkeypatch):
         response = self._make_native_response(
@@ -655,9 +757,12 @@ class TestGenerateAction:
             temperature=0.0,
             max_steps=1,
         )
-        _, _, native_calls = runner._generate_action([{"role": "user", "content": "test"}])
+        _, _, native_calls, logging_events = runner._generate_action(
+            [{"role": "user", "content": "test"}]
+        )
         assert len(native_calls) == 1
         assert native_calls[0]["arguments"] == {}
+        assert logging_events == []
 
 
 # ---------------------------------------------------------------------------
@@ -737,3 +842,52 @@ class TestToolRoundExhaustion:
         assert len(step.tool_calls) == 2
         assert step.action == "\\boxed{4}"
         assert call_count == 3
+
+
+# ---------------------------------------------------------------------------
+# cost_type semantics
+# ---------------------------------------------------------------------------
+
+
+def test_cost_type_unavailable_when_completion_cost_raises(monkeypatch):
+    """When completion_cost raises, cost_type should be 'unavailable' and cost_usd None."""
+
+    class FakeEnv:
+        def reset(self, **kwargs):
+            return "Solve 2 + 2", {}
+
+        def step(self, action):
+            return "Correct", 1.0, True, False, {"correct": True}
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(
+        "trajectory_aware_gym.adapters.gem_episode_runner.importlib.import_module",
+        _fake_import_module_factory(FakeEnv()),
+    )
+    monkeypatch.setattr(
+        "trajectory_aware_gym.adapters.gem_episode_runner.completion",
+        lambda **kwargs: _make_response("\\boxed{4}"),
+    )
+    monkeypatch.setattr(
+        "trajectory_aware_gym.adapters.gem_episode_runner.completion_cost",
+        _raise_on_cost,
+    )
+
+    runner = GEMEpisodeRunner(
+        environment_id="math:Orz57K",
+        model_id="ollama/qwen3-1.7b-base",
+        temperature=0.0,
+        max_steps=3,
+        seed=42,
+    )
+
+    result = runner.run_episode("Solve.", persist=False)
+    llm_call = result.trajectory.steps[0].llm_calls[0]
+    assert llm_call.cost_usd is None
+    assert llm_call.cost_type == "unavailable"
+
+
+def _raise_on_cost(*, completion_response):
+    raise Exception("Model not mapped in LiteLLM pricing")

@@ -40,7 +40,7 @@ from trajectory_aware_gym.models.experiment import ExperimentConfig
 
 DEFAULT_ENVIRONMENT_ID = "game:GuessTheNumber-v0-easy"
 DEFAULT_GUESS_SEED = 123
-DEFAULT_SMOKE_MAX_STEPS = 1
+DEFAULT_SMOKE_EPISODES = 1
 DEFAULT_SMOKE_MAX_TOKENS = DEFAULT_MAX_RESPONSE_TOKENS
 DEFAULT_SMOKE_SYSTEM_PROMPT = (
     "You are a math problem solver. "
@@ -136,10 +136,17 @@ def build_smoke_run_spec(args: argparse.Namespace) -> SmokeRunSpec:
         if args.seed is not None
         else (config.seeds.data_seed if config is not None else None)
     )
-    model_id = args.task_model_id or config.task_models[0].model_id
-    episode_count = args.max_steps if args.max_steps is not None else DEFAULT_SMOKE_MAX_STEPS
+    if args.task_model_id is not None:
+        model_id = args.task_model_id
+    elif config is not None:
+        model_id = config.task_models[0].model_id
+    else:
+        raise ValueError("--task-model-id is required for smoke mode without --experiment-config")
+    episode_count = args.episodes if args.episodes is not None else DEFAULT_SMOKE_EPISODES
     episode_max_steps = (
-        config.environment.max_steps if config is not None else settings.gem.max_steps
+        args.max_steps
+        if args.max_steps is not None
+        else (config.environment.max_steps if config is not None else settings.gem.max_steps)
     )
     max_response_tokens = (
         args.max_response_tokens
@@ -274,6 +281,10 @@ def run_smoke_episode(spec: SmokeRunSpec) -> SmokeRunResult:
     for ep in range(spec.episode_count):
         result = runner.run_episode(spec.system_prompt, episode_index=ep)
         trajectory = result.trajectory
+        if trajectory is None:
+            raise RuntimeError("Smoke run did not produce a faithful trajectory log.")
+        if not trajectory.steps:
+            raise RuntimeError("Smoke run trajectory log contains no steps.")
 
         is_correct = trajectory.episode_outcome == "success"
         total_reward += trajectory.total_reward
@@ -342,10 +353,16 @@ def parse_args() -> argparse.Namespace:
         help="Which experiment temperature to use in smoke mode",
     )
     parser.add_argument(
-        "--max-steps",
+        "--episodes",
         type=int,
         default=None,
         help="Number of independent episodes to run (defaults to 1)",
+    )
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=None,
+        help="Per-episode step cap in smoke mode",
     )
     parser.add_argument(
         "--temperature",

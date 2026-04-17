@@ -197,6 +197,35 @@ class TestLLMCallMetadata:
                 total_tokens=0,
             )
 
+    @pytest.mark.parametrize(
+        ("model_id", "expected_provider"),
+        [
+            ("bedrock/llama-8b", "bedrock"),
+            ("ollama/qwen3-1.7b-base", "ollama"),
+            ("sagemaker/qwen3-4b", "sagemaker"),
+            ("some-unknown-model", None),
+            ("openai/gpt-4", None),
+        ],
+    )
+    def test_provider_derived_from_model_id(self, model_id, expected_provider):
+        meta = LLMCallMetadata(
+            model_id=model_id,
+            prompt_tokens=10,
+            completion_tokens=5,
+            total_tokens=15,
+        )
+        assert meta.provider == expected_provider
+
+    def test_explicit_provider_not_overridden(self):
+        meta = LLMCallMetadata(
+            model_id="bedrock/llama-8b",
+            provider="custom-provider",
+            prompt_tokens=10,
+            completion_tokens=5,
+            total_tokens=15,
+        )
+        assert meta.provider == "custom-provider"
+
 
 class TestTrajectoryStep:
     """Tests for trajectory step schema."""
@@ -373,7 +402,10 @@ class TestTrajectoryLog:
         s1 = _make_step(step_index=1, llm_calls=[_make_llm_call(10, 20, cost=None)])
         s2 = _make_step(step_index=2, llm_calls=[_make_llm_call(5, 5, cost=0.01)])
         log = _make_log(steps=[s1, s2])
-        assert abs(log.total_cost_usd - 0.01) < 1e-9
+        assert log.total_cost_usd is None
+        assert abs(log.known_cost_usd - 0.01) < 1e-9
+        assert log.has_missing_cost_data is True
+        assert log.cost_data_coverage == pytest.approx(0.5)
 
     def test_backward_compatible_empty_log(self):
         log = _make_log()
@@ -417,7 +449,8 @@ class TestTrajectoryLog:
         s1 = _make_step(step_index=1, llm_calls=[_make_llm_call(10, 20, cost=0.0)])
         s2 = _make_step(step_index=2, llm_calls=[_make_llm_call(10, 20, cost=None)])
         log = _make_log(steps=[s1, s2])
-        assert log.total_cost_usd == 0.0
+        assert log.total_cost_usd is None
+        assert log.known_cost_usd == 0.0
         assert log.steps[0].llm_calls[0].cost_usd == 0.0
         assert log.steps[1].llm_calls[0].cost_usd is None
 
@@ -844,7 +877,8 @@ class TestTrajectoryLoadAndFilter:
         assert loaded.steps[0].llm_calls[1].total_tokens == 20
         assert loaded.steps[0].llm_calls[1].cost_usd is None
         assert loaded.total_tokens == 50
-        assert abs(loaded.total_cost_usd - 0.01) < 1e-9
+        assert loaded.total_cost_usd is None
+        assert abs(loaded.known_cost_usd - 0.01) < 1e-9
 
     @pytest.mark.parametrize(
         ("outcome", "expected_count"),

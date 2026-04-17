@@ -66,6 +66,23 @@ cost_tracking:
   enabled: true
   alert_threshold: 100.0
 
+cost_normalization:
+  reference_prices:
+    # Ollama Qwen3-1.7B → Bedrock Llama-1B equivalent
+    # Source: AWS Bedrock pricing page (2026-04), us-east-1
+    # Reference model: us.meta.llama3-2-1b-instruct-v1:0
+    # Rationale: closest parameter-count match for H2 cost comparison
+    "ollama/qwen3-1.7b-base":
+      input_per_1m_tokens: 0.10
+      output_per_1m_tokens: 0.10
+    # Ollama Qwen3-4B → Bedrock Llama-3B equivalent
+    # Source: AWS Bedrock pricing page (2026-04), us-east-1
+    # Reference model: us.meta.llama3-2-3b-instruct-v1:0
+    # Rationale: closest parameter-count match for H2 cost comparison
+    "ollama/qwen3-4b-base":
+      input_per_1m_tokens: 0.22
+      output_per_1m_tokens: 0.22
+
 retry:
   max_attempts: 4
   initial_wait_seconds: 1.0
