@@ -10,9 +10,9 @@ Example: ``orz57k-gepa-light-ollama-qwen3-1.7b-jinyu-seed42-20260415T1430Z``
 
 from __future__ import annotations
 
+import configparser
 import os
 import re
-import subprocess
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 
@@ -79,21 +79,49 @@ def generate_experiment_run_id(
 def get_operator() -> str:
     """Return the current operator name.
 
-    Tries ``git config user.name`` first, falls back to ``$USER`` env var,
+    Tries git config files first, falls back to ``$USER`` env var,
     then ``"unknown"``.
     """
-    try:
-        result = subprocess.run(
-            ["git", "config", "user.name"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
+    git_dir = _find_git_dir()
+    config_paths = [git_dir / "config"] if git_dir is not None else []
+    config_paths.append(Path.home() / ".gitconfig")
+    for config_path in config_paths:
+        if (name := _read_git_user_name(config_path)) is not None:
+            return name
     return os.getenv("USER", "unknown")
+
+
+def _find_git_dir(start: Path | None = None) -> Path | None:
+    """Walk upward from ``start`` and return the repo's git metadata directory."""
+    current = (start or Path.cwd()).resolve()
+    for parent in [current, *current.parents]:
+        candidate = parent / ".git"
+        if candidate.is_dir():
+            return candidate
+        if not candidate.is_file():
+            continue
+        git_pointer = candidate.read_text(encoding="utf-8").strip()
+        if not git_pointer.startswith("gitdir: "):
+            continue
+        resolved = (candidate.parent / git_pointer.removeprefix("gitdir: ").strip()).resolve()
+        if resolved.is_dir():
+            return resolved
+    return None
+
+
+def _read_git_user_name(config_path: Path) -> str | None:
+    """Read ``[user] name`` from a git config file."""
+    if not config_path.is_file():
+        return None
+
+    parser = configparser.ConfigParser(interpolation=None)
+    try:
+        parser.read(config_path, encoding="utf-8")
+    except (configparser.Error, OSError):
+        return None
+
+    user_name = parser.get("user", "name", fallback="").strip()
+    return user_name or None
 
 
 def _resolve_git_ref_path(git_dir: Path, ref: str) -> Path | None:
@@ -119,14 +147,7 @@ def get_git_info() -> tuple[str | None, str | None]:
     Uses file I/O only — no subprocess calls. Returns ``(None, None)``
     if the git directory cannot be found or read.
     """
-    # Walk up from cwd looking for .git
-    current = Path.cwd()
-    git_dir: Path | None = None
-    for parent in [current, *current.parents]:
-        candidate = parent / ".git"
-        if candidate.is_dir():
-            git_dir = candidate
-            break
+    git_dir = _find_git_dir()
     if git_dir is None:
         return None, None
 

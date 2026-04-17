@@ -473,7 +473,7 @@ def _summarize_task_usage_rows(
             "episodes": 0,
             "total_tokens": 0,
             "known_total_tokens": 0,
-            "token_data_coverage": 1.0,
+            "token_data_coverage": 1.0,  # nosec B105 - coverage metric, not a credential
             "total_cost_usd": 0.0,
             "known_cost_usd": 0.0,
             "cost_data_coverage": 1.0,

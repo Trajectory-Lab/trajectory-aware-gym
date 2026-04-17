@@ -7,6 +7,7 @@ pricing), so paper figures and tables can consume them uniformly.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -21,6 +22,7 @@ type RunReportCostType = LLMCostType | Literal["partial"]
 
 _FREE_PROVIDER = "ollama"
 _RUN_REPORT_COST_TYPES = {"actual", "estimated", "partial", "unavailable"}
+logger = logging.getLogger(__name__)
 
 
 class RunReport(BaseModel):
@@ -148,7 +150,11 @@ def build_run_report(
         if latencies:
             mean_latency = sum(latencies) / len(latencies)
     except Exception:  # noqa: BLE001
-        pass
+        logger.debug(
+            "Unable to compute mean LLM latency for run report experiment_run_id=%s",
+            experiment_run_id,
+            exc_info=True,
+        )
 
     return RunReport(
         experiment_run_id=experiment_run_id,

@@ -134,34 +134,44 @@ class TestGenerateExperimentRunId:
 
 
 class TestGetOperator:
-    def test_reads_git_config(self, monkeypatch):
-        """When git config succeeds, returns that name."""
-        import subprocess as sp
-
-        def fake_run(cmd, **kwargs):
-            return sp.CompletedProcess(cmd, 0, stdout="Jinyu Han\n", stderr="")
-
-        monkeypatch.setattr("trajectory_aware_gym.storage.naming.subprocess.run", fake_run)
+    def test_reads_repo_git_config(self, tmp_path, monkeypatch):
+        """When repo git config has a user name, return it."""
+        git_dir = tmp_path / ".git"
+        git_dir.mkdir()
+        (git_dir / "config").write_text("[user]\nname = Jinyu Han\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
         assert get_operator() == "Jinyu Han"
 
-    def test_falls_back_to_user_env(self, monkeypatch):
-        """When git config fails, falls back to $USER."""
-        import subprocess as sp
+    def test_reads_home_git_config_when_repo_name_missing(self, tmp_path, monkeypatch):
+        """Falls back to the user's global git config."""
+        workspace = tmp_path / "workspace"
+        home_dir = tmp_path / "home"
+        workspace.mkdir()
+        home_dir.mkdir()
+        (home_dir / ".gitconfig").write_text("[user]\nname = Global User\n", encoding="utf-8")
+        monkeypatch.chdir(workspace)
+        monkeypatch.setenv("HOME", str(home_dir))
+        assert get_operator() == "Global User"
 
-        def fake_run(cmd, **kwargs):
-            return sp.CompletedProcess(cmd, 1, stdout="", stderr="")
-
-        monkeypatch.setattr("trajectory_aware_gym.storage.naming.subprocess.run", fake_run)
+    def test_falls_back_to_user_env(self, tmp_path, monkeypatch):
+        """When git config is unavailable, falls back to $USER."""
+        workspace = tmp_path / "workspace"
+        home_dir = tmp_path / "home"
+        workspace.mkdir()
+        home_dir.mkdir()
+        monkeypatch.chdir(workspace)
+        monkeypatch.setenv("HOME", str(home_dir))
         monkeypatch.setenv("USER", "testuser")
         assert get_operator() == "testuser"
 
-    def test_falls_back_to_unknown(self, monkeypatch):
-        """When git and $USER both unavailable, returns 'unknown'."""
-
-        def fake_run(cmd, **kwargs):
-            raise FileNotFoundError("git not found")
-
-        monkeypatch.setattr("trajectory_aware_gym.storage.naming.subprocess.run", fake_run)
+    def test_falls_back_to_unknown(self, tmp_path, monkeypatch):
+        """When git config and $USER are unavailable, returns 'unknown'."""
+        workspace = tmp_path / "workspace"
+        home_dir = tmp_path / "home"
+        workspace.mkdir()
+        home_dir.mkdir()
+        monkeypatch.chdir(workspace)
+        monkeypatch.setenv("HOME", str(home_dir))
         monkeypatch.delenv("USER", raising=False)
         assert get_operator() == "unknown"
 
