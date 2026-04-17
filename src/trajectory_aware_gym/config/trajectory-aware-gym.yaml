@@ -67,6 +67,9 @@ cost_tracking:
   alert_threshold: 100.0
 
 cost_normalization:
+  # When only total task-model tokens are available, estimate prompt tokens
+  # as this fraction and attribute the remainder to completion tokens.
+  prompt_token_ratio: 0.70
   reference_prices:
     # Ollama Qwen3-1.7B → Bedrock Llama-1B equivalent
     # Source: AWS Bedrock pricing page (2026-04), us-east-1

@@ -26,7 +26,6 @@ from trajectory_aware_gym.experiments.runner import (
     _extract_pareto_frontier,
     _extract_reflection_usage,
     _find_resumable_run,
-    _git_commit_hash,
     _is_replication_completed,
     _model_replication_dir,
     _persist_training_trajectories,
@@ -352,6 +351,7 @@ def test_run_experiment_writes_full_replication_artifacts(
     assert (replication_dir / "cost_summary.json").exists()
     assert (replication_dir / "run_metadata.json").exists()
     assert (replication_dir / "config_snapshot.yaml").exists()
+    assert (replication_dir / "training_metrics_summary.json").exists()
     assert (replication_dir / "raw_metrics.csv").exists()
     assert (replication_dir / "raw_metrics.jsonl").exists()
     assert (replication_dir / "raw_metrics_summary.json").exists()
@@ -372,18 +372,48 @@ def test_run_experiment_writes_full_replication_artifacts(
     metadata = json.loads((replication_dir / "run_metadata.json").read_text(encoding="utf-8"))
     assert metadata["status"] == "completed"
     assert metadata["result"]["final_fitness"] == pytest.approx(0.9)
+    assert metadata["baseline_validation"] == {
+        "episodes": 5,
+        "correct": 0,
+        "accuracy": 0.0,
+    }
+    assert metadata["optimized_validation"] == {
+        "episodes": 5,
+        "correct": 5,
+        "accuracy": 1.0,
+    }
     assert metadata["baseline_eval"]["accuracy"] == 1.0
     assert metadata["baseline_eval"]["episodes"] == 1
+
+    training_summary = json.loads(
+        (replication_dir / "training_metrics_summary.json").read_text(encoding="utf-8")
+    )
+    assert training_summary["episodes"] == 2
+    assert training_summary["successes"] == 1
 
     raw_summary = json.loads(
         (replication_dir / "raw_metrics_summary.json").read_text(encoding="utf-8")
     )
-    # 2 train + 1 baseline eval + 1 optimized eval = 4
-    assert raw_summary["episodes"] == 4
-    assert raw_summary["successes"] == 3
-    assert raw_summary["mean_cost_data_coverage"] > 0
-    assert raw_summary["mean_token_data_coverage"] > 0
+    assert raw_summary["scope"] == "heldout_eval"
+    assert raw_summary["baseline_eval"]["episodes"] == 1
+    assert raw_summary["baseline_eval"]["successes"] == 1
+    assert raw_summary["optimized_eval"]["episodes"] == 1
+    assert raw_summary["optimized_eval"]["successes"] == 1
+    assert raw_summary["heldout_total"]["episodes"] == 2
+    assert raw_summary["heldout_total"]["successes"] == 2
+    assert raw_summary["heldout_total"]["mean_cost_data_coverage"] > 0
+    assert raw_summary["heldout_total"]["mean_token_data_coverage"] > 0
 
+    assert summary["models"]["Qwen3-1.7B-Base"]["42"]["baseline_validation"] == {
+        "episodes": 5,
+        "correct": 0,
+        "accuracy": 0.0,
+    }
+    assert summary["models"]["Qwen3-1.7B-Base"]["42"]["optimized_validation"] == {
+        "episodes": 5,
+        "correct": 5,
+        "accuracy": 1.0,
+    }
     assert summary["models"]["Qwen3-1.7B-Base"]["42"]["status"] == "completed"
 
 
@@ -444,68 +474,6 @@ def test_run_experiment_skips_completed_replication(
 )
 def test_safe_segment_sanitizes_special_chars(raw: str, expected: str) -> None:
     assert _safe_segment(raw) == expected
-
-
-def test_git_commit_hash_returns_hash_for_detached_head(tmp_path: Path) -> None:
-    """Detached HEAD: .git/HEAD contains a commit SHA directly."""
-    git_dir = tmp_path / ".git"
-    git_dir.mkdir()
-    (git_dir / "HEAD").write_text("abc123def456\n", encoding="utf-8")
-    with patch("trajectory_aware_gym.experiments.runner._PROJECT_ROOT", tmp_path):
-        result = _git_commit_hash()
-    assert result == "abc123def456"  # pragma: allowlist secret
-
-
-def test_git_commit_hash_reads_head_and_ref(tmp_path: Path) -> None:
-    """Named branch: .git/HEAD contains a ref pointer, resolved to a commit SHA."""
-    git_dir = tmp_path / ".git"
-    ref_dir = git_dir / "refs" / "heads"
-    ref_dir.mkdir(parents=True)
-    (git_dir / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
-    (ref_dir / "main").write_text("deadbeef1234\n", encoding="utf-8")
-    with patch("trajectory_aware_gym.experiments.runner._PROJECT_ROOT", tmp_path):
-        result = _git_commit_hash()
-    assert result == "deadbeef1234"  # pragma: allowlist secret
-
-
-def test_git_commit_hash_returns_none_when_no_git_dir(tmp_path: Path) -> None:
-    """No .git directory present → returns None."""
-    with patch("trajectory_aware_gym.experiments.runner._PROJECT_ROOT", tmp_path):
-        result = _git_commit_hash()
-    assert result is None
-
-
-def test_git_commit_hash_returns_none_on_oserror(tmp_path: Path) -> None:
-    """OSError reading .git files → returns None."""
-    git_dir = tmp_path / ".git"
-    git_dir.mkdir()
-    (git_dir / "HEAD").write_text("abc123\n", encoding="utf-8")
-    with (
-        patch("trajectory_aware_gym.experiments.runner._PROJECT_ROOT", tmp_path),
-        patch.object(Path, "read_text", side_effect=OSError("Permission denied")),
-    ):
-        result = _git_commit_hash()
-    assert result is None
-
-
-def test_git_commit_hash_returns_none_for_empty_head(tmp_path: Path) -> None:
-    """Empty .git/HEAD (e.g. freshly initialised repo) → returns None."""
-    git_dir = tmp_path / ".git"
-    git_dir.mkdir()
-    (git_dir / "HEAD").write_text("   \n", encoding="utf-8")
-    with patch("trajectory_aware_gym.experiments.runner._PROJECT_ROOT", tmp_path):
-        result = _git_commit_hash()
-    assert result is None
-
-
-def test_git_commit_hash_rejects_path_traversal(tmp_path: Path) -> None:
-    """A malicious ref: with '..' must not read outside .git/."""
-    git_dir = tmp_path / ".git"
-    git_dir.mkdir()
-    (git_dir / "HEAD").write_text("ref: ../../etc/passwd\n", encoding="utf-8")
-    with patch("trajectory_aware_gym.experiments.runner._PROJECT_ROOT", tmp_path):
-        result = _git_commit_hash()
-    assert result is None
 
 
 def test_write_json_creates_file(tmp_path: Path) -> None:
@@ -1262,7 +1230,6 @@ def test_run_experiment_snapshot_and_hash_include_cli_overrides(
             results_root=tmp_path,
             seed_prompt_override="CLI prompt",
             max_metric_calls=8,
-            skip_s3_upload=True,
         )
     )
 
@@ -2017,6 +1984,8 @@ def test_run_experiment_resume_gepa_done_preserves_saved_phase_artifacts(
             task_model_id="ollama/qwen3-1.7b-base",
             environment_id="math:Orz57K",
             seed=42,
+            baseline_validation=kwargs["baseline_validation_summary"],
+            optimized_validation=kwargs["optimized_validation_summary"],
             cost_type=str(kwargs["cost_summary"]["cost_type"]),
             logging_summary=kwargs["logging_summary"],
         ),
@@ -2027,6 +1996,16 @@ def test_run_experiment_resume_gepa_done_preserves_saved_phase_artifacts(
     metadata = json.loads((replication_dir / "run_metadata.json").read_text(encoding="utf-8"))
     assert metadata["status"] == "completed"
     assert metadata["result"]["final_fitness"] == pytest.approx(0.9)
+    assert metadata["baseline_validation"] == {
+        "episodes": 5,
+        "correct": 0,
+        "accuracy": 0.0,
+    }
+    assert metadata["optimized_validation"] == {
+        "episodes": 5,
+        "correct": 5,
+        "accuracy": 1.0,
+    }
 
     cost_summary = json.loads((replication_dir / "cost_summary.json").read_text(encoding="utf-8"))
     assert cost_summary["training_task_model_tokens"] == 30
@@ -2038,14 +2017,31 @@ def test_run_experiment_resume_gepa_done_preserves_saved_phase_artifacts(
     assert cost_summary["total_tokens"] == 47
     assert cost_summary["total_cost"] == pytest.approx(0.47)
 
+    training_summary = json.loads(
+        (replication_dir / "training_metrics_summary.json").read_text(encoding="utf-8")
+    )
+    assert training_summary["episodes"] == 2
+    assert training_summary["successes"] == 1
+
     raw_summary = json.loads(
         (replication_dir / "raw_metrics_summary.json").read_text(encoding="utf-8")
     )
-    assert raw_summary["episodes"] == 4
-    assert raw_summary["successes"] == 3
+    assert raw_summary["scope"] == "heldout_eval"
+    assert raw_summary["heldout_total"]["episodes"] == 2
+    assert raw_summary["heldout_total"]["successes"] == 2
 
     run_report = json.loads((replication_dir / "run_report.json").read_text(encoding="utf-8"))
     assert run_report["cost_type"] == "actual"
+    assert run_report["baseline_validation"] == {
+        "episodes": 5,
+        "correct": 0,
+        "accuracy": 0.0,
+    }
+    assert run_report["optimized_validation"] == {
+        "episodes": 5,
+        "correct": 5,
+        "accuracy": 1.0,
+    }
     assert run_report["logging_summary"]["numeric_anomaly_count"] == 1
 
 
@@ -2075,7 +2071,6 @@ def test_run_experiment_saves_experiment_run_record(
             config_path=QUICK_TEST_CONFIG,
             max_metric_calls=8,
             results_root=tmp_path,
-            skip_s3_upload=True,
         )
     )
 
@@ -2178,34 +2173,6 @@ def test_run_experiment_is_local_first_and_does_not_upload(
     assert not (replication_dir / "upload_manifest.json").exists()
 
 
-def test_run_experiment_skip_s3_upload_is_deprecated_noop(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """skip_s3_upload still succeeds but only logs a deprecation warning."""
-    import logging
-
-    import trajectory_aware_gym.experiments.runner as runner_module
-
-    _setup_fake_runner(monkeypatch, runner_module)
-    monkeypatch.setattr(runner_module, "save_experiment_run", lambda *a, **k: None)
-    monkeypatch.setattr(runner_module, "update_experiment_run", lambda *a, **k: None)
-
-    with caplog.at_level(logging.WARNING, logger="trajectory_aware_gym.experiments.runner"):
-        summary = run_experiment(
-            RunExperimentArgs(
-                config_path=QUICK_TEST_CONFIG,
-                max_metric_calls=8,
-                results_root=tmp_path,
-                skip_s3_upload=True,
-            )
-        )
-
-    assert summary["models"]["Qwen3-1.7B-Base"]["42"]["status"] == "completed"
-    assert any("deprecated and now a no-op" in record.message for record in caplog.records)
-
-
 def test_run_experiment_writes_run_report_json(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -2236,7 +2203,6 @@ def test_run_experiment_writes_run_report_json(
             config_path=QUICK_TEST_CONFIG,
             max_metric_calls=8,
             results_root=tmp_path,
-            skip_s3_upload=True,
         )
     )
 

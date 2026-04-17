@@ -7,12 +7,14 @@ import hashlib
 import importlib
 import json
 import logging
+import os
 import shutil
 import socket
 import time
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any, Literal
 
 import dspy  # type: ignore[import-untyped]
@@ -22,11 +24,12 @@ from litellm import completion_cost  # type: ignore[import-untyped]
 from trajectory_aware_gym.adapters.dspy_adapter import TrajectoryFitnessMetric
 from trajectory_aware_gym.adapters.gem_episode_runner import GEMEpisodeResult, GEMEpisodeRunner
 from trajectory_aware_gym.adapters.gem_solver_module import GEMSolverModule
-from trajectory_aware_gym.adapters.trajectory_logger import TrajectoryLog
+from trajectory_aware_gym.adapters.trajectory_logger import SCHEMA_VERSION, TrajectoryLog
 from trajectory_aware_gym.config import settings
 from trajectory_aware_gym.config.core import Settings
 from trajectory_aware_gym.config.llm_provider import get_reflection_lm
 from trajectory_aware_gym.metrics import EpisodeRawMetrics
+from trajectory_aware_gym.metrics.logging_summary import aggregate_logging_summary
 from trajectory_aware_gym.metrics.run_report import build_run_report
 from trajectory_aware_gym.models.experiment import (
     ExperimentConfig,
@@ -36,6 +39,7 @@ from trajectory_aware_gym.models.gepa_result import GEPARunResult, accuracy_from
 from trajectory_aware_gym.storage import (
     ExperimentRunRecord,
     LoggingEvent,
+    LoggingStatus,
     LoggingSummary,
     episode_exists,
     generate_experiment_run_id,
@@ -75,7 +79,6 @@ class RunExperimentArgs:
     results_root: Path = DEFAULT_RESULTS_ROOT
     halt_on_budget_exceeded: bool = False
     fail_fast: bool = True
-    skip_s3_upload: bool = False
 
 
 def resolve_gepa_budget_kwargs(
@@ -165,29 +168,28 @@ def _config_hash(config: ExperimentConfig | dict[str, Any]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _git_commit_hash() -> str | None:
-    """Read the current git commit hash without spawning a subprocess."""
+def _atomic_write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path: Path | None = None
     try:
-        git_dir = _PROJECT_ROOT / ".git"
-        head_file = git_dir / "HEAD"
-        if not head_file.exists():
-            return None
-        head_content = head_file.read_text(encoding="utf-8").strip()
-        if head_content.startswith("ref: "):
-            ref_path = (git_dir / head_content[5:]).resolve()
-            if not ref_path.is_relative_to(git_dir.resolve()):
-                return None
-            if not ref_path.exists():
-                return None
-            return ref_path.read_text(encoding="utf-8").strip() or None
-        return head_content or None
-    except OSError:
-        return None
+        with NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            delete=False,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+        ) as handle:
+            handle.write(content)
+            tmp_path = Path(handle.name)
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path is not None and tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    _atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True))
 
 
 def _write_jsonl(path: Path, rows: list[EpisodeRawMetrics]) -> None:
@@ -260,6 +262,16 @@ def _load_training_metrics_rows(replication_dir: Path) -> list[EpisodeRawMetrics
 
 def _raw_metrics_summary(rows: list[EpisodeRawMetrics]) -> dict[str, float | int | None]:
     return _raw_metrics_summary_with_omissions(rows, metrics_unavailable_episodes=0)
+
+
+def _raw_metrics_summary_for_results(
+    results: list[GEMEpisodeResult],
+) -> dict[str, float | int | None]:
+    rows = [result.raw_metrics for result in results if result.raw_metrics is not None]
+    return _raw_metrics_summary_with_omissions(
+        rows,
+        metrics_unavailable_episodes=len(results) - len(rows),
+    )
 
 
 def _raw_metrics_summary_with_omissions(
@@ -356,7 +368,7 @@ def _result_success(result: GEMEpisodeResult) -> bool | None:
 
 
 def _results_logging_summary(results: list[GEMEpisodeResult]) -> LoggingSummary:
-    return LoggingSummary.from_episode_summaries([result.logging_summary for result in results])
+    return aggregate_logging_summary([result.logging_summary for result in results])
 
 
 def _persist_training_trajectories(
@@ -429,7 +441,7 @@ def _merge_logging_summaries(
                 break
 
     if summaries and all(summary.status == "failed" for summary in summaries):
-        status: Literal["complete", "partial", "failed"] = "failed"
+        status: LoggingStatus = "failed"
     elif any(summary.status != "complete" for summary in summaries) or events:
         status = "partial"
     else:
@@ -632,6 +644,14 @@ def _extract_pareto_frontier(optimized_module: Any) -> list[dict[str, Any]]:
                 out.append(item)
         return out
     return []
+
+
+def _build_validation_summary(*, accuracy: float, episodes: int) -> dict[str, Any]:
+    return {
+        "episodes": episodes,
+        "correct": round(accuracy * episodes),
+        "accuracy": accuracy,
+    }
 
 
 def _load_json_dict(path: Path) -> dict[str, Any] | None:
@@ -955,12 +975,6 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
     """Run a production GEPA experiment across configured models and replications."""
     config = ExperimentConfig.from_yaml(args.config_path)
 
-    if args.skip_s3_upload:
-        logger.warning(
-            "--skip-s3-upload is deprecated and now a no-op; experiment runs are local-first. "
-            "Use scripts/upload_experiment_artifacts.py to sync completed artifacts to S3."
-        )
-
     seed_prompt = args.seed_prompt_override or config.seed_prompt
     if args.seed_prompt_override is not None:
         logger.info("Using CLI --seed-prompt override (config.seed_prompt ignored for this run).")
@@ -1013,9 +1027,10 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
     experiment_summary_path = (
         args.results_root / _safe_segment(config.name) / run_timestamp / "run_summary.json"
     )
-    run_id = f"{_safe_segment(config.name)}-{run_timestamp}"
+    run_dir_id = f"{_safe_segment(config.name)}-{run_timestamp}"
     config_hash = _config_hash(effective_config_snapshot)
-    git_commit = _git_commit_hash()
+    operator = get_operator()
+    git_commit, git_branch = get_git_info()
 
     existing_run_summary = _load_json_dict(experiment_summary_path)
     if existing_run_summary is not None:
@@ -1034,7 +1049,7 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
     run_summary: dict[str, Any] = existing_run_summary or {}
     run_summary.update(
         {
-            "run_id": run_id,
+            "run_id": run_dir_id,
             "config": config.name,
             "config_hash": config_hash,
             "git_commit": git_commit,
@@ -1103,7 +1118,7 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                 metadata.pop("error", None)
                 metadata.update(
                     {
-                        "run_id": run_id,
+                        "run_id": run_dir_id,
                         "status": "gepa_done" if prior_status == "gepa_done" else "running",
                         "config_hash": config_hash,
                         "git_commit": git_commit,
@@ -1124,8 +1139,6 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                 )
 
                 # --- Experiment run DB record ---
-                operator = get_operator()
-                git_commit_db, git_branch = get_git_info()
                 persisted_exp_run_id = prior_metadata.get("experiment_run_id")
                 exp_run_id = (
                     persisted_exp_run_id
@@ -1152,7 +1165,7 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                     config_hash=config_hash,
                     config_yaml=config_snapshot_yaml,
                     operator=operator,
-                    git_commit=git_commit_db,
+                    git_commit=git_commit,
                     git_branch=git_branch,
                     provider=task_model.provider,
                     task_model_id=model_id,
@@ -1164,7 +1177,7 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                     started_at=started_at,
                     status="running",
                     hostname=socket.gethostname(),
-                    schema_version="1.3.0",
+                    schema_version=SCHEMA_VERSION,
                 )
                 try:
                     save_experiment_run(_DB_PATH, exp_run_record)
@@ -1381,6 +1394,10 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                             replication_dir / "training_metrics.jsonl",
                             training_rows,
                         )
+                        _write_json(
+                            replication_dir / "training_metrics_summary.json",
+                            _raw_metrics_summary_for_results(training_results),
+                        )
 
                         metadata["status"] = "gepa_done"
                         if result is not None:
@@ -1404,12 +1421,30 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                                 optimized_prompt=optimized_prompt,
                             )
                         except Exception:  # noqa: BLE001
-                            logger.debug("update_experiment_run(gepa_done) failed", exc_info=True)
+                            logger.warning(
+                                "update_experiment_run(gepa_done) failed",
+                                exc_info=True,
+                            )
                         logger.info(
                             "Saved GEPA artifacts model=%s seed=%s",
                             task_model.name,
                             replication_seed,
                         )
+
+                    training_metrics_unavailable = training_usage.get(
+                        "metrics_unavailable_episodes", 0
+                    )
+                    _write_json(
+                        replication_dir / "training_metrics_summary.json",
+                        _raw_metrics_summary_with_omissions(
+                            training_rows,
+                            metrics_unavailable_episodes=(
+                                int(training_metrics_unavailable)
+                                if isinstance(training_metrics_unavailable, int | float)
+                                else 0
+                            ),
+                        ),
+                    )
 
                     # --- Phase 2: Held-out evaluation ---
                     logger.info("Running baseline eval with seed prompt...")
@@ -1433,20 +1468,35 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                     logging_summary = _merge_logging_summaries(
                         [training_logging_summary, heldout_logging_summary]
                     )
+                    val_total = config.environment.effective_val_size
+                    baseline_validation_summary: dict[str, Any] | None = None
+                    optimized_validation_summary: dict[str, Any] | None = None
+                    if result is not None:
+                        baseline_validation_summary = _build_validation_summary(
+                            accuracy=result.baseline_accuracy,
+                            episodes=val_total,
+                        )
+                        optimized_validation_summary = _build_validation_summary(
+                            accuracy=result.final_accuracy,
+                            episodes=val_total,
+                        )
                     heldout_rows = [
                         result.raw_metrics
                         for result in heldout_results
                         if result.raw_metrics is not None
                     ]
-                    all_rows = training_rows + heldout_rows
-                    _write_csv(replication_dir / "raw_metrics.csv", all_rows)
-                    _write_jsonl(replication_dir / "raw_metrics.jsonl", all_rows)
+                    _write_csv(replication_dir / "raw_metrics.csv", heldout_rows)
+                    _write_jsonl(replication_dir / "raw_metrics.jsonl", heldout_rows)
                     _write_json(
                         replication_dir / "raw_metrics_summary.json",
-                        _raw_metrics_summary_with_omissions(
-                            all_rows,
-                            metrics_unavailable_episodes=logging_summary.metrics_unavailable_episodes,
-                        ),
+                        {
+                            "scope": "heldout_eval",
+                            "baseline_eval": _raw_metrics_summary_for_results(
+                                baseline_eval_results
+                            ),
+                            "optimized_eval": _raw_metrics_summary_for_results(eval_results),
+                            "heldout_total": _raw_metrics_summary_for_results(heldout_results),
+                        },
                     )
 
                     baseline_usage = _summarize_task_usage(baseline_eval_results)
@@ -1602,6 +1652,8 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                             "result": result.model_dump(mode="json")
                             if result is not None
                             else None,
+                            "baseline_validation": baseline_validation_summary,
+                            "optimized_validation": optimized_validation_summary,
                             "baseline_eval": baseline_eval_summary,
                             "eval": eval_summary,
                         }
@@ -1620,7 +1672,10 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                             logging_summary=logging_summary,
                         )
                     except Exception:  # noqa: BLE001
-                        logger.debug("update_experiment_run(completed) failed", exc_info=True)
+                        logger.warning(
+                            "update_experiment_run(completed) failed",
+                            exc_info=True,
+                        )
 
                     # Generate unified run report.
                     try:
@@ -1628,10 +1683,13 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                             experiment_run_id=exp_run_id,
                             db_path=_DB_PATH,
                             cost_summary=cost_summary,
+                            baseline_validation_summary=baseline_validation_summary,
+                            optimized_validation_summary=optimized_validation_summary,
                             baseline_eval_summary=baseline_eval_summary,
                             eval_summary=eval_summary,
                             wall_clock_seconds=round((finished - started_at).total_seconds(), 3),
                             reference_prices=settings.cost_normalization.reference_prices,
+                            prompt_token_ratio=settings.cost_normalization.prompt_token_ratio,
                             logging_summary=logging_summary.model_dump(mode="json"),
                         )
                         _write_json(
@@ -1649,35 +1707,37 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                         "status": "completed",
                         "experiment_run_id": exp_run_id,
                         "cost_summary": cost_summary,
+                        "baseline_validation": baseline_validation_summary,
+                        "optimized_validation": optimized_validation_summary,
                         "baseline_eval": baseline_eval_summary,
                         "eval": eval_summary,
                         "logging_summary": logging_summary.model_dump(mode="json"),
                     }
 
-                    val_total = config.environment.effective_val_size
                     train_bench = config.environment.gem_env_id.split(":")[-1]
                     eval_bench = (
                         config.environment.dataset.eval_split
                         if config.environment.dataset
                         else train_bench
                     )
-                    if result is not None:
-                        baseline_acc = result.baseline_accuracy
-                        final_acc = result.final_accuracy
-                        bl_val_correct = round(baseline_acc * val_total)
-                        opt_val_correct = round(final_acc * val_total)
-                        train_val_lines = (
-                            f"  Train/val: Baseline accuracy:  {baseline_acc:.1%} "
-                            f"({bl_val_correct}/{val_total}) ({train_bench})\n"
-                            f"  Train/val: Optimized accuracy: {final_acc:.1%} "
-                            f"({opt_val_correct}/{val_total}) ({train_bench})\n"
+                    if (
+                        baseline_validation_summary is not None
+                        and optimized_validation_summary is not None
+                    ):
+                        validation_lines = (
+                            f"  Validation: Baseline accuracy:  "
+                            f"{baseline_validation_summary['accuracy']:.1%} "
+                            f"({baseline_validation_summary['correct']}/{val_total}) "
+                            f"({train_bench})\n"
+                            f"  Validation: Optimized accuracy: "
+                            f"{optimized_validation_summary['accuracy']:.1%} "
+                            f"({optimized_validation_summary['correct']}/{val_total}) "
+                            f"({train_bench})\n"
                         )
                     else:
-                        # GEPA was resumed from a prior run; train/val accuracies
-                        # were not recomputed and live in the original run's metadata.
-                        train_val_lines = (
-                            f"  Train/val: Baseline accuracy:  N/A (resumed) ({train_bench})\n"
-                            f"  Train/val: Optimized accuracy: N/A (resumed) ({train_bench})\n"
+                        validation_lines = (
+                            f"  Validation: Baseline accuracy:  N/A ({train_bench})\n"
+                            f"  Validation: Optimized accuracy: N/A ({train_bench})\n"
                         )
                     bl_eval_acc = baseline_eval_summary["accuracy"]
                     bl_eval_correct = baseline_eval_summary["correct"]
@@ -1698,7 +1758,7 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                     print(
                         f"\n{'=' * 60}\n"
                         f"  Replication complete: {task_model.name} seed={replication_seed}\n"
-                        f"{train_val_lines}"
+                        f"{validation_lines}"
                         f"  Test/eval: Baseline accuracy:  {bl_eval_acc:.1%} "
                         f"({bl_eval_correct}/{bl_eval_total}) ({eval_bench})\n"
                         f"  Test/eval: Optimized accuracy: {eval_acc:.1%} "
@@ -1737,7 +1797,10 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                             logging_summary=partial_logging_summary,
                         )
                     except Exception:  # noqa: BLE001
-                        logger.debug("update_experiment_run(failed) failed", exc_info=True)
+                        logger.warning(
+                            "update_experiment_run(failed) failed",
+                            exc_info=True,
+                        )
                     model_entries[str(replication_seed)] = {
                         "status": "failed",
                         "experiment_run_id": exp_run_id,

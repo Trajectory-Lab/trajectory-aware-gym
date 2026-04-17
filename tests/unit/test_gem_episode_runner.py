@@ -16,6 +16,7 @@ from trajectory_aware_gym.adapters.gem_episode_runner import (
     _extract_json_payload,
     _reset_inference_semaphore,
     _supports_native_tools,
+    generate_smoke_action,
 )
 from trajectory_aware_gym.config.core import Settings
 
@@ -89,10 +90,14 @@ def test_run_episode_records_trajectory_and_cost(monkeypatch):
         "trajectory_aware_gym.adapters.gem_episode_runner.completion_cost",
         lambda *, completion_response: 0.0123,
     )
+    monkeypatch.setattr(
+        "trajectory_aware_gym.adapters.gem_episode_runner.settings.validate_aws",
+        lambda: None,
+    )
 
     runner = GEMEpisodeRunner(
         environment_id="math:Orz57K",
-        model_id="ollama/qwen3-1.7b-base",
+        model_id="bedrock/us.meta.llama3-2-1b-instruct-v1:0",
         temperature=0.0,
         max_steps=3,
         seed=42,
@@ -109,7 +114,7 @@ def test_run_episode_records_trajectory_and_cost(monkeypatch):
     assert trajectory.initial_observation == "Solve 2 + 2"
     assert trajectory.initial_info["source"] == "unit"
     assert trajectory.initial_info["experiment_name"] == "quick-test"
-    assert trajectory.initial_info["task_model_id"] == "ollama/qwen3-1.7b-base"
+    assert trajectory.initial_info["task_model_id"] == "bedrock/us.meta.llama3-2-1b-instruct-v1:0"
     assert trajectory.initial_info["episode_index"] == 0
     assert trajectory.total_reward == 1.0
     assert trajectory.total_tokens == 12
@@ -122,7 +127,7 @@ def test_run_episode_records_trajectory_and_cost(monkeypatch):
     assert llm_call.latency_ms is not None
     assert llm_call.latency_ms > 0
     assert llm_call.cost_type == "actual"
-    assert llm_call.provider == "ollama"
+    assert llm_call.provider == "bedrock"
 
     assert metrics.run_id == trajectory.run_id
     assert metrics.step_count == 1
@@ -130,6 +135,29 @@ def test_run_episode_records_trajectory_and_cost(monkeypatch):
     assert metrics.success is True
     assert metrics.total_tokens == 12
     assert metrics.llm_cost_usd == pytest.approx(0.0123)
+
+
+def test_generate_smoke_action_keeps_ollama_cost_unavailable_when_litellm_returns_zero(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "trajectory_aware_gym.adapters.gem_episode_runner.completion",
+        lambda **kwargs: _make_response("\\boxed{4}"),
+    )
+    monkeypatch.setattr(
+        "trajectory_aware_gym.adapters.gem_episode_runner.completion_cost",
+        lambda *, completion_response: 0.0,
+    )
+
+    action, llm_call = generate_smoke_action(
+        model_id="ollama/qwen3-1.7b-base",
+        messages=[{"role": "user", "content": "Solve 2 + 2"}],
+        temperature=0.0,
+    )
+
+    assert action == "\\boxed{4}"
+    assert llm_call.cost_usd is None
+    assert llm_call.cost_type == "unavailable"
 
 
 def test_run_episode_executes_tool_call_before_final_action(monkeypatch):
@@ -277,10 +305,14 @@ def test_run_episode_sanitizes_non_finite_completion_cost(monkeypatch):
         "trajectory_aware_gym.adapters.gem_episode_runner.completion_cost",
         lambda *, completion_response: float("nan"),
     )
+    monkeypatch.setattr(
+        "trajectory_aware_gym.adapters.gem_episode_runner.settings.validate_aws",
+        lambda: None,
+    )
 
     runner = GEMEpisodeRunner(
         environment_id="math:Orz57K",
-        model_id="ollama/qwen3-1.7b-base",
+        model_id="bedrock/us.meta.llama3-2-1b-instruct-v1:0",
         temperature=0.0,
         max_steps=1,
     )
@@ -887,6 +919,45 @@ def test_cost_type_unavailable_when_completion_cost_raises(monkeypatch):
     llm_call = result.trajectory.steps[0].llm_calls[0]
     assert llm_call.cost_usd is None
     assert llm_call.cost_type == "unavailable"
+
+
+def test_cost_type_unavailable_for_ollama_when_completion_cost_returns_zero(monkeypatch):
+    class FakeEnv:
+        def reset(self, **kwargs):
+            return "Solve 2 + 2", {}
+
+        def step(self, action):
+            return "Correct", 1.0, True, False, {"correct": True}
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(
+        "trajectory_aware_gym.adapters.gem_episode_runner.importlib.import_module",
+        _fake_import_module_factory(FakeEnv()),
+    )
+    monkeypatch.setattr(
+        "trajectory_aware_gym.adapters.gem_episode_runner.completion",
+        lambda **kwargs: _make_response("\\boxed{4}"),
+    )
+    monkeypatch.setattr(
+        "trajectory_aware_gym.adapters.gem_episode_runner.completion_cost",
+        lambda *, completion_response: 0.0,
+    )
+
+    runner = GEMEpisodeRunner(
+        environment_id="math:Orz57K",
+        model_id="ollama/qwen3-1.7b-base",
+        temperature=0.0,
+        max_steps=3,
+        seed=42,
+    )
+
+    result = runner.run_episode("Solve.", persist=False)
+    llm_call = result.trajectory.steps[0].llm_calls[0]
+    assert llm_call.cost_usd is None
+    assert llm_call.cost_type == "unavailable"
+    assert result.raw_metrics.llm_cost_usd is None
 
 
 def _raise_on_cost(*, completion_response):

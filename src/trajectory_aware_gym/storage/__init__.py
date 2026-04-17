@@ -4,6 +4,7 @@ from trajectory_aware_gym.storage.models import (
     EpisodeLoggingSummary,
     ExperimentRunRecord,
     LoggingEvent,
+    LoggingStatus,
     LoggingSummary,
 )
 from trajectory_aware_gym.storage.naming import (
@@ -36,6 +37,7 @@ __all__ = [
     "ExperimentRunRecord",
     "EpisodeLoggingSummary",
     "LoggingEvent",
+    "LoggingStatus",
     "LoggingSummary",
     "close_connection",
     "download_artifact",

@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from trajectory_aware_gym.adapters.trajectory_logger import (
+    SCHEMA_VERSION,
     LLMCallMetadata,
     ToolCall,
     TrajectoryLog,
@@ -130,6 +131,10 @@ CREATE TABLE IF NOT EXISTS tool_call_log (
     result    TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS schema_meta (
+    version TEXT PRIMARY KEY
+);
+
 """
 
 _INDEXES_SQL = """\
@@ -144,6 +149,15 @@ CREATE INDEX IF NOT EXISTS idx_tool_calls_step          ON tool_calls(run_id, st
 """
 
 _SQLITE_CONNECT_TIMEOUT_SECONDS = 10
+_ALLOWED_TABLES = {
+    "episodes",
+    "experiment_runs",
+    "llm_calls",
+    "schema_meta",
+    "steps",
+    "tool_call_log",
+    "tool_calls",
+}
 
 # ---------------------------------------------------------------------------
 # Connection management (one connection per thread via threading.local)
@@ -170,10 +184,55 @@ def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
 
 
 def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
+    if table_name not in _ALLOWED_TABLES:
+        raise ValueError(f"Unknown table: {table_name}")
     if not _table_exists(conn, table_name):
         return set()
     rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()  # noqa: S608  # nosec B608 - table names are hardcoded
     return {str(row["name"]) for row in rows}
+
+
+def _parse_schema_version(version: str) -> tuple[int, ...] | None:
+    try:
+        return tuple(int(part) for part in version.split("."))
+    except ValueError:
+        return None
+
+
+def _read_schema_version(conn: sqlite3.Connection) -> str | None:
+    if not _table_exists(conn, "schema_meta"):
+        return None
+    rows = conn.execute("SELECT version FROM schema_meta").fetchall()
+    if not rows:
+        return None
+    if len(rows) != 1:
+        raise RuntimeError("schema_meta must contain exactly one schema version row")
+    return str(rows[0]["version"])
+
+
+def _validate_schema_version(conn: sqlite3.Connection) -> None:
+    db_version = _read_schema_version(conn)
+    if db_version is None:
+        return
+
+    db_parts = _parse_schema_version(db_version)
+    current_parts = _parse_schema_version(SCHEMA_VERSION)
+    if db_parts is None or current_parts is None:
+        if db_version != SCHEMA_VERSION:
+            raise RuntimeError(
+                f"Unsupported database schema version {db_version!r}; expected {SCHEMA_VERSION!r}"
+            )
+        return
+
+    if db_parts > current_parts:
+        raise RuntimeError(
+            f"Database schema version {db_version!r} is newer than supported {SCHEMA_VERSION!r}"
+        )
+
+
+def _write_schema_version(conn: sqlite3.Connection) -> None:
+    conn.execute("DELETE FROM schema_meta")
+    conn.execute("INSERT INTO schema_meta (version) VALUES (?)", (SCHEMA_VERSION,))
 
 
 def _migrate_existing_schema(conn: sqlite3.Connection) -> None:
@@ -223,8 +282,10 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
         # init lock so slow runners do not race with DDL.
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(_TABLES_SQL)
+        _validate_schema_version(conn)
         _migrate_existing_schema(conn)
         conn.executescript(_INDEXES_SQL)
+        _write_schema_version(conn)
 
 
 def get_connection(db_path: Path) -> sqlite3.Connection:
@@ -245,12 +306,16 @@ def get_connection(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path), timeout=_SQLITE_CONNECT_TIMEOUT_SECONDS)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
-    with _initialized_dbs_lock:
-        if key not in _initialized_dbs:
-            # Legacy databases need schema migration before new indexes can be
-            # created against the added columns.
-            _initialize_schema(conn)
-            _initialized_dbs.add(key)
+    try:
+        with _initialized_dbs_lock:
+            if key not in _initialized_dbs:
+                # Legacy databases need schema migration before new indexes can be
+                # created against the added columns.
+                _initialize_schema(conn)
+                _initialized_dbs.add(key)
+    except Exception:
+        conn.close()
+        raise
     connections[key] = conn
     return conn
 

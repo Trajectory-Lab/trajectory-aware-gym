@@ -14,7 +14,7 @@ import os
 import re
 import subprocess
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 def _sanitize(segment: str) -> str:
@@ -96,6 +96,23 @@ def get_operator() -> str:
     return os.getenv("USER", "unknown")
 
 
+def _resolve_git_ref_path(git_dir: Path, ref: str) -> Path | None:
+    """Resolve a symbolic ref path only if it stays under ``git_dir``."""
+    if not ref or "\\" in ref:
+        return None
+
+    ref_path = PurePosixPath(ref)
+    if ref_path.is_absolute() or any(part == ".." for part in ref_path.parts):
+        return None
+
+    resolved = (git_dir / Path(*ref_path.parts)).resolve()
+    try:
+        resolved.relative_to(git_dir.resolve())
+    except ValueError:
+        return None
+    return resolved
+
+
 def get_git_info() -> tuple[str | None, str | None]:
     """Return ``(commit_hash, branch_name)`` by reading ``.git/HEAD``.
 
@@ -126,8 +143,10 @@ def get_git_info() -> tuple[str | None, str | None]:
     if head_content.startswith("ref: "):
         # Symbolic reference, e.g. "ref: refs/heads/feat/logging-v2"
         ref = head_content[5:]
+        ref_path = _resolve_git_ref_path(git_dir, ref)
+        if ref_path is None:
+            return None, None
         branch = ref.removeprefix("refs/heads/")
-        ref_path = git_dir / ref
         if ref_path.is_file():
             commit = ref_path.read_text(encoding="utf-8").strip()
         else:

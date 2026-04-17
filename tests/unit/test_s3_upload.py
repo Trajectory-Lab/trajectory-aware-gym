@@ -29,8 +29,14 @@ def mock_s3(monkeypatch):
     """
     client = MagicMock()
 
+    class FakeClientError(Exception):
+        def __init__(self, response, operation_name):
+            super().__init__(response, operation_name)
+            self.response = response
+            self.operation_name = operation_name
+
     # Custom exception types that behave like real exceptions
-    client.exceptions.ClientError = type("ClientError", (Exception,), {})
+    client.exceptions.ClientError = FakeClientError
     client.exceptions.NoSuchKey = type("NoSuchKey", (Exception,), {})
 
     # Default: head_object raises ClientError (key does not exist)
@@ -107,7 +113,10 @@ class TestUploadArtifactBundle:
         def head_side_effect(*, Bucket, Key):  # noqa: N803
             if "existing.yaml" in Key:
                 return {}  # exists
-            raise mock_s3.exceptions.ClientError({}, "HeadObject")
+            raise mock_s3.exceptions.ClientError(
+                {"Error": {"Code": "404", "Message": "Not Found"}},
+                "HeadObject",
+            )
 
         mock_s3.head_object.side_effect = head_side_effect
 
@@ -121,6 +130,20 @@ class TestUploadArtifactBundle:
         assert len(result) == 1
         assert f"{PREFIX}run-002/new.json" in result
         mock_s3.put_object.assert_called_once()
+
+    def test_invalid_run_id_raises(self, mock_s3, tmp_path):
+        artifact = tmp_path / "config.yaml"
+        artifact.write_text("model: test\n", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="Invalid experiment_run_id"):
+            upload_artifact_bundle(
+                "../run-005",
+                {"config.yaml": artifact},
+                bucket=BUCKET,
+                prefix=PREFIX,
+            )
+
+        mock_s3.put_object.assert_not_called()
 
     def test_empty_artifacts(self, mock_s3):
         """No artifacts → no uploads, empty result."""
@@ -165,6 +188,29 @@ class TestUploadArtifactBundle:
                 "error": "RuntimeError('bad creds')",
             },
         ]
+
+    def test_head_errors_other_than_missing_are_not_treated_as_absent(self, mock_s3, tmp_path):
+        artifact = tmp_path / "config.yaml"
+        artifact.write_text("model: test\n", encoding="utf-8")
+        mock_s3.head_object.side_effect = mock_s3.exceptions.ClientError(
+            {"Error": {"Code": "403", "Message": "Forbidden"}},
+            "HeadObject",
+        )
+
+        result = upload_artifact_bundle_detailed(
+            "run-006",
+            {"config.yaml": artifact},
+            bucket=BUCKET,
+            prefix=PREFIX,
+        )
+
+        assert result["uploaded_keys"] == []
+        assert result["skipped_existing_keys"] == []
+        assert len(result["failed_keys"]) == 1
+        assert result["failed_keys"][0]["filename"] == "config.yaml"
+        assert result["failed_keys"][0]["key"] == f"{PREFIX}run-006/config.yaml"
+        assert "403" in result["failed_keys"][0]["error"]
+        mock_s3.put_object.assert_not_called()
 
 
 class TestListRemoteRuns:
@@ -228,6 +274,21 @@ class TestDownloadArtifact:
         with pytest.raises(FileNotFoundError, match="S3 key not found"):
             download_artifact(
                 "run-999",
+                "missing.txt",
+                tmp_path,
+                bucket=BUCKET,
+                prefix=PREFIX,
+            )
+
+    def test_missing_key_client_error_also_raises(self, mock_s3, tmp_path):
+        mock_s3.get_object.side_effect = mock_s3.exceptions.ClientError(
+            {"Error": {"Code": "404", "Message": "Not Found"}},
+            "GetObject",
+        )
+
+        with pytest.raises(FileNotFoundError, match="S3 key not found"):
+            download_artifact(
+                "run-998",
                 "missing.txt",
                 tmp_path,
                 bucket=BUCKET,

@@ -7,6 +7,7 @@ Priority (highest to lowest):
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -132,6 +133,7 @@ class CostNormalizationModel(BaseModel):
     Bedrock pricing as a proxy.
     """
 
+    prompt_token_ratio: float = Field(default=0.7, ge=0.0, le=1.0)
     reference_prices: dict[str, dict[str, float]] = Field(default_factory=dict)
     # Each value: {"input_per_1m_tokens": <float>, "output_per_1m_tokens": <float>}
 
@@ -345,12 +347,15 @@ def _with_env_overrides(
 
 def _coerce(value: str, annotation: Any) -> Any:
     """Coerce a string env var to the target type."""
+    origin = get_origin(annotation)
     if annotation is bool:
         return value.lower() in ("true", "1", "yes")
     if annotation is int:
         return int(value)
     if annotation is float:
         return float(value)
-    if get_origin(annotation) is Literal:
+    if origin is Literal:
         return value
+    if origin in (dict, list):
+        return json.loads(value)
     return value

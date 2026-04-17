@@ -15,7 +15,11 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from trajectory_aware_gym.config import settings
+
 logger = logging.getLogger(__name__)
+
+_MISSING_S3_KEY_CODES = {"404", "NoSuchKey", "NotFound"}
 
 
 def _get_s3_client(client_config: dict[str, str] | None = None) -> Any:
@@ -35,7 +39,7 @@ def upload_artifact_bundle(
     artifacts: dict[str, Path],
     *,
     bucket: str,
-    prefix: str = "experiments/",
+    prefix: str | None = None,
     client_config: dict[str, str] | None = None,
 ) -> list[str]:
     """Upload a set of artifact files to S3 under the experiment run prefix.
@@ -59,6 +63,7 @@ def upload_artifact_bundle(
     list[str]
         List of S3 keys that were actually uploaded (skipped keys not included).
     """
+    _validate_run_id(experiment_run_id)
     result = upload_artifact_bundle_detailed(
         experiment_run_id,
         artifacts,
@@ -74,10 +79,12 @@ def upload_artifact_bundle_detailed(
     artifacts: dict[str, Path],
     *,
     bucket: str,
-    prefix: str = "experiments/",
+    prefix: str | None = None,
     client_config: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Upload artifact files and return uploaded/skipped/failed detail."""
+    _validate_run_id(experiment_run_id)
+    resolved_prefix = _resolve_prefix(prefix)
     result: dict[str, Any] = {
         "uploaded_keys": [],
         "skipped_existing_keys": [],
@@ -92,7 +99,11 @@ def upload_artifact_bundle_detailed(
             exc_info=True,
         )
         for filename in artifacts:
-            key = f"{prefix}{experiment_run_id}/{filename}"
+            key = _build_key(
+                experiment_run_id=experiment_run_id,
+                filename=filename,
+                prefix=resolved_prefix,
+            )
             result["failed_keys"].append(
                 {
                     "filename": filename,
@@ -103,7 +114,11 @@ def upload_artifact_bundle_detailed(
         return result
 
     for filename, local_path in artifacts.items():
-        key = f"{prefix}{experiment_run_id}/{filename}"
+        key = _build_key(
+            experiment_run_id=experiment_run_id,
+            filename=filename,
+            prefix=resolved_prefix,
+        )
 
         if not local_path.exists():
             result["failed_keys"].append(
@@ -144,7 +159,7 @@ def upload_artifact_bundle_detailed(
 def list_remote_runs(
     *,
     bucket: str,
-    prefix: str = "experiments/",
+    prefix: str | None = None,
     client_config: dict[str, str] | None = None,
 ) -> list[str]:
     """List experiment_run_id prefixes found in S3.
@@ -152,14 +167,15 @@ def list_remote_runs(
     Returns a deduplicated, sorted list of run IDs extracted from
     the S3 key hierarchy.
     """
+    resolved_prefix = _resolve_prefix(prefix)
     client = _get_s3_client(client_config)
     paginator = client.get_paginator("list_objects_v2")
     run_ids: set[str] = set()
 
-    for page in paginator.paginate(Bucket=bucket, Prefix=prefix, Delimiter="/"):
+    for page in paginator.paginate(Bucket=bucket, Prefix=resolved_prefix, Delimiter="/"):
         for cp in page.get("CommonPrefixes", []):
             # cp["Prefix"] is e.g. "experiments/run-id-here/"
-            run_id = cp["Prefix"].removeprefix(prefix).rstrip("/")
+            run_id = cp["Prefix"].removeprefix(resolved_prefix).rstrip("/")
             if run_id:
                 run_ids.add(run_id)
 
@@ -172,7 +188,7 @@ def download_artifact(
     dest_dir: Path,
     *,
     bucket: str,
-    prefix: str = "experiments/",
+    prefix: str | None = None,
     client_config: dict[str, str] | None = None,
 ) -> Path:
     """Download a single artifact file from S3.
@@ -202,17 +218,21 @@ def download_artifact(
     FileNotFoundError
         If the S3 key does not exist.
     """
+    _validate_run_id(experiment_run_id)
     client = _get_s3_client(client_config)
-    key = f"{prefix}{experiment_run_id}/{filename}"
+    key = _build_key(experiment_run_id=experiment_run_id, filename=filename, prefix=prefix)
 
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest_path = dest_dir / filename
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
         response = client.get_object(Bucket=bucket, Key=key)
         dest_path.write_bytes(response["Body"].read())
-    except client.exceptions.NoSuchKey:
-        raise FileNotFoundError(f"S3 key not found: s3://{bucket}/{key}") from None
+    except Exception as exc:  # noqa: BLE001
+        if _is_missing_s3_key_error(client, exc):
+            raise FileNotFoundError(f"S3 key not found: s3://{bucket}/{key}") from None
+        raise
 
     return dest_path
 
@@ -222,5 +242,59 @@ def _key_exists(client: Any, bucket: str, key: str) -> bool:
     try:
         client.head_object(Bucket=bucket, Key=key)
         return True
-    except client.exceptions.ClientError:
+    except Exception as exc:  # noqa: BLE001
+        if _is_missing_s3_key_error(client, exc):
+            return False
+        raise
+
+
+def _resolve_prefix(prefix: str | None) -> str:
+    """Resolve an explicit S3 prefix or fall back to the configured default."""
+    return settings.aws.s3_prefix if prefix is None else prefix
+
+
+def _validate_run_id(experiment_run_id: str) -> None:
+    """Reject run IDs that could escape the intended S3 key hierarchy."""
+    if (
+        not experiment_run_id
+        or "/" in experiment_run_id
+        or "\\" in experiment_run_id
+        or ".." in experiment_run_id
+    ):
+        raise ValueError(f"Invalid experiment_run_id: {experiment_run_id!r}")
+
+
+def _build_key(*, experiment_run_id: str, filename: str, prefix: str | None) -> str:
+    """Build an artifact key after validating the run ID boundary."""
+    _validate_run_id(experiment_run_id)
+    return f"{_resolve_prefix(prefix)}{experiment_run_id}/{filename}"
+
+
+def _is_missing_s3_key_error(client: Any, exc: Exception) -> bool:
+    """Return True only for S3 missing-key errors, not arbitrary client failures."""
+    no_such_key = getattr(getattr(client, "exceptions", None), "NoSuchKey", None)
+    if no_such_key is not None and isinstance(exc, no_such_key):
+        return True
+
+    client_error = getattr(getattr(client, "exceptions", None), "ClientError", None)
+    if client_error is None or not isinstance(exc, client_error):
         return False
+
+    return _client_error_code(exc) in _MISSING_S3_KEY_CODES
+
+
+def _client_error_code(exc: Exception) -> str | None:
+    """Extract the AWS error code from a ClientError-like exception."""
+    response = getattr(exc, "response", None)
+    if not isinstance(response, dict) and exc.args:
+        response = exc.args[0]
+
+    if not isinstance(response, dict):
+        return None
+
+    error = response.get("Error")
+    if not isinstance(error, dict):
+        return None
+
+    code = error.get("Code")
+    return str(code) if code is not None else None

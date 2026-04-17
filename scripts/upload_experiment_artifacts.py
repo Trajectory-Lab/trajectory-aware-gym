@@ -11,9 +11,11 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any
 
 from trajectory_aware_gym.config import settings
@@ -98,11 +100,40 @@ def _should_upload(metadata: dict[str, Any]) -> bool:
 
 def _artifact_map(replication_dir: Path) -> dict[str, Path]:
     artifacts: dict[str, Path] = {}
-    for path in sorted(replication_dir.rglob("*")):
-        if not path.is_file() or path.name == _MANIFEST_NAME:
-            continue
-        artifacts[str(path.relative_to(replication_dir))] = path
+    for current_dir, dirnames, filenames in replication_dir.walk(follow_symlinks=False):
+        dirnames[:] = sorted(
+            dirname for dirname in dirnames if not (current_dir / dirname).is_symlink()
+        )
+        for filename in sorted(filenames):
+            path = current_dir / filename
+            if not path.is_file() or path.is_symlink() or path.name == _MANIFEST_NAME:
+                continue
+            rel_path = path.relative_to(replication_dir)
+            if ".." in rel_path.parts:
+                continue
+            artifacts[str(rel_path)] = path
     return artifacts
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    serialized = json.dumps(payload, indent=2, sort_keys=True)
+    tmp_path: Path | None = None
+    try:
+        with NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            delete=False,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+        ) as handle:
+            handle.write(serialized)
+            tmp_path = Path(handle.name)
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path is not None and tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
 
 
 def _write_manifest(
@@ -122,10 +153,7 @@ def _write_manifest(
         "skipped_existing_keys": upload_result["skipped_existing_keys"],
         "failed_keys": upload_result["failed_keys"],
     }
-    (replication_dir / _MANIFEST_NAME).write_text(
-        json.dumps(manifest, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
+    _write_json(replication_dir / _MANIFEST_NAME, manifest)
 
 
 def _upload_replication_dir(replication_dir: Path, *, bucket: str, prefix: str) -> dict[str, Any]:

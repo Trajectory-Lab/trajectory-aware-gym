@@ -2,10 +2,21 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
+import yaml
 
 from trajectory_aware_gym.config.core import Settings
 from trajectory_aware_gym.metrics.cost_normalization import compute_normalized_cost
+
+_CONFIG_YAML_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "src"
+    / "trajectory_aware_gym"
+    / "config"
+    / "trajectory-aware-gym.yaml"
+)
 
 # Reference prices fixture matching the production YAML defaults
 _REF_PRICES = {
@@ -125,30 +136,31 @@ class TestCostNormalizationConfig:
 
     def test_empty_section_yields_empty_dict(self, tmp_path):
         """If cost_normalization section is absent, reference_prices defaults to {}."""
+        payload = yaml.safe_load(_CONFIG_YAML_PATH.read_text(encoding="utf-8"))
+        assert isinstance(payload, dict)
+        payload.pop("cost_normalization", None)
+
         yaml_file = tmp_path / "config.yaml"
-        # Minimal YAML with all required sections but no cost_normalization
         yaml_file.write_text(
-            "aws:\n  region: us-east-1\n  bedrock_claude_sonnet_4_5: x\n"
-            "  bedrock_llama_1b: x\n  bedrock_llama_3b: x\n  bedrock_llama_8b: x\n"
-            "  bedrock_gemma_4b: x\n  bedrock_mistral_7b: x\n  bedrock_nemotron_9b: x\n"
-            "  s3_bucket: x\n  s3_prefix: x\n"
-            "ollama:\n  api_base: http://localhost\n  task_model_1_7b: x\n  task_model_4b: x\n"
-            "sagemaker:\n  region: us-east-1\n  role_arn: x\n  instance_type: x\n"
-            "  tgi_image_uri: x\n  endpoint_1_7b: x\n  endpoint_4b: x\n"
-            "  model_id_1_7b: x\n  model_id_4b: x\n  deploy_timeout: 120\n"
-            "gem:\n  max_steps: 10\n  temperature_train: 1.0\n  temperature_eval: 0.0\n"
-            "  tool_timeout: 30\n"
-            "gepa:\n  num_threads: 1\n  reflection_model: x\n"
-            "experiment:\n  name: test\n  random_seed: 1\n  num_replications: 1\n"
-            "logging:\n  level: INFO\n  file: test.log\n"
-            "cost_tracking:\n  enabled: false\n  alert_threshold: 100.0\n"
-            "fitness:\n  gamma: 0.99\n  lambda: 0.1\n  loop_penalty_weight: 1.0\n"
-            "  step_efficiency_weight: 1.0\n  call_efficiency_weight: 0.0\n"
-            "  max_steps: 50\n  loop_window: 3\n  call_budget_per_step: 8\n"
-            "retry:\n  max_attempts: 1\n  initial_wait_seconds: 0.1\n  max_wait_seconds: 1.0\n"
-            "  exponential_base: 2.0\n  jitter: false\n  litellm_num_retries: 0\n"
-            "  boto3_retry_mode: standard\n  boto3_max_attempts: 1\n"
-            "  sagemaker_read_timeout_seconds: 10\n  inference_semaphore_size: 1\n"
+            yaml.safe_dump(payload, sort_keys=False),
+            encoding="utf-8",
         )
         s = Settings(yaml_path=yaml_file)
         assert s.cost_normalization.reference_prices == {}
+        assert s.cost_normalization.prompt_token_ratio == pytest.approx(0.7)
+
+    def test_reference_prices_env_override_accepts_json_string(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv(
+            "COST_NORMALIZATION_REFERENCE_PRICES",
+            ('{"custom/model":{"input_per_1m_tokens":1.0,"output_per_1m_tokens":2.0}}'),
+        )
+        s = Settings()
+        assert s.cost_normalization.reference_prices == {
+            "custom/model": {
+                "input_per_1m_tokens": 1.0,
+                "output_per_1m_tokens": 2.0,
+            }
+        }

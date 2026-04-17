@@ -23,25 +23,6 @@ poe run-experiment --config experiments/orz57k-tool/config.yaml
 | `--danger-purge` | flag | false | Delete ALL prior results for this config (requires typing "yes") |
 | `--results-root` | Path | `results/` | Root directory for output |
 | `--halt-on-budget-exceeded` | flag | false | Stop if cost exceeds budget |
-| `--skip-s3-upload` | flag | false | Deprecated no-op retained for CLI compatibility. Runs are always local-first; use `poe upload-artifacts -- ...` for post-run S3 sync |
-
-### GEPA Budget
-
-DSPy's `dspy.GEPA(auto=...)` parameter controls the optimization budget by
-candidate count: `light=6`, `medium=12`, `heavy=18`. DSPy then derives the
-total rollout budget internally from train/val sizes (matches the GEPA paper's
-methodology — see `docs/01-references/GEPA_paper.md`).
-
-The mode lives in the experiment config under `gepa_budget.mode` and defaults
-to `heavy` for the four primary configs (orz57k-tool, orz57k-notool,
-hotpotqa-tool, hotpotqa-notool). Override per-invocation with `--budget-mode`,
-or bypass `auto` entirely with `--max-metric-calls`.
-
-| Source | Budget |
-|---|---|
-| Config (`gepa_budget.mode: heavy`) + no flags | `auto="heavy"` (18 candidates) |
-| `--budget-mode light` | `auto="light"` (6 candidates) |
-| `--max-metric-calls 1500` | exactly 1500 metric calls, no auto |
 
 ### GEPA Budget
 
@@ -109,7 +90,7 @@ results/
         ├── run_summary.json             # Experiment-level metadata and status
         └── {task_model_name}/
             └── replication_{seed}/
-                ├── run_metadata.json    # Replication status, experiment_run_id, timing, eval summary
+                ├── run_metadata.json    # Replication status, experiment_run_id, timing, validation + eval summaries
                 ├── config_snapshot.yaml # Effective runtime config (YAML + CLI overrides)
                 ├── optimized_prompt.txt # GEPA-evolved system prompt
                 ├── fitness_history.json # Fitness scores per GEPA iteration
@@ -117,16 +98,25 @@ results/
                 ├── cost_summary.json    # Token/cost breakdown (task vs reflection, train vs eval)
                 ├── run_report.json      # Unified summary (identical keys across providers)
                 ├── training_metrics.csv  # Per-episode metrics (training only)
-                ├── raw_metrics.csv      # Per-episode metrics (train + eval)
+                ├── training_metrics_summary.json  # Aggregated training-phase stats
+                ├── raw_metrics.csv      # Per-episode metrics (held-out eval only)
                 ├── raw_metrics.jsonl    # Same data, JSONL format
-                ├── raw_metrics_summary.json  # Aggregated stats
+                ├── raw_metrics_summary.json  # Held-out eval stats split by baseline vs optimized
                 ├── upload_manifest.json # Written only by the separate S3 sync script
                 └── gepa_logs/           # GEPA internal optimization logs
 ```
 
 ## Experiment Run Tracking
 
-Each replication is registered in the SQLite database (`logs/trajectories.db`) as an `experiment_run` record with a deterministic ID (see [logging-v2-summary.md](../02-architecture/logging-v2-summary.md) §2 for the naming protocol). That ID is also written into `run_metadata.json` immediately so resume can keep later evaluation, reporting, and any later artifact sync attached to the same logical replication.
+Each replication is registered in the SQLite database (`logs/trajectories.db`) as an `experiment_run` record with a deterministic ID. That ID is also written into `run_metadata.json` immediately so resume can keep later evaluation, reporting, and any later artifact sync attached to the same logical replication.
+
+### experiment_run_id Format
+
+`{config_name}-{provider}-{model_short}-{operator}-seed{seed}-{YYYYMMDD}T{HHMM}Z`
+
+Example:
+
+`orz57k-tool-ollama-qwen3-1-7b-base-edward-seed42-20260417T0421Z`
 
 ### Lifecycle
 
@@ -180,7 +170,7 @@ The upload script scans local replication folders, requires `run_metadata.json` 
 | `cost_summary.json` | Token/cost breakdown |
 | `optimized_prompt.txt` | GEPA-evolved system prompt |
 | `fitness_history.json` | Fitness scores per GEPA iteration |
-| `run_report.json` | Unified cross-provider summary (see [logging-v2-summary.md](../02-architecture/logging-v2-summary.md) §6) |
+| `run_report.json` | Unified cross-provider summary with provider, accuracy, cost, timing, and logging fields |
 
 S3 key format: `{s3_prefix}{experiment_run_id}/{filename}`
 
@@ -188,7 +178,17 @@ Upload failures are isolated to the sync script and are recorded in `upload_mani
 
 ### run_report.json
 
-A unified summary with identical JSON keys regardless of provider (Bedrock or Ollama). Includes experiment metadata, performance summaries, actual/partial/unavailable cost semantics, normalized Ollama proxy cost when task-model token coverage is complete, timing, logging summary, and git info. `mean_llm_latency_ms` is scoped to trajectories linked to the current `experiment_run_id`, not every run in the same environment. Accuracy uses stored `episode_outcome` when available rather than positive reward heuristics. See [logging-v2-summary.md](../02-architecture/logging-v2-summary.md) §6 for the full field reference.
+A unified summary with identical JSON keys regardless of provider (Bedrock or Ollama). Includes experiment metadata, performance summaries, actual/partial/unavailable cost semantics, normalized Ollama proxy cost when task-model token coverage is complete, timing, logging summary, and git info. `mean_llm_latency_ms` is scoped to trajectories linked to the current `experiment_run_id`, not every run in the same environment. Accuracy uses stored `episode_outcome` when available rather than positive reward heuristics.
+
+Key fields:
+
+- `experiment_run_id`, `config_name`, `provider`, `task_model_id`, `environment_id`, `seed`
+- `baseline_eval`, `eval_summary`
+- `total_tokens`, `total_tokens_known`, `task_model_cost_usd`, `task_model_cost_known_usd`
+- `reflection_cost_usd`, `total_cost_usd`, `total_cost_known_usd`, `cost_type`
+- `normalized_cost_usd`, `normalization_reference`
+- `wall_clock_seconds`, `mean_llm_latency_ms`
+- `git_commit`, `started_at`, `finished_at`, `logging_summary`
 
 ## Resume Behavior
 
@@ -229,7 +229,11 @@ Per-replication cost breakdown:
 
 ### raw_metrics.csv / .jsonl
 
-One row per episode (training and evaluation combined). Fields match the `EpisodeRawMetrics` schema documented in [phase3_raw_metrics.md](phase3_raw_metrics.md).
+One row per held-out evaluation episode (baseline eval + optimized eval). Fields match the `EpisodeRawMetrics` schema documented in [phase3_raw_metrics.md](phase3_raw_metrics.md).
+
+### training_metrics.csv / .jsonl
+
+One row per GEPA optimization-phase episode. This is the right artifact for inspecting train/validation-side behavior during prompt search.
 
 ## Data Splits
 

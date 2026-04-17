@@ -71,6 +71,72 @@ def test_upload_replication_dir_writes_manifest_and_uses_relative_paths(
     assert manifest["failed_keys"] == []
 
 
+def test_upload_replication_dir_skips_symlinked_artifacts(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    upload_script = _load_upload_script()
+    replication_dir = tmp_path / "quick-test" / "20260416T120000Z" / "model" / "replication_42"
+    _make_completed_replication(replication_dir)
+    outside_file = tmp_path / "outside.txt"
+    outside_file.write_text("secret\n", encoding="utf-8")
+    (replication_dir / "leak.txt").symlink_to(outside_file)
+    captured: dict[str, object] = {}
+
+    def fake_upload(experiment_run_id, artifacts, **kwargs):
+        captured["artifact_names"] = sorted(artifacts.keys())
+        return {
+            "uploaded_keys": [],
+            "skipped_existing_keys": [],
+            "failed_keys": [],
+        }
+
+    monkeypatch.setattr(upload_script, "upload_artifact_bundle_detailed", fake_upload)
+
+    upload_script._upload_replication_dir(
+        replication_dir,
+        bucket="test-bucket",
+        prefix="experiments/",
+    )
+
+    assert "leak.txt" not in captured["artifact_names"]
+
+
+def test_upload_replication_dir_skips_symlinked_directories(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    upload_script = _load_upload_script()
+    replication_dir = tmp_path / "quick-test" / "20260416T120000Z" / "model" / "replication_42"
+    _make_completed_replication(replication_dir)
+    outside_dir = tmp_path / "outside-dir"
+    outside_dir.mkdir()
+    (outside_dir / "nested.txt").write_text("secret\n", encoding="utf-8")
+    (replication_dir / "linked-dir").symlink_to(outside_dir, target_is_directory=True)
+    captured: dict[str, object] = {}
+
+    def fake_upload(experiment_run_id, artifacts, **kwargs):
+        captured["artifact_names"] = sorted(artifacts.keys())
+        return {
+            "uploaded_keys": [],
+            "skipped_existing_keys": [],
+            "failed_keys": [],
+        }
+
+    monkeypatch.setattr(upload_script, "upload_artifact_bundle_detailed", fake_upload)
+
+    upload_script._upload_replication_dir(
+        replication_dir,
+        bucket="test-bucket",
+        prefix="experiments/",
+    )
+
+    assert all(
+        not str(artifact_name).startswith("linked-dir/")
+        for artifact_name in captured["artifact_names"]
+    )
+
+
 def test_upload_replication_dir_records_skips_and_failures(
     monkeypatch,
     tmp_path: Path,

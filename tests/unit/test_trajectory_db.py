@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from trajectory_aware_gym.adapters.trajectory_logger import (
+    SCHEMA_VERSION,
     LLMCallMetadata,
     ToolCall,
     TrajectoryLog,
@@ -22,6 +23,7 @@ from trajectory_aware_gym.storage.models import ExperimentRunRecord
 from trajectory_aware_gym.storage.trajectory_db import (
     close_connection,
     episode_exists,
+    get_connection,
     load_experiment_run,
     load_trajectory_by_id,
     query_experiment_runs,
@@ -673,10 +675,35 @@ class TestSchemaMigration:
         assert "provider" in llm_call_columns
         assert "cost_type" in llm_call_columns
         assert "duration_ms" in tool_call_columns
+        assert (
+            conn.execute("SELECT version FROM schema_meta").fetchone()["version"] == SCHEMA_VERSION
+        )
 
         loaded = load_trajectory_by_id(db_path, log.run_id)
         assert loaded.steps[0].llm_calls[0].provider == "bedrock"
         assert loaded.steps[0].llm_calls[0].cost_type == "actual"
+
+    def test_new_db_records_schema_version(self, db_path):
+        save_experiment_run(db_path, _make_experiment_run(experiment_run_id="schema-meta-run"))
+
+        conn = get_connection(db_path)
+        row = conn.execute("SELECT version FROM schema_meta").fetchone()
+
+        assert row is not None
+        assert row["version"] == SCHEMA_VERSION
+
+    def test_newer_schema_version_fails_fast(self, db_path):
+        conn = sqlite3.connect(db_path)
+        conn.executescript(
+            """
+            CREATE TABLE schema_meta (version TEXT PRIMARY KEY);
+            INSERT INTO schema_meta (version) VALUES ('9.9.9');
+            """
+        )
+        conn.close()
+
+        with pytest.raises(RuntimeError, match="newer than supported"):
+            get_connection(db_path)
 
 
 # ===========================================================================
@@ -854,7 +881,7 @@ def _make_experiment_run(**overrides: Any) -> ExperimentRunRecord:
         "task_model_id": "ollama/qwen3-1.7b",
         "environment_id": "math:Orz57K",
         "started_at": now,
-        "schema_version": "1.2.0",
+        "schema_version": SCHEMA_VERSION,
     }
     defaults.update(overrides)
     return ExperimentRunRecord(**defaults)
@@ -881,7 +908,7 @@ class TestExperimentRunCRUD:
             replication_seed=42,
             seed_prompt="Solve the problem step by step.",
             hostname="macbook-pro.local",
-            schema_version="1.2.0",
+            schema_version=SCHEMA_VERSION,
         )
         save_experiment_run(db_path, run)
         loaded = load_experiment_run(db_path, "run-rt-001")
@@ -905,7 +932,7 @@ class TestExperimentRunCRUD:
         assert loaded.hostname == "macbook-pro.local"
         assert loaded.result_summary is None
         assert loaded.cost_summary is None
-        assert loaded.schema_version == "1.2.0"
+        assert loaded.schema_version == SCHEMA_VERSION
         assert abs((loaded.started_at - run.started_at).total_seconds()) < 0.01
 
     def test_save_duplicate_raises(self, db_path):

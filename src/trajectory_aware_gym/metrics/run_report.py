@@ -8,12 +8,19 @@ pricing), so paper figures and tables can consume them uniformly.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel  # pyright: ignore[reportMissingImports]
 
+from trajectory_aware_gym.adapters.trajectory_logger import LLMCostType
+from trajectory_aware_gym.config import settings
 from trajectory_aware_gym.metrics.cost_normalization import compute_normalized_cost
 from trajectory_aware_gym.storage.trajectory_db import load_experiment_run, query_trajectories
+
+type RunReportCostType = LLMCostType | Literal["partial"]
+
+_FREE_PROVIDER = "ollama"
+_RUN_REPORT_COST_TYPES = {"actual", "estimated", "partial", "unavailable"}
 
 
 class RunReport(BaseModel):
@@ -28,6 +35,8 @@ class RunReport(BaseModel):
     seed: int | None
 
     # Performance
+    baseline_validation: dict[str, Any] | None = None
+    optimized_validation: dict[str, Any] | None = None
     baseline_eval: dict[str, Any] | None = None
     eval_summary: dict[str, Any] | None = None
 
@@ -41,7 +50,7 @@ class RunReport(BaseModel):
     reflection_cost_usd: float | None = None
     total_cost_usd: float | None = None
     total_cost_known_usd: float | None = None
-    cost_type: str | None = None
+    cost_type: RunReportCostType | None = None
 
     # Cost — normalized (Ollama only, for paper comparison)
     normalized_cost_usd: float | None = None
@@ -63,10 +72,13 @@ def build_run_report(
     experiment_run_id: str,
     db_path: Path,
     cost_summary: dict[str, Any],
+    baseline_validation_summary: dict[str, Any] | None = None,
+    optimized_validation_summary: dict[str, Any] | None = None,
     baseline_eval_summary: dict[str, Any] | None = None,
     eval_summary: dict[str, Any] | None = None,
     wall_clock_seconds: float | None = None,
     reference_prices: dict[str, dict[str, float]] | None = None,
+    prompt_token_ratio: float | None = None,
     logging_summary: dict[str, Any] | None = None,
 ) -> RunReport:
     """Assemble a RunReport from DB record + caller-provided summaries.
@@ -89,18 +101,26 @@ def build_run_report(
     task_cost_coverage = cost_summary.get("task_model_cost_data_coverage")
 
     # Determine cost type and compute normalized cost for Ollama models.
-    cost_type = cost_summary.get("cost_type")
-    if not isinstance(cost_type, str):
-        cost_type = "actual" if run.provider != "ollama" else "unavailable"
+    raw_cost_type = cost_summary.get("cost_type")
+    if isinstance(raw_cost_type, str) and raw_cost_type in _RUN_REPORT_COST_TYPES:
+        cost_type: RunReportCostType | None = cast(RunReportCostType, raw_cost_type)
+    else:
+        cost_type = None
+    if cost_type is None:
+        cost_type = "actual" if run.provider != _FREE_PROVIDER else "unavailable"
 
     normalized_cost_usd: float | None = None
     normalization_reference: str | None = None
-    if run.provider == "ollama" and reference_prices and isinstance(task_tokens, int):
+    effective_prompt_token_ratio = (
+        prompt_token_ratio
+        if prompt_token_ratio is not None
+        else settings.cost_normalization.prompt_token_ratio
+    )
+    if run.provider == _FREE_PROVIDER and reference_prices and isinstance(task_tokens, int):
         # Use task_model_tokens split for normalization (prompt/completion
         # split isn't available at the summary level, so we approximate
-        # with 70/30 prompt/completion split — consistent with typical
-        # agentic workloads).
-        prompt_approx = int(task_tokens * 0.7)
+        # using the configured prompt_token_ratio.
+        prompt_approx = int(task_tokens * effective_prompt_token_ratio)
         completion_approx = task_tokens - prompt_approx
         maybe_cost = compute_normalized_cost(
             run.task_model_id,
@@ -138,6 +158,8 @@ def build_run_report(
         task_model_id=run.task_model_id,
         environment_id=run.environment_id,
         seed=run.replication_seed,
+        baseline_validation=baseline_validation_summary,
+        optimized_validation=optimized_validation_summary,
         baseline_eval=baseline_eval_summary,
         eval_summary=eval_summary,
         total_tokens=total_tokens,

@@ -100,9 +100,9 @@ Every YAML field can be overridden via an env var named `PREFIX_FIELD`:
 | `cost_tracking` | `COST_TRACKING_` | `COST_TRACKING_ENABLED=false` |
 | `fitness` | `FITNESS_` | `FITNESS_GAMMA=0.95` |
 | `retry` | `RETRY_` | `RETRY_MAX_ATTEMPTS=6` |
-| `cost_normalization` | `COST_NORMALIZATION_` | `COST_NORMALIZATION_REFERENCE_PRICES=...` |
+| `cost_normalization` | `COST_NORMALIZATION_` | `COST_NORMALIZATION_REFERENCE_PRICES='{"ollama/qwen3-1.7b-base":{"input_per_1m_tokens":0.10,"output_per_1m_tokens":0.10}}'` |
 
-Type coercion is automatic: `"42"` → `int`, `"3.14"` → `float`, `"true"` → `bool`.
+Type coercion is automatic: `"42"` → `int`, `"3.14"` → `float`, `"true"` → `bool`. Nested `dict`/`list` fields use JSON strings in env vars.
 
 ## Config Sections
 
@@ -232,12 +232,14 @@ Maps local Ollama models (which have no API pricing) to Bedrock-equivalent USD u
 
 | Field | Type | Description |
 |-------|------|-------------|
+| `prompt_token_ratio` | `float` | Fraction of total task-model tokens attributed to prompts when only total tokens are available for normalization |
 | `reference_prices` | `dict[str, dict[str, float]]` | Model ID → `{input_per_1m_tokens, output_per_1m_tokens}` |
 
 Each entry maps an Ollama model to the pricing of a comparable Bedrock model. Example:
 
 ```yaml
 cost_normalization:
+  prompt_token_ratio: 0.70
   reference_prices:
     "ollama/qwen3-1.7b-base":
       input_per_1m_tokens: 0.10   # Bedrock Llama-1B equivalent

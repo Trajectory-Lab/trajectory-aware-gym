@@ -36,6 +36,7 @@ from tenacity import (  # pyright: ignore[reportMissingImports]
 from trajectory_aware_gym.adapters.tool_runtime import ToolRuntime
 from trajectory_aware_gym.adapters.trajectory_logger import (
     LLMCallMetadata,
+    LLMCostType,
     ToolCall,
     TrajectoryLog,
     TrajectoryLogger,
@@ -49,6 +50,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_MAX_RESPONSE_TOKENS = 4096
 DEFAULT_MAX_TOOL_ROUNDS = 3
 TERMINAL_OBSERVATION = "<TERMINAL>"
+_MS_PER_SECOND = 1000.0
 
 type ChatMessage = dict[str, str]
 
@@ -239,7 +241,7 @@ def generate_smoke_action(
             max_tokens=max_tokens,
         ),
     )
-    latency_ms = (time.monotonic() - t0) * 1000.0
+    latency_ms = (time.monotonic() - t0) * _MS_PER_SECOND
     response_payload = cast(Any, response)
     msg = response_payload.choices[0].message
     action = _extract_text_content(msg.content)
@@ -261,15 +263,7 @@ def generate_smoke_action(
     completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
     total_tokens = int(getattr(usage, "total_tokens", 0) or (prompt_tokens + completion_tokens))
 
-    cost_usd: float | None = None
-    cost_type: str = "unavailable"
-    try:
-        maybe_cost = completion_cost(completion_response=response)
-        cost_usd = float(maybe_cost)
-        cost_type = "actual"
-    except Exception:  # noqa: BLE001  # LiteLLM raises bare Exception for unmapped models
-        cost_usd = None
-        cost_type = "unavailable"
+    cost_usd, cost_type = _extract_llm_cost(model_id, response)
 
     return action, LLMCallMetadata(
         model_id=model_id,
@@ -334,6 +328,18 @@ def _is_non_finite_number(value: Any) -> bool:
         and not isinstance(value, bool)
         and not math.isfinite(float(value))
     )
+
+
+def _extract_llm_cost(model_id: str, response: Any) -> tuple[float | None, LLMCostType]:
+    """Return faithful per-call cost metadata for the current provider."""
+    if model_id.startswith("ollama/"):
+        return (None, "unavailable")
+
+    try:
+        maybe_cost = completion_cost(completion_response=response)
+        return (float(maybe_cost), "actual")
+    except Exception:  # noqa: BLE001  # LiteLLM raises bare Exception for unmapped models
+        return (None, "unavailable")
 
 
 def _make_logging_event(
@@ -834,7 +840,7 @@ class GEMEpisodeRunner:
             messages=messages,
             completion_kwargs=completion_kwargs,
         )
-        latency_ms = (time.monotonic() - t0) * 1000.0
+        latency_ms = (time.monotonic() - t0) * _MS_PER_SECOND
         response_payload = cast(Any, response)
         msg = response_payload.choices[0].message
         action = _extract_text_content(msg.content) if msg.content else ""
@@ -871,15 +877,7 @@ class GEMEpisodeRunner:
         completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
         total_tokens = int(getattr(usage, "total_tokens", 0) or (prompt_tokens + completion_tokens))
 
-        cost_usd: float | None = None
-        cost_type: str = "unavailable"
-        try:
-            maybe_cost = completion_cost(completion_response=response)
-            cost_usd = float(maybe_cost)
-            cost_type = "actual"
-        except Exception:  # noqa: BLE001  # LiteLLM raises bare Exception for unmapped models
-            cost_usd = None
-            cost_type = "unavailable"
+        cost_usd, cost_type = _extract_llm_cost(self._model_id, response)
 
         if _is_non_finite_number(latency_ms):
             logging_events.append(
@@ -903,7 +901,7 @@ class GEMEpisodeRunner:
                 )
             )
             cost_usd = None
-            cost_type = "unavailable"
+            cost_type: LLMCostType = "unavailable"
 
         metadata = LLMCallMetadata(
             model_id=self._model_id,
@@ -959,7 +957,7 @@ class GEMEpisodeRunner:
             tool_name = parsed_tool_call["tool"]
             t0_tool = time.monotonic()
             tool_result = self._tool_runtime.execute(parsed_tool_call)
-            tool_duration_ms = (time.monotonic() - t0_tool) * 1000.0
+            tool_duration_ms = (time.monotonic() - t0_tool) * _MS_PER_SECOND
             if _is_non_finite_number(tool_duration_ms):
                 logging_events.append(
                     _make_logging_event(

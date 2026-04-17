@@ -218,3 +218,30 @@ class TestGetGitInfo:
         commit, branch = get_git_info()
         assert branch == "main"
         assert commit == "abc123"
+
+    def test_rejects_path_traversal_symbolic_ref(self, tmp_path, monkeypatch):
+        """A symbolic ref must not resolve outside .git."""
+        git_dir = tmp_path / ".git"
+        git_dir.mkdir()
+        outside_dir = tmp_path / "outside"
+        outside_dir.mkdir()
+        (outside_dir / "secret-ref").write_text("deadbeef1234\n")
+        (git_dir / "HEAD").write_text("ref: ../outside/secret-ref\n")
+
+        monkeypatch.chdir(tmp_path)
+        commit, branch = get_git_info()
+        assert commit is None
+        assert branch is None
+
+    def test_rejects_absolute_symbolic_ref(self, tmp_path, monkeypatch):
+        """A symbolic ref must not use an absolute path."""
+        git_dir = tmp_path / ".git"
+        git_dir.mkdir()
+        outside_file = tmp_path / "absolute-ref"
+        outside_file.write_text("abc123def456\n")
+        (git_dir / "HEAD").write_text(f"ref: {outside_file}\n")
+
+        monkeypatch.chdir(tmp_path)
+        commit, branch = get_git_info()
+        assert commit is None
+        assert branch is None

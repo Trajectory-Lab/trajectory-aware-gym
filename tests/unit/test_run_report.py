@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from trajectory_aware_gym.adapters.trajectory_logger import (
+    SCHEMA_VERSION,
     LLMCallMetadata,
     TrajectoryLog,
     TrajectoryStep,
@@ -40,7 +41,7 @@ def _make_run_record(
         seed_prompt="Solve the problem.",
         started_at=datetime(2026, 4, 15, 14, 30, tzinfo=UTC),
         status="completed",
-        schema_version="1.2.0",
+        schema_version=SCHEMA_VERSION,
     )
 
 
@@ -107,6 +108,26 @@ class TestRunReportModel:
         assert report.normalization_reference is not None
         assert "qwen3-1.7b-base" in report.normalization_reference
 
+    def test_prompt_token_ratio_can_be_overridden(self, tmp_path: Path) -> None:
+        record = _make_run_record(provider="ollama", model_id="ollama/qwen3-1.7b-base")
+        db = tmp_path / "test.db"
+        save_experiment_run(db, record)
+
+        report = build_run_report(
+            experiment_run_id=record.experiment_run_id,
+            db_path=db,
+            cost_summary={"task_model_tokens": 1000},
+            reference_prices={
+                "ollama/qwen3-1.7b-base": {
+                    "input_per_1m_tokens": 1.0,
+                    "output_per_1m_tokens": 3.0,
+                }
+            },
+            prompt_token_ratio=0.25,
+        )
+
+        assert report.normalized_cost_usd == pytest.approx(0.0025)
+
     def test_report_json_has_identical_keys_regardless_of_provider(
         self,
         tmp_path: Path,
@@ -148,6 +169,8 @@ class TestRunReportModel:
         db = tmp_path / "test.db"
         save_experiment_run(db, record)
 
+        validation_baseline = {"accuracy": 0.1, "episodes": 5, "correct": 0}
+        validation_optimized = {"accuracy": 0.4, "episodes": 5, "correct": 2}
         baseline = {"accuracy": 0.3, "episodes": 10}
         optimized = {"accuracy": 0.7, "episodes": 10}
 
@@ -155,11 +178,15 @@ class TestRunReportModel:
             experiment_run_id=record.experiment_run_id,
             db_path=db,
             cost_summary=_COST_SUMMARY,
+            baseline_validation_summary=validation_baseline,
+            optimized_validation_summary=validation_optimized,
             baseline_eval_summary=baseline,
             eval_summary=optimized,
             wall_clock_seconds=120.5,
         )
 
+        assert report.baseline_validation == validation_baseline
+        assert report.optimized_validation == validation_optimized
         assert report.baseline_eval == baseline
         assert report.eval_summary == optimized
         assert report.wall_clock_seconds == 120.5

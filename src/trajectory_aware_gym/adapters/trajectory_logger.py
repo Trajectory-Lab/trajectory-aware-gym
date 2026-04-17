@@ -60,6 +60,7 @@ logger = logging.getLogger(__name__)
 SCHEMA_VERSION = "1.3.0"
 
 type EpisodeOutcome = Literal["success", "failure", "truncated"]
+type LLMCostType = Literal["actual", "estimated", "unavailable"]
 
 
 class ToolCall(BaseModel):
@@ -99,7 +100,7 @@ class LLMCallMetadata(BaseModel):
     completion_tokens: int = Field(ge=0)
     total_tokens: int = Field(ge=0)
     cost_usd: float | None = None
-    cost_type: Literal["actual", "estimated", "unavailable"] | None = None
+    cost_type: LLMCostType | None = None
     latency_ms: float | None = None
     provider: str | None = None
 
