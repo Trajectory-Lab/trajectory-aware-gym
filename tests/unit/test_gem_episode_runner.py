@@ -12,6 +12,7 @@ from litellm.exceptions import ServiceUnavailableError  # type: ignore[import-un
 import trajectory_aware_gym.adapters.gem_episode_runner as gem_runner_module
 from trajectory_aware_gym.adapters.gem_episode_runner import (
     GEMEpisodeRunner,
+    _build_completion_kwargs,
     _build_litellm_tools,
     _extract_json_payload,
     _reset_inference_semaphore,
@@ -29,30 +30,12 @@ def _reset_signal_patch():
     gem_runner_module._signal_patch_applied = False
 
 
-class _FakeGemModule:
-    def __init__(self, env):
-        self._env = env
-
-    def make(self, environment_id: str, **kwargs: object):
+def _fake_make_env_factory(env):
+    def _fake_make_env(environment_id: str, **_kwargs: object):
         assert environment_id
-        return self._env
+        return env
 
-
-def _fake_import_module_factory(env):
-    fake_gem = _FakeGemModule(env)
-
-    def _fake_import_module(name: str):
-        if name == "gem":
-            return fake_gem
-        if name == "gem.envs":
-            return SimpleNamespace()
-        if name == "gem.utils.math_grader":
-            # The runner monkey-patches this module's run_with_timeout_signal
-            # to bypass signal-based timeout in worker threads.
-            return SimpleNamespace(run_with_timeout_signal=lambda *a, **kw: None)
-        raise AssertionError(f"unexpected import: {name}")
-
-    return _fake_import_module
+    return _fake_make_env
 
 
 def _make_response(text: str, *, prompt_tokens: int = 7, completion_tokens: int = 5):
@@ -79,8 +62,8 @@ def test_run_episode_records_trajectory_and_cost(monkeypatch):
             return None
 
     monkeypatch.setattr(
-        "trajectory_aware_gym.adapters.gem_episode_runner.importlib.import_module",
-        _fake_import_module_factory(FakeEnv()),
+        "trajectory_aware_gym.adapters.gem_episode_runner.make_env",
+        _fake_make_env_factory(FakeEnv()),
     )
     monkeypatch.setattr(
         "trajectory_aware_gym.adapters.gem_episode_runner.completion",
@@ -202,8 +185,8 @@ def test_run_episode_executes_tool_call_before_final_action(monkeypatch):
     )
 
     monkeypatch.setattr(
-        "trajectory_aware_gym.adapters.gem_episode_runner.importlib.import_module",
-        _fake_import_module_factory(FakeEnv()),
+        "trajectory_aware_gym.adapters.gem_episode_runner.make_env",
+        _fake_make_env_factory(FakeEnv()),
     )
     monkeypatch.setattr(
         "trajectory_aware_gym.adapters.gem_episode_runner.completion",
@@ -255,8 +238,8 @@ def test_runner_tracks_episode_history(monkeypatch):
             return None
 
     monkeypatch.setattr(
-        "trajectory_aware_gym.adapters.gem_episode_runner.importlib.import_module",
-        _fake_import_module_factory(FakeEnv()),
+        "trajectory_aware_gym.adapters.gem_episode_runner.make_env",
+        _fake_make_env_factory(FakeEnv()),
     )
     monkeypatch.setattr(
         "trajectory_aware_gym.adapters.gem_episode_runner.completion",
@@ -294,8 +277,8 @@ def test_run_episode_sanitizes_non_finite_completion_cost(monkeypatch):
             return None
 
     monkeypatch.setattr(
-        "trajectory_aware_gym.adapters.gem_episode_runner.importlib.import_module",
-        _fake_import_module_factory(FakeEnv()),
+        "trajectory_aware_gym.adapters.gem_episode_runner.make_env",
+        _fake_make_env_factory(FakeEnv()),
     )
     monkeypatch.setattr(
         "trajectory_aware_gym.adapters.gem_episode_runner.completion",
@@ -341,8 +324,8 @@ def test_run_episode_save_failure_is_non_fatal(monkeypatch):
             return None
 
     monkeypatch.setattr(
-        "trajectory_aware_gym.adapters.gem_episode_runner.importlib.import_module",
-        _fake_import_module_factory(FakeEnv()),
+        "trajectory_aware_gym.adapters.gem_episode_runner.make_env",
+        _fake_make_env_factory(FakeEnv()),
     )
     monkeypatch.setattr(
         "trajectory_aware_gym.adapters.gem_episode_runner.completion",
@@ -396,8 +379,8 @@ def test_run_episode_retries_transient_completion_error(monkeypatch):
             return None
 
     monkeypatch.setattr(
-        "trajectory_aware_gym.adapters.gem_episode_runner.importlib.import_module",
-        _fake_import_module_factory(FakeEnv()),
+        "trajectory_aware_gym.adapters.gem_episode_runner.make_env",
+        _fake_make_env_factory(FakeEnv()),
     )
 
     calls: list[int] = []
@@ -844,8 +827,8 @@ class TestToolRoundExhaustion:
             return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=usage)
 
         monkeypatch.setattr(
-            "trajectory_aware_gym.adapters.gem_episode_runner.importlib.import_module",
-            _fake_import_module_factory(FakeEnv()),
+            "trajectory_aware_gym.adapters.gem_episode_runner.make_env",
+            _fake_make_env_factory(FakeEnv()),
         )
         monkeypatch.setattr(
             "trajectory_aware_gym.adapters.gem_episode_runner.completion",
@@ -895,8 +878,8 @@ def test_cost_type_unavailable_when_completion_cost_raises(monkeypatch):
             return None
 
     monkeypatch.setattr(
-        "trajectory_aware_gym.adapters.gem_episode_runner.importlib.import_module",
-        _fake_import_module_factory(FakeEnv()),
+        "trajectory_aware_gym.adapters.gem_episode_runner.make_env",
+        _fake_make_env_factory(FakeEnv()),
     )
     monkeypatch.setattr(
         "trajectory_aware_gym.adapters.gem_episode_runner.completion",
@@ -933,8 +916,8 @@ def test_cost_type_unavailable_for_ollama_when_completion_cost_returns_zero(monk
             return None
 
     monkeypatch.setattr(
-        "trajectory_aware_gym.adapters.gem_episode_runner.importlib.import_module",
-        _fake_import_module_factory(FakeEnv()),
+        "trajectory_aware_gym.adapters.gem_episode_runner.make_env",
+        _fake_make_env_factory(FakeEnv()),
     )
     monkeypatch.setattr(
         "trajectory_aware_gym.adapters.gem_episode_runner.completion",
@@ -962,3 +945,158 @@ def test_cost_type_unavailable_for_ollama_when_completion_cost_returns_zero(monk
 
 def _raise_on_cost(*, completion_response):
     raise Exception("Model not mapped in LiteLLM pricing")
+
+
+# ── Sampling parameter wiring (top_p / top_k / temperature_override) ──────
+# These tests pin the contract with the GEM paper's Table 3 sampling
+# controls: train=1.0, eval=0.0, top_p=1.0, top_k=-1 (disabled).
+
+
+class TestBuildCompletionKwargsSampling:
+    """``_build_completion_kwargs`` must thread top_p and top_k correctly."""
+
+    def test_top_p_always_passed_through(self):
+        kwargs = _build_completion_kwargs(
+            "bedrock/us.meta.llama3-1-8b-instruct-v1:0",
+            temperature=0.0,
+            top_p=0.9,
+        )
+        assert kwargs["top_p"] == pytest.approx(0.9)
+
+    @pytest.mark.parametrize("top_k", [-1, 0])
+    def test_top_k_disabled_is_not_forwarded(self, top_k):
+        kwargs = _build_completion_kwargs(
+            "bedrock/us.meta.llama3-1-8b-instruct-v1:0",
+            temperature=0.0,
+            top_k=top_k,
+        )
+        assert "top_k" not in kwargs
+        assert "additional_model_request_fields" not in kwargs
+
+    def test_top_k_for_bedrock_anthropic_goes_top_level(self):
+        kwargs = _build_completion_kwargs(
+            "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            temperature=0.0,
+            top_k=40,
+        )
+        assert kwargs["top_k"] == 40
+        assert "additional_model_request_fields" not in kwargs
+
+    def test_top_k_for_bedrock_non_anthropic_uses_additional_fields(self):
+        kwargs = _build_completion_kwargs(
+            "bedrock/us.meta.llama3-1-8b-instruct-v1:0",
+            temperature=0.0,
+            top_k=40,
+        )
+        assert "top_k" not in kwargs
+        assert kwargs["additional_model_request_fields"] == {"top_k": 40}
+
+    @pytest.mark.parametrize(
+        "model_id",
+        ["ollama/qwen3-1.7b-base", "sagemaker/qwen3-4b-base"],
+    )
+    def test_top_k_for_non_bedrock_providers_is_top_level(self, model_id):
+        kwargs = _build_completion_kwargs(model_id, temperature=0.0, top_k=40)
+        assert kwargs["top_k"] == 40
+        assert "additional_model_request_fields" not in kwargs
+
+
+class TestTemperatureOverride:
+    """``GEMEpisodeRunner.run()`` must honor temperature_override per call."""
+
+    def _build_runner_with_capture(self, monkeypatch, *, init_temp: float):
+        captured: list[dict[str, Any]] = []
+
+        class FakeEnv:
+            def reset(self, **_kwargs):
+                return "Solve 2+2", {}
+
+            def step(self, _action):
+                return "", 1.0, True, False, {}
+
+            def close(self):
+                return None
+
+        def fake_completion(**kwargs):
+            captured.append(kwargs)
+            return _make_response("\\boxed{4}")
+
+        monkeypatch.setattr(
+            "trajectory_aware_gym.adapters.gem_episode_runner.make_env",
+            _fake_make_env_factory(FakeEnv()),
+        )
+        monkeypatch.setattr(
+            "trajectory_aware_gym.adapters.gem_episode_runner.completion",
+            fake_completion,
+        )
+        monkeypatch.setattr(
+            "trajectory_aware_gym.adapters.gem_episode_runner.completion_cost",
+            lambda *, completion_response: 0.0,
+        )
+
+        runner = GEMEpisodeRunner(
+            environment_id="math:Orz57K",
+            model_id="ollama/qwen3-1.7b-base",
+            temperature=init_temp,
+            max_steps=1,
+            seed=0,
+        )
+        return runner, captured
+
+    def test_override_wins_over_init_temperature(self, monkeypatch):
+        runner, captured = self._build_runner_with_capture(monkeypatch, init_temp=1.0)
+        runner.run("Solve it.", temperature_override=0.0)
+        assert captured[0]["temperature"] == pytest.approx(0.0)
+
+    def test_none_override_uses_init_temperature(self, monkeypatch):
+        runner, captured = self._build_runner_with_capture(monkeypatch, init_temp=1.0)
+        runner.run("Solve it.", temperature_override=None)
+        assert captured[0]["temperature"] == pytest.approx(1.0)
+
+    def test_runner_forwards_top_p_top_k_to_completion(self, monkeypatch):
+        captured: list[dict[str, Any]] = []
+
+        class FakeEnv:
+            def reset(self, **_kwargs):
+                return "q", {}
+
+            def step(self, _action):
+                return "", 1.0, True, False, {}
+
+            def close(self):
+                return None
+
+        def fake_completion(**kwargs):
+            captured.append(kwargs)
+            return _make_response("\\boxed{4}")
+
+        monkeypatch.setattr(
+            "trajectory_aware_gym.adapters.gem_episode_runner.make_env",
+            _fake_make_env_factory(FakeEnv()),
+        )
+        monkeypatch.setattr(
+            "trajectory_aware_gym.adapters.gem_episode_runner.completion",
+            fake_completion,
+        )
+        monkeypatch.setattr(
+            "trajectory_aware_gym.adapters.gem_episode_runner.completion_cost",
+            lambda *, completion_response: 0.0,
+        )
+
+        runner = GEMEpisodeRunner(
+            environment_id="math:Orz57K",
+            model_id="bedrock/us.meta.llama3-1-8b-instruct-v1:0",
+            temperature=1.0,
+            top_p=0.95,
+            top_k=50,
+            max_steps=1,
+            seed=0,
+        )
+        monkeypatch.setattr(
+            "trajectory_aware_gym.adapters.gem_episode_runner.settings.validate_aws",
+            lambda: None,
+        )
+        runner.run("Solve it.")
+
+        assert captured[0]["top_p"] == pytest.approx(0.95)
+        assert captured[0]["additional_model_request_fields"] == {"top_k": 50}

@@ -298,7 +298,7 @@ def test_run_experiment_writes_full_replication_artifacts(
             self.episode_history = tuple(train_results)
 
     class FakeSolverModule:
-        def __init__(self, runner, default_instructions: str):
+        def __init__(self, runner, default_instructions: str, **kwargs):
             self.instructions = default_instructions
 
     class FakeGEPA:
@@ -648,8 +648,8 @@ def test_extract_reflection_usage_adds_numeric_completion_cost() -> None:
 # ── dataset/eval helpers ───────────────────────────────────────────────────
 
 
-def _fake_gem_env(seen_seeds: list[int], env_closed: dict[str, bool], prefix: str = "obs"):
-    """Create a fake GEM environment and gem module for testing _build_examples."""
+def _fake_make_env(seen_seeds: list[int], env_closed: dict[str, bool], prefix: str = "obs"):
+    """Return a fake ``make_env`` that yields a stub GEM env for _build_examples."""
 
     class FakeEnv:
         def reset(self, *, seed: int):
@@ -661,30 +661,21 @@ def _fake_gem_env(seen_seeds: list[int], env_closed: dict[str, bool], prefix: st
 
     fake_env = FakeEnv()
 
-    class FakeGem:
-        @staticmethod
-        def make(_env_id: str):
-            return fake_env
+    def _make_env(_env_id: str, **_kwargs: Any) -> FakeEnv:
+        return fake_env
 
-    def fake_import_module(name: str):
-        if name == "gem":
-            return FakeGem
-        if name == "gem.envs":
-            return SimpleNamespace()
-        raise ModuleNotFoundError(name)
-
-    return fake_import_module
+    return _make_env
 
 
 def test_build_examples_uses_expected_seeds_and_closes_env() -> None:
-    import importlib
+    import trajectory_aware_gym.adapters.gem_env_factory as factory_module
 
     config = ExperimentConfig.from_yaml(QUICK_TEST_CONFIG)
     seen_seeds: list[int] = []
     env_closed = {"value": False}
-    fake_import = _fake_gem_env(seen_seeds, env_closed, "train")
+    fake_make = _fake_make_env(seen_seeds, env_closed, "train")
 
-    with patch.object(importlib, "import_module", side_effect=fake_import):
+    with patch.object(factory_module, "make_env", side_effect=fake_make):
         trainset = _build_examples(config, config.seeds.data_seed, config.environment.train_size)
 
     assert len(trainset) == config.environment.train_size
@@ -694,15 +685,15 @@ def test_build_examples_uses_expected_seeds_and_closes_env() -> None:
 
 
 def test_build_examples_eval_uses_offset_seed_and_closes_env() -> None:
-    import importlib
+    import trajectory_aware_gym.adapters.gem_env_factory as factory_module
 
     config = ExperimentConfig.from_yaml(QUICK_TEST_CONFIG)
     seen_seeds: list[int] = []
     env_closed = {"value": False}
-    fake_import = _fake_gem_env(seen_seeds, env_closed, "eval")
+    fake_make = _fake_make_env(seen_seeds, env_closed, "eval")
 
     start_seed = config.seeds.data_seed + config.environment.train_size
-    with patch.object(importlib, "import_module", side_effect=fake_import):
+    with patch.object(factory_module, "make_env", side_effect=fake_make):
         examples = _build_examples(config, start_seed, config.environment.effective_eval_size)
 
     assert len(examples) == config.environment.effective_eval_size
@@ -977,6 +968,102 @@ def test_build_task_lm_sagemaker_passes_region(monkeypatch: pytest.MonkeyPatch) 
     assert "api_base" not in captured
 
 
+def _capture_task_lm_kwargs(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    model: Any,
+    top_p: float,
+    top_k: int,
+) -> dict[str, Any]:
+    """Run _build_task_lm with overridden top_p/top_k and return the LM kwargs."""
+    import trajectory_aware_gym.experiments.runner as runner_module
+    from trajectory_aware_gym.models.experiment import ExperimentConfig
+
+    config = ExperimentConfig.from_yaml(QUICK_TEST_CONFIG)
+    config = config.model_copy(
+        update={
+            "eval_protocol": config.eval_protocol.model_copy(
+                update={"top_p": top_p, "top_k": top_k}
+            )
+        }
+    )
+
+    captured: dict = {}
+
+    def fake_lm(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(**kwargs)
+
+    monkeypatch.setattr(runner_module.dspy, "LM", fake_lm)
+    runner_module._build_task_lm(config, model)
+    return captured
+
+
+def test_build_task_lm_forwards_top_p_and_disabled_top_k(monkeypatch: pytest.MonkeyPatch) -> None:
+    from trajectory_aware_gym.models.experiment import TaskModelConfig
+
+    model = TaskModelConfig(
+        name="Llama-3.1-8B-Instruct",
+        model_id="bedrock/us.meta.llama3-1-8b-instruct-v1:0",
+        provider="bedrock",
+        parameter_count="8B",
+    )
+    captured = _capture_task_lm_kwargs(monkeypatch, model=model, top_p=0.95, top_k=-1)
+
+    assert captured["top_p"] == pytest.approx(0.95)
+    assert "top_k" not in captured
+    assert "additional_model_request_fields" not in captured
+
+
+def test_build_task_lm_routes_top_k_for_bedrock_non_anthropic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from trajectory_aware_gym.models.experiment import TaskModelConfig
+
+    model = TaskModelConfig(
+        name="Llama-3.1-8B-Instruct",
+        model_id="bedrock/us.meta.llama3-1-8b-instruct-v1:0",
+        provider="bedrock",
+        parameter_count="8B",
+    )
+    captured = _capture_task_lm_kwargs(monkeypatch, model=model, top_p=1.0, top_k=40)
+
+    assert "top_k" not in captured
+    assert captured["additional_model_request_fields"] == {"top_k": 40}
+
+
+def test_build_task_lm_routes_top_k_for_bedrock_anthropic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from trajectory_aware_gym.models.experiment import TaskModelConfig
+
+    model = TaskModelConfig(
+        name="Claude-Sonnet-4-5",
+        model_id="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        provider="bedrock",
+        parameter_count="n/a",
+    )
+    captured = _capture_task_lm_kwargs(monkeypatch, model=model, top_p=1.0, top_k=40)
+
+    assert captured["top_k"] == 40
+    assert "additional_model_request_fields" not in captured
+
+
+def test_build_task_lm_ollama_uses_top_level_top_k(monkeypatch: pytest.MonkeyPatch) -> None:
+    from trajectory_aware_gym.models.experiment import TaskModelConfig
+
+    model = TaskModelConfig(
+        name="Qwen3-1.7B",
+        model_id="ollama/qwen3-1.7b-base",
+        provider="ollama",
+        parameter_count="1.7B",
+    )
+    captured = _capture_task_lm_kwargs(monkeypatch, model=model, top_p=1.0, top_k=40)
+
+    assert captured["top_k"] == 40
+    assert "additional_model_request_fields" not in captured
+
+
 # ── _budget_alert_fraction ─────────────────────────────────────────────────
 
 
@@ -1120,7 +1207,7 @@ def _setup_fake_runner(
             self.episode_history = (train_result,)
 
     class FakeSolverModule:
-        def __init__(self, runner, default_instructions: str):
+        def __init__(self, runner, default_instructions: str, **kwargs):
             self.instructions = default_instructions
 
     class FakeGEPA:
@@ -1325,7 +1412,7 @@ def test_run_experiment_exception_writes_failed_status_and_reraises(
             self.episode_history = ()
 
     class FakeSolverModule:
-        def __init__(self, runner, default_instructions: str):
+        def __init__(self, runner, default_instructions: str, **kwargs):
             self.instructions = default_instructions
 
     class BrokenGEPA:
@@ -1379,7 +1466,7 @@ def test_run_experiment_continue_on_failure_runs_remaining_seeds(
             self.episode_history = (train_result,)
 
     class FakeSolverModule:
-        def __init__(self, runner, default_instructions: str):
+        def __init__(self, runner, default_instructions: str, **kwargs):
             self.instructions = default_instructions
 
     class FlakyGEPA:
@@ -1448,7 +1535,7 @@ def test_run_experiment_fail_fast_aborts_remaining_seeds(
             self.episode_history = ()
 
     class FakeSolverModule:
-        def __init__(self, runner, default_instructions: str):
+        def __init__(self, runner, default_instructions: str, **kwargs):
             self.instructions = default_instructions
 
     class BrokenGEPA:
@@ -1505,7 +1592,7 @@ def test_run_experiment_result_none_when_no_detailed_results(
             self.episode_history = (episode,)
 
     class FakeSolverModule:
-        def __init__(self, runner, default_instructions: str):
+        def __init__(self, runner, default_instructions: str, **kwargs):
             self.instructions = default_instructions
 
     class FakeGEPA:
@@ -1777,7 +1864,7 @@ def test_run_experiment_resume_gepa_done_reuses_experiment_run_id(
             self.episode_history = ()
 
     class FakeSolverModule:
-        def __init__(self, runner, default_instructions: str):
+        def __init__(self, runner, default_instructions: str, **kwargs):
             self.instructions = default_instructions
 
     class ShouldNotCompileGEPA:
@@ -1944,7 +2031,7 @@ def test_run_experiment_resume_gepa_done_preserves_saved_phase_artifacts(
             self.episode_history = ()
 
     class FakeSolverModule:
-        def __init__(self, runner, default_instructions: str):
+        def __init__(self, runner, default_instructions: str, **kwargs):
             self.instructions = default_instructions
 
     class ShouldNotCompileGEPA:
@@ -2112,7 +2199,7 @@ def test_run_experiment_updates_failed_on_exception(
             self.episode_history = ()
 
     class FakeSolverModule:
-        def __init__(self, runner, default_instructions: str):
+        def __init__(self, runner, default_instructions: str, **kwargs):
             self.instructions = default_instructions
 
     class BrokenGEPA:

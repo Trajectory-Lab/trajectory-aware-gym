@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import json
 import logging
 import math
@@ -33,6 +32,7 @@ from tenacity import (  # pyright: ignore[reportMissingImports]
     wait_exponential_jitter,
 )
 
+from trajectory_aware_gym.adapters.gem_env_factory import make_env
 from trajectory_aware_gym.adapters.tool_runtime import ToolRuntime
 from trajectory_aware_gym.adapters.trajectory_logger import (
     LLMCallMetadata,
@@ -49,6 +49,8 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_RESPONSE_TOKENS = 4096
 DEFAULT_MAX_TOOL_ROUNDS = 3
+DEFAULT_TOP_P = 1.0
+DEFAULT_TOP_K = -1  # -1 disables top-k truncation (matches GEM paper Table 3)
 TERMINAL_OBSERVATION = "<TERMINAL>"
 _MS_PER_SECOND = 1000.0
 
@@ -194,6 +196,8 @@ def _build_completion_kwargs(
     *,
     temperature: float,
     max_tokens: int = DEFAULT_MAX_RESPONSE_TOKENS,
+    top_p: float = DEFAULT_TOP_P,
+    top_k: int = DEFAULT_TOP_K,
 ) -> dict[str, Any]:
     """Build LiteLLM ``completion()`` kwargs for a given provider.
 
@@ -201,11 +205,17 @@ def _build_completion_kwargs(
       - ``ollama/``    → local Ollama server (base/completion models, /api/generate)
       - ``bedrock/``   → AWS Bedrock (managed inference)
       - ``sagemaker/`` → AWS SageMaker (custom TGI endpoints)
+
+    ``top_k <= 0`` is treated as "disabled" and not forwarded, matching the
+    GEM paper's ``top_k = -1`` convention. Bedrock's ``converse`` API does
+    not accept a top-level ``top_k`` for non-Anthropic models, so when set
+    it is passed via ``additional_model_request_fields``.
     """
     kwargs: dict[str, Any] = {
         "model": model_id,
         "temperature": temperature,
         "max_tokens": max_tokens,
+        "top_p": top_p,
     }
     # AWS providers need explicit region for LiteLLM's boto3 calls
     if model_id.startswith(("bedrock/", "sagemaker/")):
@@ -218,6 +228,19 @@ def _build_completion_kwargs(
         # Base (completion) models don't have a built-in stop condition;
         # without these, they repeat the prompt/answer indefinitely.
         kwargs["stop"] = ["<|endoftext|>", "<|im_end|>", "\n### User:", "\nHuman:"]
+
+    if top_k > 0:
+        if model_id.startswith("bedrock/"):
+            # Bedrock converse only accepts top_k natively for Anthropic models;
+            # route everything else through additional_model_request_fields so
+            # model-native APIs that understand top_k still receive it.
+            if "anthropic" in model_id:
+                kwargs["top_k"] = top_k
+            else:
+                kwargs["additional_model_request_fields"] = {"top_k": top_k}
+        else:
+            kwargs["top_k"] = top_k
+
     return kwargs
 
 
@@ -227,6 +250,8 @@ def generate_smoke_action(
     messages: list[ChatMessage],
     temperature: float,
     max_tokens: int = DEFAULT_MAX_RESPONSE_TOKENS,
+    top_p: float = DEFAULT_TOP_P,
+    top_k: int = DEFAULT_TOP_K,
 ) -> tuple[str, LLMCallMetadata]:
     """Run one LLM completion and convert usage into trajectory metadata."""
     if model_id.startswith("bedrock/"):
@@ -239,6 +264,8 @@ def generate_smoke_action(
             model_id,
             temperature=temperature,
             max_tokens=max_tokens,
+            top_p=top_p,
+            top_k=top_k,
         ),
     )
     latency_ms = (time.monotonic() - t0) * _MS_PER_SECOND
@@ -525,6 +552,8 @@ class GEMEpisodeRunner:
         temperature: float,
         max_steps: int,
         max_response_tokens: int = DEFAULT_MAX_RESPONSE_TOKENS,
+        top_p: float = DEFAULT_TOP_P,
+        top_k: int = DEFAULT_TOP_K,
         seed: int | None = None,
         experiment_name: str | None = None,
         tools: list[str] | None = None,
@@ -544,6 +573,8 @@ class GEMEpisodeRunner:
         self._temperature = temperature
         self._max_steps = max_steps
         self._max_response_tokens = max_response_tokens
+        self._top_p = top_p
+        self._top_k = top_k
         self._seed = seed
         self._experiment_name = experiment_name
         self._tools = [_normalize_tool_name(tool_name) for tool_name in (tools or [])]
@@ -581,12 +612,18 @@ class GEMEpisodeRunner:
         episode_index: int = 0,
         seed_override: int | None = None,
         expected_observation: str | None = None,
+        temperature_override: float | None = None,
     ) -> TrajectoryLog:
         """Run one episode and return the validated trajectory log.
 
         Used by GEMSolverModule during GEPA training. Persistence is
         disabled to avoid DB thrash across hundreds of GEPA rollouts —
         use ``run_episode(persist=True)`` for eval or debugging.
+
+        ``temperature_override`` lets the caller swap the per-call sampling
+        temperature without mutating the shared runner state — used by GEPA
+        to score valset examples greedily while trainset rollouts stay
+        stochastic (per GEM paper Table 3).
         """
         return (
             self.run_episode(
@@ -595,6 +632,7 @@ class GEMEpisodeRunner:
                 seed_override=seed_override,
                 expected_observation=expected_observation,
                 persist=False,
+                temperature_override=temperature_override,
             ).trajectory
             or _raise_missing_trajectory()
         )
@@ -607,14 +645,13 @@ class GEMEpisodeRunner:
         seed_override: int | None = None,
         expected_observation: str | None = None,
         persist: bool = True,
+        temperature_override: float | None = None,
     ) -> GEMEpisodeResult:
         """Run one episode and optionally persist its trajectory log."""
         if not prompt.strip():
             raise ValueError("prompt must not be blank")
 
-        gem = importlib.import_module("gem")
-        importlib.import_module("gem.envs")
-        env = gem.make(self._environment_id)
+        env = make_env(self._environment_id)
 
         resolved_seed = seed_override
         if resolved_seed is None and self._seed is not None:
@@ -658,6 +695,7 @@ class GEMEpisodeRunner:
                     observation=current_observation,
                     system_prompt=prompt,
                     history=conversation,
+                    temperature_override=temperature_override,
                 )
                 episode_events.extend(agent_step.logging_events)
                 episode_logging.numeric_anomaly_count += agent_step.numeric_anomaly_count
@@ -811,6 +849,7 @@ class GEMEpisodeRunner:
         messages: list[ChatMessage],
         *,
         include_tools: bool = True,
+        temperature_override: float | None = None,
     ) -> tuple[str, LLMCallMetadata, list[dict[str, Any]], list[LoggingEvent]]:
         """Run one LLM completion, returning text, metadata, and native tool calls.
 
@@ -826,10 +865,15 @@ class GEMEpisodeRunner:
         if self._model_id.startswith("bedrock/"):
             settings.validate_aws()
 
+        effective_temperature = (
+            temperature_override if temperature_override is not None else self._temperature
+        )
         completion_kwargs = _build_completion_kwargs(
             self._model_id,
-            temperature=self._temperature,
+            temperature=effective_temperature,
             max_tokens=self._max_response_tokens,
+            top_p=self._top_p,
+            top_k=self._top_k,
         )
         if include_tools and self._litellm_tools:
             completion_kwargs["tools"] = self._litellm_tools
@@ -920,6 +964,7 @@ class GEMEpisodeRunner:
         observation: str,
         system_prompt: str,
         history: list[ChatMessage],
+        temperature_override: float | None = None,
     ) -> AgentStepResult:
         tool_calls: list[ToolCall] = []
         llm_calls: list[LLMCallMetadata] = []
@@ -936,7 +981,8 @@ class GEMEpisodeRunner:
                 history=step_history,
             )
             response_text, llm_call, native_tool_calls, llm_logging_events = self._generate_action(
-                messages
+                messages,
+                temperature_override=temperature_override,
             )
             llm_calls.append(llm_call)
             logging_events.extend(llm_logging_events)
@@ -998,6 +1044,7 @@ class GEMEpisodeRunner:
             response_text, llm_call, _, llm_logging_events = self._generate_action(
                 messages,
                 include_tools=False,
+                temperature_override=temperature_override,
             )
             llm_calls.append(llm_call)
             logging_events.extend(llm_logging_events)

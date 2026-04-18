@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import csv
 import hashlib
-import importlib
 import json
 import logging
 import os
@@ -710,7 +709,16 @@ def _build_task_lm(config: ExperimentConfig, task_model: TaskModelConfig) -> Any
         "model": task_model.model_id,
         "temperature": config.eval_protocol.temperature_train,
         "max_tokens": config.eval_protocol.max_response_tokens,
+        "top_p": config.eval_protocol.top_p,
     }
+    # top_k <= 0 means disabled per GEM paper convention (Table 3).
+    top_k = config.eval_protocol.top_k
+    if top_k > 0:
+        model_id = task_model.model_id
+        if task_model.provider == "bedrock" and "anthropic" not in model_id:
+            kwargs["additional_model_request_fields"] = {"top_k": top_k}
+        else:
+            kwargs["top_k"] = top_k
     if task_model.provider == "ollama":
         kwargs["api_base"] = settings.ollama.api_base
     if task_model.provider in ("bedrock", "sagemaker"):
@@ -722,9 +730,9 @@ def _build_task_lm(config: ExperimentConfig, task_model: TaskModelConfig) -> Any
 
 def _build_examples(config: ExperimentConfig, start_seed: int, count: int) -> list[dspy.Example]:
     """Build dspy.Example list by resetting GEM env with sequential seeds."""
-    gem = importlib.import_module("gem")
-    importlib.import_module("gem.envs")
-    env = gem.make(config.environment.gem_env_id)
+    from trajectory_aware_gym.adapters.gem_env_factory import make_env
+
+    env = make_env(config.environment.gem_env_id)
 
     examples: list[dspy.Example] = []
     for index in range(count):
@@ -839,6 +847,8 @@ def _run_eval_task(
         temperature=config.eval_protocol.temperature_eval,
         max_steps=config.environment.max_steps,
         max_response_tokens=config.eval_protocol.max_response_tokens,
+        top_p=config.eval_protocol.top_p,
+        top_k=config.eval_protocol.top_k,
         seed=config.seeds.data_seed + config.environment.train_size,
         experiment_name=config.name,
         tools=config.environment.active_tool_names,
@@ -1205,12 +1215,28 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                     temperature=config.eval_protocol.temperature_train,
                     max_steps=config.environment.max_steps,
                     max_response_tokens=config.eval_protocol.max_response_tokens,
+                    top_p=config.eval_protocol.top_p,
+                    top_k=config.eval_protocol.top_k,
                     seed=config.seeds.data_seed,
                     experiment_name=config.name,
                     tools=config.environment.active_tool_names,
                     experiment_run_id=exp_run_id,
                 )
-                module = GEMSolverModule(runner, default_instructions=seed_prompt)
+                # GEPA reuses one module for both trainset rollouts and
+                # valset Pareto scoring. Mark the valset seeds so the module
+                # forces greedy (eval temp) decoding on those calls — matches
+                # GEM Table 3: train=1.0, evaluation=0.0.
+                val_seed_set = frozenset(
+                    int(seed)
+                    for seed in (getattr(ex, "seed", None) for ex in valset)
+                    if seed is not None
+                )
+                module = GEMSolverModule(
+                    runner,
+                    default_instructions=seed_prompt,
+                    val_seeds=val_seed_set,
+                    val_temperature=config.eval_protocol.temperature_eval,
+                )
 
                 gepa_log_dir = replication_dir / "gepa_logs"
                 gepa_log_dir.mkdir(parents=True, exist_ok=True)

@@ -43,9 +43,22 @@ class GEMSolverModule(dspy.Module):
         runner: GEMEpisodeRunner,
         *,
         default_instructions: str = "",
+        val_seeds: frozenset[int] | None = None,
+        val_temperature: float | None = None,
     ) -> None:
+        """Wire a runner for GEPA compile.
+
+        ``val_seeds`` and ``val_temperature`` together let GEPA score its
+        valset examples greedily while trainset rollouts stay stochastic.
+        When the forward call's ``seed`` is in ``val_seeds``, the runner
+        is invoked with ``temperature_override=val_temperature`` — matching
+        the GEM paper's "sampling temperature, evaluation = 0.0" column
+        (Table 3) without needing a second runner instance.
+        """
         super().__init__()
         self._runner = runner
+        self._val_seeds = val_seeds
+        self._val_temperature = val_temperature
         sig = GEMSolverSignature
         if default_instructions:
             sig = sig.with_instructions(default_instructions)
@@ -69,10 +82,14 @@ class GEMSolverModule(dspy.Module):
 
     def forward(self, *, problem: str, seed: int | None = None, **kwargs: Any) -> dspy.Prediction:
         system_prompt = self.instructions or "You are a helpful assistant."
+        temperature_override: float | None = None
+        if self._val_seeds is not None and seed is not None and seed in self._val_seeds:
+            temperature_override = self._val_temperature
         trajectory = self._runner.run(
             system_prompt,
             seed_override=seed,
             expected_observation=problem,
+            temperature_override=temperature_override,
         )
         answer = _extract_final_answer(trajectory)
 
