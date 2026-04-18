@@ -59,6 +59,7 @@ class TestGEMSolverModule:
             "Be precise.",
             seed_override=42,
             expected_observation="test",
+            temperature_override=None,
         )
 
     def test_instructions_property(self, mock_runner):
@@ -82,6 +83,7 @@ class TestGEMSolverModule:
             "Be precise.",
             seed_override=None,
             expected_observation="test",
+            temperature_override=None,
         )
 
     def test_forward_invokes_predictor_for_gepa_trace(self, mock_runner):
@@ -152,3 +154,71 @@ class TestExtractFinalAnswer:
             num_steps=0,
         )
         assert _extract_final_answer(trajectory) == "[no-steps]"
+
+
+class TestValSeedTemperatureOverride:
+    """GEPA reuses one module for trainset rollouts + valset Pareto scoring.
+
+    When the forward call's seed is in ``val_seeds``, the module must pass
+    ``temperature_override=val_temperature`` so valset scoring is greedy,
+    matching GEM paper Table 3 (evaluation temperature = 0.0).
+    """
+
+    def test_val_seed_triggers_override(self, mock_runner):
+        module = GEMSolverModule(
+            mock_runner,
+            default_instructions="Be precise.",
+            val_seeds=frozenset({100, 101, 102}),
+            val_temperature=0.0,
+        )
+        module(problem="test", seed=101)
+
+        mock_runner.run.assert_called_once_with(
+            "Be precise.",
+            seed_override=101,
+            expected_observation="test",
+            temperature_override=0.0,
+        )
+
+    def test_non_val_seed_keeps_runner_temperature(self, mock_runner):
+        module = GEMSolverModule(
+            mock_runner,
+            default_instructions="Be precise.",
+            val_seeds=frozenset({100, 101, 102}),
+            val_temperature=0.0,
+        )
+        module(problem="test", seed=42)
+
+        mock_runner.run.assert_called_once_with(
+            "Be precise.",
+            seed_override=42,
+            expected_observation="test",
+            temperature_override=None,
+        )
+
+    def test_absent_val_seeds_never_overrides(self, mock_runner):
+        module = GEMSolverModule(mock_runner, default_instructions="Be precise.")
+        module(problem="test", seed=101)
+
+        mock_runner.run.assert_called_once_with(
+            "Be precise.",
+            seed_override=101,
+            expected_observation="test",
+            temperature_override=None,
+        )
+
+    def test_none_seed_does_not_match_val_seeds(self, mock_runner):
+        module = GEMSolverModule(
+            mock_runner,
+            default_instructions="Be precise.",
+            val_seeds=frozenset({100}),
+            val_temperature=0.0,
+        )
+        module(problem="test")  # seed defaults to None
+
+        mock_runner.run.assert_called_once_with(
+            "Be precise.",
+            seed_override=None,
+            expected_observation="test",
+            temperature_override=None,
+        )
