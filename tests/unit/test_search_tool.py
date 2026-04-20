@@ -8,9 +8,11 @@ class _FakeDDGS:
     def __exit__(self, exc_type, exc, tb):
         return False
 
-    def text(self, query: str, max_results: int):
+    def text(self, query: str, max_results: int, backend: str):
         assert query == "OpenAI"
         assert max_results == 5
+        assert "yahoo" not in backend
+        assert "mojeek" not in backend
         return [
             {
                 "title": "OpenAI",
@@ -36,7 +38,7 @@ class _FailingDDGS:
     def __exit__(self, exc_type, exc, tb):
         return False
 
-    def text(self, query: str, max_results: int):
+    def text(self, query: str, max_results: int, backend: str):
         raise RuntimeError("network unavailable")
 
 
