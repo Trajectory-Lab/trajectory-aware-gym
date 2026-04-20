@@ -88,3 +88,25 @@ timeouts. Python 3.13 warns when forking in a multi-threaded process.
 used for a 1-second grading timeout and works correctly in practice.
 
 **Affected components:** `gem.envs.math_env.MathEnv.__init__` (upstream).
+
+---
+
+### GEM `QaEnv.step()` raises `UnboundLocalError` when no answer is extractable
+
+**Symptom:** `UnboundLocalError: cannot access local variable 'is_correct'
+where it is not associated with a value` originating from
+`gem/envs/qa_env.py:100`. Seen during HotpotQA / QA evaluation when the model
+output doesn't contain the required `<answer>...</answer>` tag (or
+`\boxed{...}` when `extract_boxed=True`).
+
+**Cause:** Upstream `QaEnv.step` only binds `is_correct` inside the `else`
+branch that runs when the extractor finds an answer. If the extractor returns
+`None`, the method sets `reward = 0.0` but leaves `is_correct` unbound, then
+reads it unconditionally in the final `return`.
+
+**Fix / Workaround:** Patched at runtime by
+`trajectory_aware_gym.adapters.gem_env_factory._apply_upstream_patches`, which
+replaces `QaEnv.step` with a version that defaults `is_correct = False`. The
+patch is applied the first time `make_env` runs and is idempotent.
+
+**Affected components:** `gem.envs.qa_env.QaEnv.step` (upstream).

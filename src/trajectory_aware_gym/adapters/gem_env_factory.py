@@ -19,6 +19,40 @@ from typing import Any
 
 _dataset_cache: dict[str, Any] = {}
 _cache_lock = threading.Lock()
+_patches_applied = False
+_patch_lock = threading.Lock()
+
+
+def _apply_upstream_patches() -> None:
+    """Patch known upstream GEM bugs. Idempotent and thread-safe.
+
+    ``QaEnv.step`` fails with ``UnboundLocalError`` when the model output
+    contains no extractable answer: ``is_correct`` is never bound, but the
+    final ``return`` reads it unconditionally. We replace ``step`` with a
+    version that defaults ``is_correct`` to ``False``.
+    """
+    global _patches_applied
+    if _patches_applied:
+        return
+
+    with _patch_lock:
+        if _patches_applied:
+            return
+
+        qa_env = importlib.import_module("gem.envs.qa_env")
+
+        def _patched_step(self: Any, action: str) -> tuple[str, float, bool, bool, dict[str, Any]]:
+            is_correct = False
+            model_answer = self.extractor(action)
+            if model_answer is None:
+                reward = 0.0
+            else:
+                is_correct = self.check_correct(model_answer, self.answer)
+                reward = 1.0 if is_correct else 0.0
+            return qa_env.TERMINAL_STATE, reward, True, True, {"correct": bool(is_correct)}
+
+        qa_env.QaEnv.step = _patched_step
+        _patches_applied = True
 
 
 def _load_env_dataset(env_id: str) -> Any | None:
@@ -65,6 +99,7 @@ def make_env(env_id: str, **kwargs: Any) -> Any:
     ``dataset=`` override.
     """
     gem = importlib.import_module("gem")
+    _apply_upstream_patches()
 
     if "dataset" not in kwargs:
         cached = _load_env_dataset(env_id)
@@ -78,3 +113,6 @@ def reset_dataset_cache() -> None:
     """Clear the cache (for test isolation)."""
     with _cache_lock:
         _dataset_cache.clear()
+    global _patches_applied
+    with _patch_lock:
+        _patches_applied = False

@@ -35,6 +35,7 @@ from trajectory_aware_gym.models.experiment import (
     TaskModelConfig,
 )
 from trajectory_aware_gym.models.gepa_result import GEPARunResult, accuracy_from_subscores
+from trajectory_aware_gym.optimizers.gepa_progress_patch import enable_gepa_eval_progress
 from trajectory_aware_gym.storage import (
     ExperimentRunRecord,
     LoggingEvent,
@@ -1241,6 +1242,7 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                 gepa_log_dir = replication_dir / "gepa_logs"
                 gepa_log_dir.mkdir(parents=True, exist_ok=True)
 
+                enable_gepa_eval_progress()
                 optimizer = dspy.GEPA(
                     metric=metric,
                     **gepa_budget_kwargs,
