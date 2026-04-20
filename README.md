@@ -79,7 +79,7 @@ Or install via package managers:
 
 ```bash
 # Run the bounded end-to-end dry-run
-poe dry-run-gepa --fresh
+ uv run poe run-experiment --config experiments/quick-test/config.yaml
 ```
 
 This uses [`experiments/math-dry-run/config.yaml`](experiments/math-dry-run/config.yaml):

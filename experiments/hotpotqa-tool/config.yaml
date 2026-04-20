@@ -55,35 +55,35 @@ eval_protocol:
   bootstrap_iterations: 1000
 
 task_models:
-  - name: Qwen3-1.7B-Base
-    model_id: "ollama/qwen3-1.7b-base"
-    provider: ollama
-    parameter_count: "1.7B"
+  # - name: Qwen3-1.7B-Base
+  #   model_id: "ollama/qwen3-1.7b-base"
+  #   provider: ollama
+  #   parameter_count: "1.7B"
 
-  - name: Qwen3-4B-Base
-    model_id: "ollama/qwen3-4b-base"
-    provider: ollama
-    parameter_count: "4B"
+  # - name: Qwen3-4B-Base
+  #   model_id: "ollama/qwen3-4b-base"
+  #   provider: ollama
+  #   parameter_count: "4B"
 
   - name: Llama-3.1-8B-Instruct
     model_id: "bedrock/us.meta.llama3-1-8b-instruct-v1:0"
     provider: bedrock
     parameter_count: "8B"
 
-  - name: Gemma-3-4B-IT
-    model_id: "bedrock/google.gemma-3-4b-it"
-    provider: bedrock
-    parameter_count: "4B"
+  # - name: Gemma-3-4B-IT
+  #   model_id: "bedrock/google.gemma-3-4b-it"
+  #   provider: bedrock
+  #   parameter_count: "4B"
 
-  - name: Mistral-7B-Instruct
-    model_id: "bedrock/mistral.mistral-7b-instruct-v0:2"
-    provider: bedrock
-    parameter_count: "7B"
+  # - name: Mistral-7B-Instruct
+  #   model_id: "bedrock/mistral.mistral-7b-instruct-v0:2"
+  #   provider: bedrock
+  #   parameter_count: "7B"
 
-  - name: Nemotron-Nano-9B
-    model_id: "bedrock/nvidia.nemotron-nano-9b-v2"
-    provider: bedrock
-    parameter_count: "9B"
+  # - name: Nemotron-Nano-9B
+  #   model_id: "bedrock/nvidia.nemotron-nano-9b-v2"
+  #   provider: bedrock
+  #   parameter_count: "9B"
 
 reflection_model:
   model_id: "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
@@ -92,7 +92,7 @@ reflection_model:
   max_tokens: 4096
 
 gepa_budget:
-  mode: heavy              # → dspy.GEPA(auto="heavy"): 18 candidates
+  mode: light              # → dspy.GEPA(auto="heavy"): 18 candidates
   tasks_per_minibatch: 3   # → dspy.GEPA(reflection_minibatch_size): paper uses 3
 
 seeds:
