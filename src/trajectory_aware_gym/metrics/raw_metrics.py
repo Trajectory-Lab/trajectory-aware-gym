@@ -175,9 +175,9 @@ def extract_episode_raw_metrics(trajectory: TrajectoryLog) -> EpisodeRawMetrics:
     total_token_values: list[int] = []
     llm_latency_values: list[float] = []
 
-    cost_seen_steps = 0
-    token_seen_steps = 0
-    latency_seen_steps = 0
+    cost_seen_steps = 0.0
+    token_seen_steps = 0.0
+    latency_seen_steps = 0.0
 
     for step in trajectory.steps:
         info: Mapping[str, Any] = step.info if isinstance(step.info, Mapping) else {}
@@ -188,30 +188,43 @@ def extract_episode_raw_metrics(trajectory: TrajectoryLog) -> EpisodeRawMetrics:
         step_completion_tokens = _extract_int(info, _COMPLETION_TOKEN_PATHS)
         step_total_tokens = _extract_int(info, _TOTAL_TOKEN_PATHS)
         step_llm_latency = _extract_numeric(info, _LATENCY_PATHS)
+        step_cost_coverage = 1.0 if step_cost is not None else 0.0
+        token_info_complete = step_total_tokens is not None or (
+            step_prompt_tokens is not None and step_completion_tokens is not None
+        )
+        step_token_coverage = 1.0 if token_info_complete else 0.0
+        step_latency_coverage = 1.0 if step_llm_latency is not None else 0.0
 
         # Fall back to step.llm_calls when info dict has no data.
-        if step.llm_calls and step_total_tokens is None and step_prompt_tokens is None:
-            step_prompt_tokens = sum(c.prompt_tokens for c in step.llm_calls)
-            step_completion_tokens = sum(c.completion_tokens for c in step.llm_calls)
-            step_total_tokens = sum(c.total_tokens for c in step.llm_calls)
+        if step.llm_calls and not token_info_complete:
+            known_token_calls = [c for c in step.llm_calls if c.token_usage_known]
+            if known_token_calls:
+                step_prompt_tokens = sum(c.prompt_tokens for c in known_token_calls)
+                step_completion_tokens = sum(c.completion_tokens for c in known_token_calls)
+                step_total_tokens = sum(c.total_tokens for c in known_token_calls)
+            step_token_coverage = len(known_token_calls) / len(step.llm_calls)
 
         if step.llm_calls and step_cost is None:
             calls_with_cost = [c.cost_usd for c in step.llm_calls if c.cost_usd is not None]
             if calls_with_cost:
                 step_cost = sum(calls_with_cost)
+            step_cost_coverage = len(calls_with_cost) / len(step.llm_calls)
 
         if step.llm_calls and step_llm_latency is None:
             calls_with_latency = [c.latency_ms for c in step.llm_calls if c.latency_ms is not None]
             if calls_with_latency:
                 # Sum gives total LLM wall-clock per step (calls are sequential).
                 step_llm_latency = sum(calls_with_latency) / 1000.0
+            step_latency_coverage = len(calls_with_latency) / len(step.llm_calls)
 
         if step_cost is not None:
             cost_values.append(step_cost)
-            cost_seen_steps += 1
+        cost_seen_steps += step_cost_coverage
 
-        if step_total_tokens is None and (
-            step_prompt_tokens is not None or step_completion_tokens is not None
+        if (
+            step_total_tokens is None
+            and step_prompt_tokens is not None
+            and step_completion_tokens is not None
         ):
             step_total_tokens = (step_prompt_tokens or 0) + (step_completion_tokens or 0)
 
@@ -221,17 +234,11 @@ def extract_episode_raw_metrics(trajectory: TrajectoryLog) -> EpisodeRawMetrics:
             completion_token_values.append(step_completion_tokens)
         if step_total_tokens is not None:
             total_token_values.append(step_total_tokens)
-
-        if (
-            step_prompt_tokens is not None
-            or step_completion_tokens is not None
-            or step_total_tokens is not None
-        ):
-            token_seen_steps += 1
+        token_seen_steps += step_token_coverage
 
         if step_llm_latency is not None:
             llm_latency_values.append(step_llm_latency)
-            latency_seen_steps += 1
+        latency_seen_steps += step_latency_coverage
 
     # Aggregate raw cost and token totals.
     llm_cost_usd = sum(cost_values) if cost_values else None

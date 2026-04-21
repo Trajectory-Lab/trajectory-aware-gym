@@ -322,6 +322,51 @@ def test_extract_metrics_reads_from_llm_calls_when_info_empty() -> None:
     assert metrics.cost_data_coverage == 1.0
 
 
+def test_extract_metrics_preserves_partial_llm_call_coverage() -> None:
+    """Unknown usage stays partial instead of turning into fake zero-token completeness."""
+    steps = [
+        TrajectoryStep(
+            step_index=1,
+            action="act",
+            observation="obs",
+            reward=1.0,
+            terminated=True,
+            truncated=False,
+            info={},
+            llm_calls=[
+                LLMCallMetadata(
+                    model_id="m",
+                    prompt_tokens=10,
+                    completion_tokens=5,
+                    total_tokens=15,
+                    token_usage_known=True,
+                    cost_usd=0.01,
+                    latency_ms=200.0,
+                ),
+                LLMCallMetadata(
+                    model_id="m",
+                    prompt_tokens=0,
+                    completion_tokens=0,
+                    total_tokens=0,
+                    token_usage_known=False,
+                    cost_usd=None,
+                    latency_ms=None,
+                ),
+            ],
+        )
+    ]
+    trajectory = _build_trajectory(steps=steps, total_reward=1.0, elapsed_seconds=1.0)
+    metrics = extract_episode_raw_metrics(trajectory)
+
+    assert metrics.total_tokens == 15
+    assert metrics.prompt_tokens == 10
+    assert metrics.completion_tokens == 5
+    assert metrics.llm_cost_usd == pytest.approx(0.01)
+    assert metrics.token_data_coverage == pytest.approx(0.5)
+    assert metrics.cost_data_coverage == pytest.approx(0.5)
+    assert metrics.llm_latency_data_coverage == pytest.approx(0.5)
+
+
 def test_extract_metrics_aggregates_multiple_llm_calls_per_step() -> None:
     """Multiple llm_calls within a single step are summed correctly."""
     steps = [

@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS llm_calls (
     prompt_tokens     INTEGER NOT NULL,
     completion_tokens INTEGER NOT NULL,
     total_tokens      INTEGER NOT NULL,
+    token_usage_known INTEGER NOT NULL DEFAULT 1,
     cost_usd          REAL,
     cost_type         TEXT,
     latency_ms        REAL,
@@ -259,6 +260,9 @@ def _migrate_existing_schema(conn: sqlite3.Connection) -> None:
             "provider": "ALTER TABLE llm_calls ADD COLUMN provider TEXT",
             "cost_type": "ALTER TABLE llm_calls ADD COLUMN cost_type TEXT",
             "latency_ms": "ALTER TABLE llm_calls ADD COLUMN latency_ms REAL",
+            "token_usage_known": (
+                "ALTER TABLE llm_calls ADD COLUMN token_usage_known INTEGER NOT NULL DEFAULT 1"
+            ),
         },
         "tool_calls": {
             "duration_ms": "ALTER TABLE tool_calls ADD COLUMN duration_ms REAL",
@@ -435,9 +439,9 @@ def save_trajectory(
                         """
                         INSERT INTO llm_calls
                             (run_id, step_index, model_id, provider, prompt_tokens,
-                             completion_tokens, total_tokens, cost_usd, cost_type,
-                             latency_ms)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             completion_tokens, total_tokens, token_usage_known,
+                             cost_usd, cost_type, latency_ms)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         [
                             (
@@ -448,6 +452,7 @@ def save_trajectory(
                                 lc.prompt_tokens,
                                 lc.completion_tokens,
                                 lc.total_tokens,
+                                int(lc.token_usage_known),
                                 lc.cost_usd,
                                 lc.cost_type,
                                 lc.latency_ms,
@@ -518,6 +523,9 @@ def _build_trajectory(
                 prompt_tokens=row["prompt_tokens"],
                 completion_tokens=row["completion_tokens"],
                 total_tokens=row["total_tokens"],
+                token_usage_known=(
+                    bool(row["token_usage_known"]) if "token_usage_known" in row.keys() else True
+                ),
                 cost_usd=row["cost_usd"],
                 cost_type=row["cost_type"] if "cost_type" in row.keys() else None,
                 latency_ms=row["latency_ms"],

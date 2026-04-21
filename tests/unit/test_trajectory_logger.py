@@ -963,6 +963,7 @@ class TestExtractLLMCallsFromTracker:
         assert calls[0].prompt_tokens == 10
         assert calls[0].completion_tokens == 20
         assert calls[0].total_tokens == 30
+        assert calls[0].token_usage_known is True
 
     def test_single_model_multiple_calls(self):
         tracker = _FakeTracker(
@@ -1026,7 +1027,7 @@ class TestExtractLLMCallsFromTracker:
         calls = extract_llm_calls_from_tracker(tracker)
         assert calls[0].cost_usd is None
 
-    def test_missing_token_fields_default_to_zero(self):
+    def test_missing_token_fields_stay_unknown(self):
         tracker = _FakeTracker(
             {
                 "bedrock/qwen3-1.7b": [{}],
@@ -1037,6 +1038,22 @@ class TestExtractLLMCallsFromTracker:
         assert calls[0].prompt_tokens == 0
         assert calls[0].completion_tokens == 0
         assert calls[0].total_tokens == 0
+        assert calls[0].token_usage_known is False
+
+    def test_explicit_total_tokens_is_preserved(self):
+        tracker = _FakeTracker(
+            {
+                "bedrock/qwen3-1.7b": [
+                    {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 42},
+                ],
+            }
+        )
+        calls = extract_llm_calls_from_tracker(tracker)
+        assert len(calls) == 1
+        assert calls[0].prompt_tokens == 10
+        assert calls[0].completion_tokens == 20
+        assert calls[0].total_tokens == 42
+        assert calls[0].token_usage_known is True
 
     def test_integrates_with_add_step(self):
         tracker = _FakeTracker(

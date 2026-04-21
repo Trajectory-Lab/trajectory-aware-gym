@@ -14,7 +14,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import dspy  # type: ignore[import-untyped]
 import yaml
@@ -199,6 +199,13 @@ def _write_jsonl(path: Path, rows: list[EpisodeRawMetrics]) -> None:
             handle.write(json.dumps(row.model_dump(mode="json"), sort_keys=True) + "\n")
 
 
+def _write_jsonl_records(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, sort_keys=True) + "\n")
+
+
 def _write_csv(path: Path, rows: list[EpisodeRawMetrics]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if not rows:
@@ -329,23 +336,59 @@ def _raw_metrics_summary_with_omissions(
     }
 
 
-def _extract_reflection_usage(reflection_lm: Any | None) -> tuple[int, float]:
+def _empty_reflection_usage_summary() -> dict[str, float | int | None]:
+    return {
+        "total_tokens": 0,
+        "known_total_tokens": 0,
+        "token_data_coverage": 1.0,
+        "total_cost_usd": 0.0,
+        "known_cost_usd": 0.0,
+        "cost_data_coverage": 1.0,
+    }
+
+
+def _coerce_reflection_usage_summary(value: Any) -> dict[str, float | int | None]:
+    if isinstance(value, dict):
+        return {
+            **_empty_reflection_usage_summary(),
+            **value,
+        }
+    if isinstance(value, tuple) and len(value) == 2:
+        tokens, cost = value
+        token_total = int(tokens) if isinstance(tokens, int | float) else None
+        cost_total = float(cost) if isinstance(cost, int | float) else None
+        return {
+            "total_tokens": token_total,
+            "known_total_tokens": token_total or 0,
+            "token_data_coverage": 1.0 if token_total is not None else 0.0,
+            "total_cost_usd": cost_total,
+            "known_cost_usd": cost_total or 0.0,
+            "cost_data_coverage": 1.0 if cost_total is not None else 0.0,
+        }
+    return _empty_reflection_usage_summary()
+
+
+def _extract_reflection_usage(reflection_lm: Any | None) -> dict[str, float | int | None]:
     if reflection_lm is None:
-        return (0, 0.0)
+        return _empty_reflection_usage_summary()
 
     history = getattr(reflection_lm, "history", [])
-    total_tokens = 0
-    total_cost = 0.0
+    entries = [entry for entry in history if isinstance(entry, dict)]
+    if not entries:
+        return _empty_reflection_usage_summary()
 
-    for entry in history:
-        if not isinstance(entry, dict):
-            continue
+    known_total_tokens = 0
+    token_known_entries = 0
+    known_cost_usd = 0.0
+    cost_known_entries = 0
 
+    for entry in entries:
         usage = entry.get("usage")
         if isinstance(usage, dict):
             usage_total = usage.get("total_tokens")
-            if isinstance(usage_total, int):
-                total_tokens += usage_total
+            if isinstance(usage_total, int | float) and not isinstance(usage_total, bool):
+                known_total_tokens += int(usage_total)
+                token_known_entries += 1
 
         response = entry.get("response")
         if response is not None:
@@ -353,10 +396,116 @@ def _extract_reflection_usage(reflection_lm: Any | None) -> tuple[int, float]:
                 maybe_cost = completion_cost(completion_response=response)
             except Exception:  # noqa: BLE001  # LiteLLM raises bare Exception for unmapped models
                 maybe_cost = None
-            if isinstance(maybe_cost, int | float):
-                total_cost += float(maybe_cost)
+            if isinstance(maybe_cost, int | float) and not isinstance(maybe_cost, bool):
+                known_cost_usd += float(maybe_cost)
+                cost_known_entries += 1
 
-    return (total_tokens, total_cost)
+    token_coverage = token_known_entries / len(entries)
+    cost_coverage = cost_known_entries / len(entries)
+    return {
+        "total_tokens": known_total_tokens if token_coverage == 1.0 else None,
+        "known_total_tokens": known_total_tokens,
+        "token_data_coverage": token_coverage,
+        "total_cost_usd": round(known_cost_usd, _COST_DECIMAL_PLACES)
+        if cost_coverage == 1.0
+        else None,
+        "known_cost_usd": round(known_cost_usd, _COST_DECIMAL_PLACES),
+        "cost_data_coverage": cost_coverage,
+    }
+
+
+def _format_eval_detail_line(summary: dict[str, Any]) -> str:
+    attempted = int(summary.get("episodes_attempted", 0) or 0)
+    completed = int(summary.get("episodes_completed", 0) or 0)
+    scorable = int(summary.get("episodes_scorable", summary.get("episodes", 0)) or 0)
+    failed = int(summary.get("failed", 0) or 0)
+    timed_out = int(summary.get("timed_out", 0) or 0)
+    metrics_unavailable = int(summary.get("metrics_unavailable", 0) or 0)
+    return (
+        f"attempted={attempted} completed={completed} scorable={scorable} "
+        f"failed={failed} timed_out={timed_out} metrics_unavailable={metrics_unavailable}"
+    )
+
+
+def _split_eval_summary_artifacts(
+    summary: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    sanitized = dict(summary)
+    failure_records_raw = sanitized.pop("failure_records", [])
+    if not isinstance(failure_records_raw, list):
+        return sanitized, []
+
+    failure_records: list[dict[str, Any]] = []
+    for record in failure_records_raw:
+        if isinstance(record, dict):
+            failure_records.append(dict(record))
+    return sanitized, failure_records
+
+
+def _merge_eval_outcome_summaries(summaries: list[dict[str, Any]]) -> dict[str, Any]:
+    attempted = sum(int(summary.get("episodes_attempted", 0) or 0) for summary in summaries)
+    completed = sum(int(summary.get("episodes_completed", 0) or 0) for summary in summaries)
+    scorable = sum(
+        int(summary.get("episodes_scorable", summary.get("episodes", 0)) or 0)
+        for summary in summaries
+    )
+    failed = sum(int(summary.get("failed", 0) or 0) for summary in summaries)
+    timed_out = sum(int(summary.get("timed_out", 0) or 0) for summary in summaries)
+    metrics_unavailable = sum(
+        int(summary.get("metrics_unavailable", 0) or 0) for summary in summaries
+    )
+    successes = sum(int(summary.get("successes", 0) or 0) for summary in summaries)
+    correct = sum(
+        int(summary.get("correct", summary.get("successes", 0)) or 0) for summary in summaries
+    )
+
+    return {
+        "episodes_attempted": attempted,
+        "episodes_completed": completed,
+        "episodes_scorable": scorable,
+        "episodes": scorable,
+        "failed": failed,
+        "timed_out": timed_out,
+        "metrics_unavailable": metrics_unavailable,
+        "successes": successes,
+        "success_rate": (successes / scorable) if scorable else 0.0,
+        "completion_rate": (completed / attempted) if attempted else 0.0,
+        "attempted_success_rate": (successes / attempted) if attempted else 0.0,
+        "correct": correct,
+        "accuracy": (correct / scorable) if scorable else 0.0,
+    }
+
+
+def _build_eval_failure_logging_summary(
+    *,
+    phase: str,
+    failure_records: list[dict[str, Any]],
+    manifest_name: str,
+) -> LoggingSummary:
+    if not failure_records:
+        return LoggingSummary()
+
+    timed_out = sum(1 for record in failure_records if record.get("status") == "timed_out")
+    exceptions = len(failure_records) - timed_out
+    detail_parts: list[str] = []
+    if exceptions:
+        detail_parts.append(f"{exceptions} exception")
+    if timed_out:
+        detail_parts.append(f"{timed_out} timed out")
+    detail = ", ".join(detail_parts) if detail_parts else "failures recorded"
+    return LoggingSummary(
+        status="partial",
+        events=[
+            LoggingEvent(
+                stage="eval",
+                kind="eval_failures_recorded",
+                message=(
+                    f"{phase} eval recorded {len(failure_records)} failed episodes "
+                    f"({detail}); see {manifest_name}."
+                ),
+            )
+        ],
+    )
 
 
 def _result_success(result: GEMEpisodeResult) -> bool | None:
@@ -460,6 +609,21 @@ def _merge_logging_summaries(
         events=events,
         events_truncated=events_truncated,
     )
+
+
+def _append_logging_summary_event(
+    summary: LoggingSummary,
+    event: LoggingEvent,
+    *,
+    status: LoggingStatus = "partial",
+) -> LoggingSummary:
+    updated = summary.model_copy(deep=True)
+    if status == "failed":
+        updated.status = "failed"
+    elif updated.status == "complete":
+        updated.status = status
+    updated.events.append(event)
+    return updated
 
 
 def _summarize_task_usage_rows(
@@ -651,6 +815,115 @@ def _build_validation_summary(*, accuracy: float, episodes: int) -> dict[str, An
         "episodes": episodes,
         "correct": round(accuracy * episodes),
         "accuracy": accuracy,
+    }
+
+
+def _normalize_validation_subscores(value: Any) -> dict[str, float] | None:
+    if not isinstance(value, dict):
+        return None
+    out: dict[str, float] = {}
+    for key, score in value.items():
+        if isinstance(score, int | float) and not isinstance(score, bool):
+            out[str(key)] = float(score)
+    return out
+
+
+def _build_validation_audit_from_detailed(
+    optimized_module: Any,
+    *,
+    episodes: int,
+) -> dict[str, Any] | None:
+    detailed = getattr(optimized_module, "detailed_results", None)
+    if detailed is None:
+        return None
+
+    val_scores = getattr(detailed, "val_aggregate_scores", None)
+    val_subscores = getattr(detailed, "val_subscores", None)
+    best_idx = getattr(detailed, "best_idx", None)
+    discovery = getattr(detailed, "discovery_eval_counts", None)
+    if not isinstance(val_scores, list) or not isinstance(val_subscores, list):
+        return None
+    if not val_scores or not val_subscores or not isinstance(best_idx, int):
+        return None
+    if best_idx < 0 or best_idx >= len(val_scores) or best_idx >= len(val_subscores):
+        return None
+
+    baseline_subscores = _normalize_validation_subscores(val_subscores[0])
+    optimized_subscores = _normalize_validation_subscores(val_subscores[best_idx])
+    baseline_accuracy = (
+        accuracy_from_subscores(baseline_subscores) if baseline_subscores is not None else None
+    )
+    optimized_accuracy = (
+        accuracy_from_subscores(optimized_subscores) if optimized_subscores is not None else None
+    )
+
+    def discovery_count(index: int) -> int | None:
+        if isinstance(discovery, list) and index < len(discovery):
+            value = discovery[index]
+            if isinstance(value, int | float) and not isinstance(value, bool):
+                return int(value)
+        return None
+
+    return {
+        "source": "gepa_detailed_results",
+        "episodes": episodes,
+        "candidate_count": len(val_scores),
+        "best_program_index": best_idx,
+        "baseline": {
+            "program_index": 0,
+            "val_aggregate_score": float(val_scores[0]),
+            "accuracy": baseline_accuracy,
+            "correct": round(baseline_accuracy * episodes)
+            if isinstance(baseline_accuracy, int | float)
+            else None,
+            "discovery_eval_count": discovery_count(0),
+            "subscores": baseline_subscores,
+        },
+        "optimized": {
+            "program_index": best_idx,
+            "val_aggregate_score": float(val_scores[best_idx]),
+            "accuracy": optimized_accuracy,
+            "correct": round(optimized_accuracy * episodes)
+            if isinstance(optimized_accuracy, int | float)
+            else None,
+            "discovery_eval_count": discovery_count(best_idx),
+            "subscores": optimized_subscores,
+        },
+    }
+
+
+def _build_validation_audit_from_result(
+    result: GEPARunResult | None,
+    *,
+    episodes: int,
+    source: str,
+) -> dict[str, Any]:
+    if result is None:
+        return {
+            "source": source,
+            "episodes": episodes,
+            "available": False,
+            "details_available": False,
+            "baseline": None,
+            "optimized": None,
+        }
+
+    return {
+        "source": source,
+        "episodes": episodes,
+        "available": True,
+        "details_available": False,
+        "best_program_index": result.best_program_index,
+        "baseline": {
+            "program_index": 0,
+            "accuracy": result.baseline_accuracy,
+            "correct": round(result.baseline_accuracy * episodes),
+        },
+        "optimized": {
+            "program_index": result.best_program_index,
+            "accuracy": result.final_accuracy,
+            "correct": round(result.final_accuracy * episodes),
+        },
     }
 
 
@@ -904,6 +1177,7 @@ def _run_heldout_eval(
     results: list[GEMEpisodeResult | None] = [None] * total_tasks
     done_count = 0
     timed_out_episodes: list[int] = []
+    failure_records: list[dict[str, Any]] = []
     eval_start = time.monotonic()
     executor = ThreadPoolExecutor(max_workers=max_workers)
     try:
@@ -914,10 +1188,30 @@ def _run_heldout_eval(
         try:
             for future in as_completed(future_to_idx, timeout=total_timeout):
                 idx = future_to_idx[future]
+                task = tasks[idx]
                 try:
                     results[idx] = future.result()
-                except Exception:
+                except Exception as exc:  # noqa: BLE001
+                    import traceback
+
                     logger.exception("Eval episode %d failed", idx)
+                    failure_records.append(
+                        {
+                            "episode_index": task.episode_index,
+                            "seed": task.seed,
+                            "status": "exception",
+                            "timed_out": False,
+                            "error_type": type(exc).__name__,
+                            "error_repr": repr(exc),
+                            "traceback": "".join(
+                                traceback.format_exception(
+                                    type(exc),
+                                    exc,
+                                    exc.__traceback__,
+                                )
+                            ),
+                        }
+                    )
                 done_count += 1
                 elapsed = time.monotonic() - eval_start
                 per_ep = elapsed / done_count
@@ -934,6 +1228,20 @@ def _run_heldout_eval(
                 )
         except TimeoutError:
             timed_out_episodes = [idx for future, idx in future_to_idx.items() if not future.done()]
+            failure_records.extend(
+                {
+                    "episode_index": tasks[idx].episode_index,
+                    "seed": tasks[idx].seed,
+                    "status": "timed_out",
+                    "timed_out": True,
+                    "error_type": "TimeoutError",
+                    "error_repr": (
+                        "Eval episode exceeded the total held-out evaluation timeout "
+                        "window and was canceled."
+                    ),
+                }
+                for idx in timed_out_episodes
+            )
             for future in future_to_idx:
                 future.cancel()
             logger.warning(
@@ -969,15 +1277,20 @@ def _run_heldout_eval(
     total = len(scorable)
     summary = {
         "episodes_attempted": total_tasks,
+        "episodes_completed": len(completed),
+        "episodes_scorable": total,
         "episodes": total,
         "failed": failed,
         "timed_out": len(timed_out_episodes),
         "metrics_unavailable": metrics_unavailable,
         "successes": successes,
         "success_rate": (successes / total) if total else 0.0,
+        "completion_rate": (len(completed) / total_tasks) if total_tasks else 0.0,
+        "attempted_success_rate": (successes / total_tasks) if total_tasks else 0.0,
         "correct": correct,
         "accuracy": (correct / total) if total else 0.0,
         "temperature_eval": config.eval_protocol.temperature_eval,
+        "failure_records": failure_records,
     }
     return (completed, summary)
 
@@ -1258,14 +1571,15 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                 training_rows: list[EpisodeRawMetrics] = []
                 training_usage = _summarize_task_usage_rows([], metrics_unavailable_episodes=0)
                 training_logging_summary = LoggingSummary()
-                reflection_tokens: int | None = 0
-                reflection_cost: float | None = 0.0
+                reflection_usage = _empty_reflection_usage_summary()
+                validation_audit_payload: dict[str, Any] | None = None
                 baseline_eval_results: list[GEMEpisodeResult] = []
                 eval_results: list[GEMEpisodeResult] = []
                 try:
                     # --- Phase 1: GEPA optimization (skip if already done) ---
                     prior_status = _replication_status(replication_dir)
                     prompt_path = replication_dir / "optimized_prompt.txt"
+                    validation_audit_path = replication_dir / "validation_audit.json"
                     resumed_from_gepa_done = prior_status == "gepa_done" and prompt_path.exists()
 
                     if resumed_from_gepa_done:
@@ -1276,6 +1590,7 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                             replication_seed,
                         )
                         result = _load_gepa_result(prior_metadata)
+                        validation_audit_payload = _load_json_dict(validation_audit_path)
                         training_rows = _load_training_metrics_rows(replication_dir)
                         training_usage = _summarize_task_usage_rows(
                             training_rows,
@@ -1319,19 +1634,40 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                                     )
                                 )
 
-                            saved_reflection_tokens = saved_gepa_phase.get("reflection_tokens")
-                            saved_reflection_cost = saved_gepa_phase.get("reflection_cost")
-                            reflection_tokens = (
-                                int(saved_reflection_tokens)
-                                if isinstance(saved_reflection_tokens, int | float)
-                                else None
-                            )
-                            reflection_cost = (
-                                float(saved_reflection_cost)
-                                if isinstance(saved_reflection_cost, int | float)
-                                else None
-                            )
-                            if reflection_tokens is None or reflection_cost is None:
+                            saved_reflection_usage = saved_gepa_phase.get("reflection_usage")
+                            if isinstance(saved_reflection_usage, dict):
+                                reflection_usage = _coerce_reflection_usage_summary(
+                                    saved_reflection_usage
+                                )
+                            else:
+                                saved_reflection_tokens = saved_gepa_phase.get("reflection_tokens")
+                                saved_reflection_cost = saved_gepa_phase.get("reflection_cost")
+                                if isinstance(saved_reflection_tokens, int | float):
+                                    reflection_usage["total_tokens"] = int(saved_reflection_tokens)
+                                    reflection_usage["known_total_tokens"] = int(
+                                        saved_reflection_tokens
+                                    )
+                                else:
+                                    reflection_usage["total_tokens"] = None
+                                    reflection_usage["token_data_coverage"] = 0.0
+                                if isinstance(saved_reflection_cost, int | float):
+                                    reflection_usage["total_cost_usd"] = float(
+                                        saved_reflection_cost
+                                    )
+                                    reflection_usage["known_cost_usd"] = float(
+                                        saved_reflection_cost
+                                    )
+                                else:
+                                    reflection_usage["total_cost_usd"] = None
+                                    reflection_usage["cost_data_coverage"] = 0.0
+                            if (
+                                saved_reflection_usage is None
+                                and saved_gepa_phase.get("reflection_tokens") is None
+                                and saved_gepa_phase.get("reflection_cost") is None
+                            ) or (
+                                reflection_usage["total_tokens"] is None
+                                or reflection_usage["total_cost_usd"] is None
+                            ):
                                 resume_phase_events.append(
                                     LoggingEvent(
                                         stage="resume",
@@ -1357,8 +1693,14 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                                     )
                                 ],
                             )
-                            reflection_tokens = None
-                            reflection_cost = None
+                            reflection_usage = {
+                                "total_tokens": None,
+                                "known_total_tokens": 0,
+                                "token_data_coverage": 0.0,
+                                "total_cost_usd": None,
+                                "known_cost_usd": 0.0,
+                                "cost_data_coverage": 0.0,
+                            }
 
                         if resume_phase_events:
                             training_logging_summary = _merge_logging_summaries(
@@ -1411,8 +1753,12 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                         ]
                         training_usage = _summarize_task_usage(training_results)
                         training_logging_summary = _results_logging_summary(training_results)
-                        reflection_tokens, reflection_cost = _extract_reflection_usage(
-                            reflection_lm
+                        reflection_usage = _coerce_reflection_usage_summary(
+                            _extract_reflection_usage(reflection_lm)
+                        )
+                        validation_audit_payload = _build_validation_audit_from_detailed(
+                            optimized_module,
+                            episodes=config.environment.effective_val_size,
                         )
                         _write_csv(
                             replication_dir / "training_metrics.csv",
@@ -1433,12 +1779,9 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                         metadata["gepa_phase_summary"] = {
                             "training_usage": training_usage,
                             "logging_summary": training_logging_summary.model_dump(mode="json"),
-                            "reflection_tokens": reflection_tokens,
-                            "reflection_cost": (
-                                round(reflection_cost, _COST_DECIMAL_PLACES)
-                                if isinstance(reflection_cost, int | float)
-                                else None
-                            ),
+                            "reflection_usage": reflection_usage,
+                            "reflection_tokens": reflection_usage["total_tokens"],
+                            "reflection_cost": reflection_usage["total_cost_usd"],
                         }
                         _write_json(replication_dir / "run_metadata.json", metadata)
                         try:
@@ -1453,6 +1796,21 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                                 "update_experiment_run(gepa_done) failed",
                                 exc_info=True,
                             )
+                            training_logging_summary = _append_logging_summary_event(
+                                training_logging_summary,
+                                LoggingEvent(
+                                    stage="publish",
+                                    kind="experiment_run_update_failed",
+                                    message=(
+                                        "Failed to mark the experiment_run record as gepa_done; "
+                                        "local artifacts are still canonical."
+                                    ),
+                                ),
+                            )
+                            metadata["gepa_phase_summary"]["logging_summary"] = (
+                                training_logging_summary.model_dump(mode="json")
+                            )
+                            _write_json(replication_dir / "run_metadata.json", metadata)
                         logger.info(
                             "Saved GEPA artifacts model=%s seed=%s",
                             task_model.name,
@@ -1476,25 +1834,57 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
 
                     # --- Phase 2: Held-out evaluation ---
                     logger.info("Running baseline eval with seed prompt...")
-                    baseline_eval_results, baseline_eval_summary = _run_heldout_eval(
+                    baseline_eval_results, baseline_eval_summary_raw = _run_heldout_eval(
                         config=config,
                         task_model_id=model_id,
                         instructions=seed_prompt,
                         experiment_run_id=exp_run_id,
                     )
+                    baseline_eval_summary, baseline_eval_failures = _split_eval_summary_artifacts(
+                        baseline_eval_summary_raw
+                    )
 
                     logger.info("Running optimized eval...")
-                    eval_results, eval_summary = _run_heldout_eval(
+                    eval_results, eval_summary_raw = _run_heldout_eval(
                         config=config,
                         task_model_id=model_id,
                         instructions=optimized_prompt,
                         experiment_run_id=exp_run_id,
                     )
+                    eval_summary, optimized_eval_failures = _split_eval_summary_artifacts(
+                        eval_summary_raw
+                    )
 
                     heldout_results = baseline_eval_results + eval_results
+                    eval_failure_manifest_name = "eval_failure_manifest.jsonl"
+                    eval_failure_records = [
+                        {"phase": "baseline", **record} for record in baseline_eval_failures
+                    ] + [{"phase": "optimized", **record} for record in optimized_eval_failures]
+                    _write_jsonl_records(
+                        replication_dir / eval_failure_manifest_name,
+                        eval_failure_records,
+                    )
                     heldout_logging_summary = _results_logging_summary(heldout_results)
+                    eval_failure_logging_summary = _merge_logging_summaries(
+                        [
+                            _build_eval_failure_logging_summary(
+                                phase="baseline",
+                                failure_records=baseline_eval_failures,
+                                manifest_name=eval_failure_manifest_name,
+                            ),
+                            _build_eval_failure_logging_summary(
+                                phase="optimized",
+                                failure_records=optimized_eval_failures,
+                                manifest_name=eval_failure_manifest_name,
+                            ),
+                        ]
+                    )
                     logging_summary = _merge_logging_summaries(
-                        [training_logging_summary, heldout_logging_summary]
+                        [
+                            training_logging_summary,
+                            heldout_logging_summary,
+                            eval_failure_logging_summary,
+                        ]
                     )
                     val_total = config.environment.effective_val_size
                     baseline_validation_summary: dict[str, Any] | None = None
@@ -1508,6 +1898,18 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                             accuracy=result.final_accuracy,
                             episodes=val_total,
                         )
+                    if validation_audit_payload is None:
+                        validation_audit_source = (
+                            "resume_saved_result"
+                            if resumed_from_gepa_done
+                            else "result_summary_only"
+                        )
+                        validation_audit_payload = _build_validation_audit_from_result(
+                            result,
+                            episodes=val_total,
+                            source=validation_audit_source,
+                        )
+                    _write_json(validation_audit_path, validation_audit_payload)
                     heldout_rows = [
                         result.raw_metrics
                         for result in heldout_results
@@ -1522,8 +1924,17 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                             "baseline_eval": _raw_metrics_summary_for_results(
                                 baseline_eval_results
                             ),
+                            "baseline_eval_denominators": baseline_eval_summary,
                             "optimized_eval": _raw_metrics_summary_for_results(eval_results),
+                            "optimized_eval_denominators": eval_summary,
                             "heldout_total": _raw_metrics_summary_for_results(heldout_results),
+                            "heldout_total_denominators": _merge_eval_outcome_summaries(
+                                [baseline_eval_summary, eval_summary]
+                            ),
+                            "eval_failure_manifest": {
+                                "path": eval_failure_manifest_name,
+                                "count": len(eval_failure_records),
+                            },
                         },
                     )
 
@@ -1547,17 +1958,27 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                         if isinstance(task_cost_known_value, int | float)
                         else 0.0
                     )
+                    reflection_tokens = reflection_usage["total_tokens"]
+                    reflection_tokens_known_value = reflection_usage["known_total_tokens"]
+                    reflection_tokens_known = (
+                        int(reflection_tokens_known_value)
+                        if isinstance(reflection_tokens_known_value, int | float)
+                        else 0
+                    )
+                    reflection_cost = reflection_usage["total_cost_usd"]
+                    reflection_cost_known_value = reflection_usage["known_cost_usd"]
+                    reflection_cost_known = (
+                        float(reflection_cost_known_value)
+                        if isinstance(reflection_cost_known_value, int | float)
+                        else 0.0
+                    )
                     total_tokens = (
                         int(task_tokens) + reflection_tokens
                         if isinstance(task_tokens, int) and isinstance(reflection_tokens, int)
                         else None
                     )
-                    total_tokens_known = task_tokens_known + (
-                        reflection_tokens if isinstance(reflection_tokens, int) else 0
-                    )
-                    total_cost_known = task_cost_known + (
-                        reflection_cost if isinstance(reflection_cost, int | float) else 0.0
-                    )
+                    total_tokens_known = task_tokens_known + reflection_tokens_known
+                    total_cost_known = task_cost_known + reflection_cost_known
                     total_cost = (
                         round(total_cost_known, _COST_DECIMAL_PLACES)
                         if isinstance(task_cost, int | float)
@@ -1583,11 +2004,11 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                         "task_model_cost_known": round(task_cost_known, _COST_DECIMAL_PLACES),
                         "task_model_cost_data_coverage": task_usage["cost_data_coverage"],
                         "reflection_tokens": reflection_tokens,
-                        "reflection_cost": (
-                            round(reflection_cost, _COST_DECIMAL_PLACES)
-                            if isinstance(reflection_cost, int | float)
-                            else None
-                        ),
+                        "reflection_tokens_known": reflection_tokens_known,
+                        "reflection_token_data_coverage": reflection_usage["token_data_coverage"],
+                        "reflection_cost": reflection_cost,
+                        "reflection_cost_known": round(reflection_cost_known, _COST_DECIMAL_PLACES),
+                        "reflection_cost_data_coverage": reflection_usage["cost_data_coverage"],
                         "total_tokens": total_tokens,
                         "total_tokens_known": total_tokens_known,
                         "total_cost": total_cost,
@@ -1671,6 +2092,44 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                             )
 
                     finished = _utc_now()
+                    run_report_payload: dict[str, Any] | None = None
+                    try:
+                        run_report = build_run_report(
+                            experiment_run_id=exp_run_id,
+                            db_path=_DB_PATH,
+                            cost_summary=cost_summary,
+                            baseline_validation_summary=baseline_validation_summary,
+                            optimized_validation_summary=optimized_validation_summary,
+                            baseline_eval_summary=baseline_eval_summary,
+                            eval_summary=eval_summary,
+                            wall_clock_seconds=round((finished - started_at).total_seconds(), 3),
+                            reference_prices=settings.cost_normalization.reference_prices,
+                            prompt_token_ratio=settings.cost_normalization.prompt_token_ratio,
+                            logging_summary=logging_summary.model_dump(mode="json"),
+                        )
+                        run_report_payload = cast(
+                            dict[str, Any],
+                            json.loads(run_report.model_dump_json()),
+                        )
+                        _write_json(replication_dir / "run_report.json", run_report_payload)
+                    except Exception:  # noqa: BLE001
+                        logger.warning(
+                            "Failed to generate run report for %s",
+                            exp_run_id,
+                            exc_info=True,
+                        )
+                        logging_summary = _append_logging_summary_event(
+                            logging_summary,
+                            LoggingEvent(
+                                stage="publish",
+                                kind="run_report_failed",
+                                message=(
+                                    "Failed to generate run_report.json; run_metadata.json "
+                                    "and cost_summary.json remain canonical."
+                                ),
+                            ),
+                        )
+
                     metadata["logging_summary"] = logging_summary.model_dump(mode="json")
                     metadata.update(
                         {
@@ -1704,32 +2163,22 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                             "update_experiment_run(completed) failed",
                             exc_info=True,
                         )
-
-                    # Generate unified run report.
-                    try:
-                        run_report = build_run_report(
-                            experiment_run_id=exp_run_id,
-                            db_path=_DB_PATH,
-                            cost_summary=cost_summary,
-                            baseline_validation_summary=baseline_validation_summary,
-                            optimized_validation_summary=optimized_validation_summary,
-                            baseline_eval_summary=baseline_eval_summary,
-                            eval_summary=eval_summary,
-                            wall_clock_seconds=round((finished - started_at).total_seconds(), 3),
-                            reference_prices=settings.cost_normalization.reference_prices,
-                            prompt_token_ratio=settings.cost_normalization.prompt_token_ratio,
-                            logging_summary=logging_summary.model_dump(mode="json"),
+                        logging_summary = _append_logging_summary_event(
+                            logging_summary,
+                            LoggingEvent(
+                                stage="publish",
+                                kind="experiment_run_update_failed",
+                                message=(
+                                    "Failed to update the experiment_run record to completed; "
+                                    "local result artifacts remain canonical."
+                                ),
+                            ),
                         )
-                        _write_json(
-                            replication_dir / "run_report.json",
-                            json.loads(run_report.model_dump_json()),
-                        )
-                    except Exception:  # noqa: BLE001
-                        logger.warning(
-                            "Failed to generate run report for %s",
-                            exp_run_id,
-                            exc_info=True,
-                        )
+                        metadata["logging_summary"] = logging_summary.model_dump(mode="json")
+                        _write_json(replication_dir / "run_metadata.json", metadata)
+                        if run_report_payload is not None:
+                            run_report_payload["logging_summary"] = metadata["logging_summary"]
+                            _write_json(replication_dir / "run_report.json", run_report_payload)
 
                     model_entries[str(replication_seed)] = {
                         "status": "completed",
@@ -1773,6 +2222,8 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                     eval_acc = eval_summary["accuracy"]
                     eval_correct = eval_summary["correct"]
                     eval_total = eval_summary["episodes"]
+                    baseline_eval_details = _format_eval_detail_line(baseline_eval_summary)
+                    eval_details = _format_eval_detail_line(eval_summary)
                     total_cost_display = (
                         f"${total_cost:.4f}"
                         if isinstance(total_cost, int | float)
@@ -1789,8 +2240,10 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                         f"{validation_lines}"
                         f"  Test/eval: Baseline accuracy:  {bl_eval_acc:.1%} "
                         f"({bl_eval_correct}/{bl_eval_total}) ({eval_bench})\n"
+                        f"  Test/eval details:  Baseline {baseline_eval_details}\n"
                         f"  Test/eval: Optimized accuracy: {eval_acc:.1%} "
                         f"({eval_correct}/{eval_total}) ({eval_bench})\n"
+                        f"  Test/eval details:  Optimized {eval_details}\n"
                         f"  Total cost:         {total_cost_display}\n"
                         f"  Total tokens:       {total_tokens_display}\n"
                         f"  Elapsed:            {(finished - started_at).total_seconds():.1f}s\n"
@@ -1799,10 +2252,62 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                     )
                 except Exception as exc:
                     finished = _utc_now()
+                    salvage_events: list[LoggingEvent] = []
+                    if not training_results and getattr(runner, "episode_history", ()):
+                        try:
+                            training_results = _persist_training_trajectories(
+                                list(runner.episode_history),
+                                experiment_run_id=exp_run_id,
+                            )
+                            training_rows = [
+                                episode.raw_metrics
+                                for episode in training_results
+                                if episode.raw_metrics is not None
+                            ]
+                            if training_rows:
+                                _write_csv(replication_dir / "training_metrics.csv", training_rows)
+                                _write_jsonl(
+                                    replication_dir / "training_metrics.jsonl",
+                                    training_rows,
+                                )
+                                _write_json(
+                                    replication_dir / "training_metrics_summary.json",
+                                    _raw_metrics_summary_for_results(training_results),
+                                )
+                            training_logging_summary = _merge_logging_summaries(
+                                [
+                                    training_logging_summary,
+                                    _results_logging_summary(training_results),
+                                ]
+                            )
+                            salvage_events.append(
+                                LoggingEvent(
+                                    stage="gepa",
+                                    kind="training_trajectories_salvaged",
+                                    message=(
+                                        "Persisted partial GEPA training trajectories after a "
+                                        "replication failure for postmortem analysis."
+                                    ),
+                                )
+                            )
+                        except Exception as salvage_exc:  # noqa: BLE001
+                            salvage_events.append(
+                                LoggingEvent(
+                                    stage="gepa",
+                                    kind="training_trajectory_salvage_failed",
+                                    message=(
+                                        "Failed to salvage partial GEPA training trajectories "
+                                        f"after replication failure: {salvage_exc!r}"
+                                    ),
+                                )
+                            )
                     partial_logging_summary = _merge_logging_summaries(
                         [
                             training_logging_summary,
                             _results_logging_summary(baseline_eval_results + eval_results),
+                            LoggingSummary(status="partial", events=salvage_events)
+                            if salvage_events
+                            else LoggingSummary(),
                         ]
                     )
                     metadata.update(
@@ -1829,6 +2334,21 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                             "update_experiment_run(failed) failed",
                             exc_info=True,
                         )
+                        partial_logging_summary = _append_logging_summary_event(
+                            partial_logging_summary,
+                            LoggingEvent(
+                                stage="publish",
+                                kind="experiment_run_update_failed",
+                                message=(
+                                    "Failed to update the experiment_run record with failed "
+                                    "status; local run_metadata.json remains canonical."
+                                ),
+                            ),
+                        )
+                        metadata["logging_summary"] = partial_logging_summary.model_dump(
+                            mode="json"
+                        )
+                        _write_json(replication_dir / "run_metadata.json", metadata)
                     model_entries[str(replication_seed)] = {
                         "status": "failed",
                         "experiment_run_id": exp_run_id,

@@ -230,7 +230,12 @@ class TestRunReportModel:
             "task_model_cost": None,
             "task_model_cost_known": 0.01,
             "task_model_cost_data_coverage": 0.5,
-            "reflection_cost": 0.005,
+            "reflection_tokens": None,
+            "reflection_tokens_known": 200,
+            "reflection_token_data_coverage": 0.5,
+            "reflection_cost": None,
+            "reflection_cost_known": 0.005,
+            "reflection_cost_data_coverage": 0.5,
             "total_tokens": None,
             "total_tokens_known": 1200,
             "total_cost": None,
@@ -254,6 +259,10 @@ class TestRunReportModel:
         assert report.cost_type == "partial"
         assert report.total_cost_usd is None
         assert report.total_cost_known_usd == pytest.approx(0.015)
+        assert report.reflection_tokens is None
+        assert report.reflection_tokens_known == 200
+        assert report.reflection_cost_usd is None
+        assert report.reflection_cost_known_usd == pytest.approx(0.005)
         assert report.logging_summary == logging_summary
         assert report.normalized_cost_usd is None
 

@@ -285,10 +285,9 @@ def generate_smoke_action(
                 action = action[len(prefix) :].strip()
                 break
 
-    usage = getattr(response, "usage", None)
-    prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
-    completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
-    total_tokens = int(getattr(usage, "total_tokens", 0) or (prompt_tokens + completion_tokens))
+    prompt_tokens, completion_tokens, total_tokens, token_usage_known = (
+        _extract_token_usage_metadata(response)
+    )
 
     cost_usd, cost_type = _extract_llm_cost(model_id, response)
 
@@ -297,6 +296,7 @@ def generate_smoke_action(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=total_tokens,
+        token_usage_known=token_usage_known,
         cost_usd=cost_usd,
         cost_type=cost_type,
         latency_ms=latency_ms,
@@ -367,6 +367,22 @@ def _extract_llm_cost(model_id: str, response: Any) -> tuple[float | None, LLMCo
         return (float(maybe_cost), "actual")
     except Exception:  # noqa: BLE001  # LiteLLM raises bare Exception for unmapped models
         return (None, "unavailable")
+
+
+def _extract_token_usage_metadata(response: Any) -> tuple[int, int, int, bool]:
+    """Extract faithful token totals from a LiteLLM response."""
+    usage = getattr(response, "usage", None)
+    prompt_raw = getattr(usage, "prompt_tokens", None) if usage is not None else None
+    completion_raw = getattr(usage, "completion_tokens", None) if usage is not None else None
+    total_raw = getattr(usage, "total_tokens", None) if usage is not None else None
+
+    prompt_tokens = int(prompt_raw or 0)
+    completion_tokens = int(completion_raw or 0)
+    if total_raw is not None:
+        return (prompt_tokens, completion_tokens, int(total_raw), True)
+    if prompt_raw is not None and completion_raw is not None:
+        return (prompt_tokens, completion_tokens, prompt_tokens + completion_tokens, True)
+    return (0, 0, 0, False)
 
 
 def _make_logging_event(
@@ -916,13 +932,24 @@ class GEMEpisodeRunner:
                     arguments = {}
                 native_tool_calls.append({"tool": name, "arguments": arguments})
 
-        usage = getattr(response, "usage", None)
-        prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
-        completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
-        total_tokens = int(getattr(usage, "total_tokens", 0) or (prompt_tokens + completion_tokens))
+        prompt_tokens, completion_tokens, total_tokens, token_usage_known = (
+            _extract_token_usage_metadata(response)
+        )
 
         cost_usd, cost_type = _extract_llm_cost(self._model_id, response)
 
+        if not token_usage_known:
+            logging_events.append(
+                _make_logging_event(
+                    stage="llm_call",
+                    kind="usage_missing",
+                    field="usage",
+                    message=(
+                        "LiteLLM response did not include complete token usage; "
+                        "token totals remain unknown for this call."
+                    ),
+                )
+            )
         if _is_non_finite_number(latency_ms):
             logging_events.append(
                 _make_logging_event(
@@ -952,6 +979,7 @@ class GEMEpisodeRunner:
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
+            token_usage_known=token_usage_known,
             cost_usd=cost_usd,
             cost_type=cost_type,
             latency_ms=latency_ms,
