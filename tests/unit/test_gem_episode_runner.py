@@ -143,6 +143,32 @@ def test_generate_smoke_action_keeps_ollama_cost_unavailable_when_litellm_return
     assert llm_call.cost_type == "unavailable"
 
 
+def test_generate_smoke_action_marks_missing_usage_unknown(monkeypatch):
+    response = SimpleNamespace(
+        choices=[
+            SimpleNamespace(message=SimpleNamespace(content="\\boxed{4}", reasoning_content=None))
+        ]
+    )
+    monkeypatch.setattr(
+        "trajectory_aware_gym.adapters.gem_episode_runner.completion",
+        lambda **kwargs: response,
+    )
+    monkeypatch.setattr(
+        "trajectory_aware_gym.adapters.gem_episode_runner.completion_cost",
+        lambda *, completion_response: 0.01,
+    )
+
+    action, llm_call = generate_smoke_action(
+        model_id="ollama/qwen3-1.7b-base",
+        messages=[{"role": "user", "content": "Solve 2 + 2"}],
+        temperature=0.0,
+    )
+
+    assert action == "\\boxed{4}"
+    assert llm_call.token_usage_known is False
+    assert llm_call.total_tokens == 0
+
+
 def test_run_episode_executes_tool_call_before_final_action(monkeypatch):
     class FakeEnv:
         def reset(self, **kwargs):
@@ -309,6 +335,60 @@ def test_run_episode_sanitizes_non_finite_completion_cost(monkeypatch):
     assert result.logging_summary.numeric_anomaly_count == 1
     assert result.logging_summary.status == "partial"
     assert any(event.kind == "numeric_sanitized" for event in result.logging_summary.events)
+
+
+def test_run_episode_marks_missing_usage_unknown(monkeypatch):
+    class FakeEnv:
+        def reset(self, **kwargs):
+            return "Solve 2 + 2", {}
+
+        def step(self, action: str):
+            assert action == "\\boxed{4}"
+            return "Correct", 1.0, True, False, {"correct": True}
+
+        def close(self):
+            return None
+
+    response = SimpleNamespace(
+        choices=[
+            SimpleNamespace(message=SimpleNamespace(content="\\boxed{4}", reasoning_content=None))
+        ]
+    )
+
+    monkeypatch.setattr(
+        "trajectory_aware_gym.adapters.gem_episode_runner.make_env",
+        _fake_make_env_factory(FakeEnv()),
+    )
+    monkeypatch.setattr(
+        "trajectory_aware_gym.adapters.gem_episode_runner.completion",
+        lambda **kwargs: response,
+    )
+    monkeypatch.setattr(
+        "trajectory_aware_gym.adapters.gem_episode_runner.completion_cost",
+        lambda *, completion_response: 0.0123,
+    )
+    monkeypatch.setattr(
+        "trajectory_aware_gym.adapters.gem_episode_runner.settings.validate_aws",
+        lambda: None,
+    )
+
+    runner = GEMEpisodeRunner(
+        environment_id="math:Orz57K",
+        model_id="bedrock/us.meta.llama3-2-1b-instruct-v1:0",
+        temperature=0.0,
+        max_steps=1,
+    )
+
+    result = runner.run_episode("Solve carefully.", persist=False)
+
+    assert result.trajectory is not None
+    llm_call = result.trajectory.steps[0].llm_calls[0]
+    assert llm_call.token_usage_known is False
+    assert result.raw_metrics is not None
+    assert result.raw_metrics.total_tokens is None
+    assert result.raw_metrics.token_data_coverage == 0.0
+    assert result.logging_summary.status == "partial"
+    assert any(event.kind == "usage_missing" for event in result.logging_summary.events)
 
 
 def test_run_episode_save_failure_is_non_fatal(monkeypatch):

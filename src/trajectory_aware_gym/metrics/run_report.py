@@ -45,11 +45,16 @@ class RunReport(BaseModel):
     # Cost — actual (Bedrock) or unavailable (Ollama)
     total_tokens: int | None = None
     total_tokens_known: int | None = None
+    reflection_tokens: int | None = None
+    reflection_tokens_known: int | None = None
+    reflection_token_data_coverage: float | None = None
     task_model_cost_usd: float | None = None
     task_model_cost_known_usd: float | None = None
     task_model_token_data_coverage: float | None = None
     task_model_cost_data_coverage: float | None = None
     reflection_cost_usd: float | None = None
+    reflection_cost_known_usd: float | None = None
+    reflection_cost_data_coverage: float | None = None
     total_cost_usd: float | None = None
     total_cost_known_usd: float | None = None
     cost_type: RunReportCostType | None = None
@@ -82,25 +87,36 @@ def build_run_report(
     reference_prices: dict[str, dict[str, float]] | None = None,
     prompt_token_ratio: float | None = None,
     logging_summary: dict[str, Any] | None = None,
+    finished_at: str | None = None,
 ) -> RunReport:
     """Assemble a RunReport from DB record + caller-provided summaries.
 
     The caller passes ``cost_summary``, ``eval_summary``, etc. because
     these are already computed in the runner and do not need to be
-    re-derived from raw episode data.
+    re-derived from raw episode data. ``finished_at`` may be provided by
+    the runner so the report can reflect completion even before the DB row
+    is updated from ``running`` to ``completed``.
     """
     run = load_experiment_run(db_path, experiment_run_id)
 
     task_model_cost = cost_summary.get("task_model_cost")
     task_model_cost_known = cost_summary.get("task_model_cost_known", task_model_cost)
     reflection_cost = cost_summary.get("reflection_cost")
+    reflection_cost_known = cost_summary.get("reflection_cost_known", reflection_cost)
     total_cost = cost_summary.get("total_cost")
     total_cost_known = cost_summary.get("total_cost_known", total_cost)
     total_tokens = cost_summary.get("total_tokens")
     total_tokens_known = cost_summary.get("total_tokens_known", total_tokens)
     task_tokens = cost_summary.get("task_model_tokens")
+    reflection_tokens = cost_summary.get("reflection_tokens")
+    reflection_tokens_known = cost_summary.get(
+        "reflection_tokens_known",
+        reflection_tokens,
+    )
     task_token_coverage = cost_summary.get("task_model_token_data_coverage")
     task_cost_coverage = cost_summary.get("task_model_cost_data_coverage")
+    reflection_token_coverage = cost_summary.get("reflection_token_data_coverage")
+    reflection_cost_coverage = cost_summary.get("reflection_cost_data_coverage")
 
     # Determine cost type and compute normalized cost for Ollama models.
     raw_cost_type = cost_summary.get("cost_type")
@@ -170,11 +186,16 @@ def build_run_report(
         eval_summary=eval_summary,
         total_tokens=total_tokens,
         total_tokens_known=total_tokens_known,
+        reflection_tokens=reflection_tokens,
+        reflection_tokens_known=reflection_tokens_known,
+        reflection_token_data_coverage=reflection_token_coverage,
         task_model_cost_usd=task_model_cost,
         task_model_cost_known_usd=task_model_cost_known,
         task_model_token_data_coverage=task_token_coverage,
         task_model_cost_data_coverage=task_cost_coverage,
         reflection_cost_usd=reflection_cost,
+        reflection_cost_known_usd=reflection_cost_known,
+        reflection_cost_data_coverage=reflection_cost_coverage,
         total_cost_usd=total_cost,
         total_cost_known_usd=total_cost_known,
         cost_type=cost_type,
@@ -184,7 +205,11 @@ def build_run_report(
         mean_llm_latency_ms=mean_latency,
         git_commit=run.git_commit,
         started_at=run.started_at.isoformat() if run.started_at else None,
-        finished_at=run.finished_at.isoformat() if run.finished_at else None,
+        finished_at=finished_at
+        if finished_at is not None
+        else run.finished_at.isoformat()
+        if run.finished_at
+        else None,
         logging_summary=(
             logging_summary
             if logging_summary is not None

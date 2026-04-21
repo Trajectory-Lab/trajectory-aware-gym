@@ -127,6 +127,26 @@ def parse_args() -> argparse.Namespace:
             "errors do not silently bias aggregate results across seeds."
         ),
     )
+    parser.add_argument(
+        "--inference-semaphore-size",
+        type=int,
+        default=None,
+        help=(
+            "Cap concurrent LLM requests across the whole run. Overrides "
+            "retry.inference_semaphore_size. Lower this on laptops (e.g. 16) "
+            "to avoid memory pressure and OOM crashes."
+        ),
+    )
+    parser.add_argument(
+        "--max-eval-workers",
+        type=int,
+        default=None,
+        help=(
+            "Cap ThreadPoolExecutor workers for held-out eval. Overrides "
+            "eval_protocol.max_eval_workers. Pair with --inference-semaphore-size "
+            "on laptops."
+        ),
+    )
     parser.set_defaults(fail_fast=True)
     return parser.parse_args()
 
@@ -172,6 +192,8 @@ def main() -> None:
             results_root=args.results_root,
             halt_on_budget_exceeded=args.halt_on_budget_exceeded,
             fail_fast=args.fail_fast,
+            inference_semaphore_size=args.inference_semaphore_size,
+            max_eval_workers=args.max_eval_workers,
         )
     )
 

@@ -31,6 +31,7 @@ DSPy integration example::
     trajectory_log = logger.build_log()
 
 Schema version history:
+    1.4.0 - add explicit token_usage_known on llm_calls so missing usage stays unknown.
     1.1.0 - llm_call -> llm_calls (list) to support multiple LM forwards per env step (DSPy).
     1.0.0 - Initial schema with tool call tracking, LLM metadata, and cost aggregation.
 """
@@ -57,7 +58,7 @@ from trajectory_aware_gym.config import ProjectPaths
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = "1.3.0"
+SCHEMA_VERSION = "1.4.0"
 
 type EpisodeOutcome = Literal["success", "failure", "truncated"]
 type LLMCostType = Literal["actual", "estimated", "unavailable"]
@@ -99,6 +100,7 @@ class LLMCallMetadata(BaseModel):
     prompt_tokens: int = Field(ge=0)
     completion_tokens: int = Field(ge=0)
     total_tokens: int = Field(ge=0)
+    token_usage_known: bool = True
     cost_usd: float | None = None
     cost_type: LLMCostType | None = None
     latency_ms: float | None = None
@@ -438,6 +440,27 @@ def filter_trajectories(
 # ---------------------------------------------------------------------------
 
 
+def resolve_token_usage(
+    prompt_raw: Any,
+    completion_raw: Any,
+    total_raw: Any,
+) -> tuple[int, int, int, bool]:
+    """Canonical rule for turning raw LLM-usage fields into `(prompt, completion, total, known)`.
+
+    Prefers an explicit `total_raw`; otherwise falls back to `prompt + completion`
+    when both are present; otherwise marks usage as unknown with zero totals.
+    Shared by LiteLLM `response.usage` (attr-shaped) and DSPy tracker (dict-shaped)
+    call sites so the two code paths cannot drift.
+    """
+    prompt = int(prompt_raw or 0)
+    completion = int(completion_raw or 0)
+    if total_raw is not None:
+        return (prompt, completion, int(total_raw), True)
+    if prompt_raw is not None and completion_raw is not None:
+        return (prompt, completion, prompt + completion, True)
+    return (0, 0, 0, False)
+
+
 def extract_llm_calls_from_tracker(tracker: Any) -> list[LLMCallMetadata]:
     """Convert a ``dspy.track_usage()`` tracker into LLMCallMetadata entries.
 
@@ -455,14 +478,18 @@ def extract_llm_calls_from_tracker(tracker: Any) -> list[LLMCallMetadata]:
     calls: list[LLMCallMetadata] = []
     for model_id, usages in getattr(tracker, "usage_data", {}).items():
         for usage in usages:
-            prompt = usage.get("prompt_tokens", 0)
-            completion = usage.get("completion_tokens", 0)
+            prompt, completion, total_tokens, token_usage_known = resolve_token_usage(
+                usage.get("prompt_tokens"),
+                usage.get("completion_tokens"),
+                usage.get("total_tokens"),
+            )
             calls.append(
                 LLMCallMetadata(
                     model_id=model_id,
                     prompt_tokens=prompt,
                     completion_tokens=completion,
-                    total_tokens=prompt + completion,
+                    total_tokens=total_tokens,
+                    token_usage_known=token_usage_known,
                     cost_usd=usage.get("cost", None),
                 )
             )

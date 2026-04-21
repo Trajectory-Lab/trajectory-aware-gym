@@ -26,6 +26,7 @@ from trajectory_aware_gym.experiments.runner import (
     _extract_pareto_frontier,
     _extract_reflection_usage,
     _find_resumable_run,
+    _format_eval_detail_line,
     _is_replication_completed,
     _model_replication_dir,
     _persist_training_trajectories,
@@ -42,6 +43,7 @@ from trajectory_aware_gym.experiments.runner import (
 )
 from trajectory_aware_gym.metrics import EpisodeRawMetrics
 from trajectory_aware_gym.models.experiment import ExperimentConfig, FitnessOverride
+from trajectory_aware_gym.models.reflection_usage import ReflectionUsageSummary
 from trajectory_aware_gym.storage.models import EpisodeLoggingSummary
 
 QUICK_TEST_CONFIG = Path("experiments/quick-test/config.yaml")
@@ -149,6 +151,159 @@ def _make_training_trajectory(run_id: str, *, success: bool) -> TrajectoryLog:
 def _stub_train_and_valsets(monkeypatch: pytest.MonkeyPatch, runner_module: Any) -> None:
     monkeypatch.setattr(runner_module, "_build_trainset", lambda config: [SimpleNamespace()])
     monkeypatch.setattr(runner_module, "_build_valset", lambda config: [SimpleNamespace()])
+
+
+def _setup_gepa_done_resume_replication(
+    tmp_path: Path,
+    *,
+    config_hash: str,
+    experiment_run_id: str,
+    gepa_phase_summary: dict[str, Any] | None,
+    training_rows: list[EpisodeRawMetrics] | None = None,
+    run_timestamp: str = "20260101T000000Z",
+) -> Path:
+    # Derive config-dependent names from the on-disk quick-test config so a rename
+    # of the model or seed there does not require this helper to be updated.
+    config = ExperimentConfig.from_yaml(QUICK_TEST_CONFIG)
+    task_model = config.task_models[0]
+    seed = config.seeds.replication_seeds[0]
+    config_name = config.name
+
+    run_dir = tmp_path / config_name / run_timestamp
+    replication_dir = run_dir / task_model.name / f"replication_{seed}"
+    replication_dir.mkdir(parents=True)
+    (run_dir / "run_summary.json").write_text(
+        json.dumps(
+            {
+                "run_id": f"{config_name}-{run_timestamp}",
+                "config": config_name,
+                "config_hash": config_hash,
+                "started_at": "2026-01-01T00:00:00Z",
+                "finished_at": None,
+                "models": {task_model.name: {str(seed): {"status": "running"}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    if training_rows:
+        _write_jsonl(replication_dir / "training_metrics.jsonl", training_rows)
+
+    metadata = {
+        "status": "gepa_done",
+        "experiment_run_id": experiment_run_id,
+        "config_hash": config_hash,
+        "started_at": "2026-01-01T00:00:00Z",
+        "seed": seed,
+        "model_name": task_model.name,
+        "model_id": task_model.model_id,
+        "result": {
+            "baseline_fitness": 0.2,
+            "final_fitness": 0.9,
+            "baseline_accuracy": 0.0,
+            "final_accuracy": 1.0,
+            "best_program_index": 1,
+            "optimized_instructions": "optimized prompt",
+        },
+    }
+    if gepa_phase_summary is not None:
+        metadata["gepa_phase_summary"] = gepa_phase_summary
+
+    (replication_dir / "run_metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+    (replication_dir / "optimized_prompt.txt").write_text("optimized prompt", encoding="utf-8")
+    return replication_dir
+
+
+def _patch_gepa_done_resume_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    runner_module: Any,
+    *,
+    config: ExperimentConfig,
+    baseline_eval_results: list[GEMEpisodeResult],
+    eval_results: list[GEMEpisodeResult],
+) -> None:
+    from trajectory_aware_gym.metrics.run_report import RunReport
+
+    class ResumeRunner:
+        def __init__(self, **kwargs):
+            self.episode_history = ()
+
+    class FakeSolverModule:
+        def __init__(self, runner, default_instructions: str, **kwargs):
+            self.instructions = default_instructions
+
+    class ShouldNotCompileGEPA:
+        def __init__(self, **kwargs):
+            pass
+
+        def compile(self, student, trainset, valset):
+            raise AssertionError("GEPA compile should be skipped on gepa_done resume")
+
+    _stub_train_and_valsets(monkeypatch, runner_module)
+    monkeypatch.setattr(runner_module, "GEMEpisodeRunner", ResumeRunner)
+    monkeypatch.setattr(runner_module, "GEMSolverModule", FakeSolverModule)
+    monkeypatch.setattr(runner_module.dspy, "GEPA", ShouldNotCompileGEPA)
+    monkeypatch.setattr(runner_module.dspy, "configure", lambda **kwargs: None)
+    monkeypatch.setattr(runner_module, "_build_task_lm", lambda *a, **k: SimpleNamespace())
+    monkeypatch.setattr(runner_module, "get_reflection_lm", lambda *a, **k: SimpleNamespace())
+
+    def fake_eval(**kwargs):
+        if kwargs["instructions"] == config.seed_prompt:
+            return (
+                baseline_eval_results,
+                _default_eval_summary(
+                    episodes=len(baseline_eval_results),
+                    successes=sum(
+                        1
+                        for result in baseline_eval_results
+                        if result.raw_metrics is not None and result.raw_metrics.success
+                    ),
+                    correct=sum(
+                        1
+                        for result in baseline_eval_results
+                        if result.raw_metrics is not None and result.raw_metrics.success
+                    ),
+                ),
+            )
+        return (
+            eval_results,
+            _default_eval_summary(
+                episodes=len(eval_results),
+                successes=sum(
+                    1
+                    for result in eval_results
+                    if result.raw_metrics is not None and result.raw_metrics.success
+                ),
+                correct=sum(
+                    1
+                    for result in eval_results
+                    if result.raw_metrics is not None and result.raw_metrics.success
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(runner_module, "_run_heldout_eval", fake_eval)
+    monkeypatch.setattr(runner_module, "save_experiment_run", lambda *a, **k: None)
+    monkeypatch.setattr(runner_module, "update_experiment_run", lambda *a, **k: None)
+    task_model = config.task_models[0]
+    provider = task_model.model_id.split("/", 1)[0] if "/" in task_model.model_id else "unknown"
+    seed = config.seeds.replication_seeds[0]
+    monkeypatch.setattr(
+        runner_module,
+        "build_run_report",
+        lambda **kwargs: RunReport(
+            experiment_run_id=kwargs["experiment_run_id"],
+            config_name=config.name,
+            operator="tester",
+            provider=provider,
+            task_model_id=task_model.model_id,
+            environment_id=config.environment.gem_env_id,
+            seed=seed,
+            baseline_validation=kwargs["baseline_validation_summary"],
+            optimized_validation=kwargs["optimized_validation_summary"],
+            cost_type=str(kwargs["cost_summary"]["cost_type"]),
+            logging_summary=kwargs["logging_summary"],
+        ),
+    )
 
 
 def test_resolve_gepa_budget_kwargs_uses_auto_mode_by_default() -> None:
@@ -325,7 +480,12 @@ def test_run_experiment_writes_full_replication_artifacts(
     monkeypatch.setattr(
         runner_module,
         "_extract_reflection_usage",
-        lambda reflection_lm: (7, 0.07),
+        lambda reflection_lm: ReflectionUsageSummary(
+            total_tokens=7,
+            known_total_tokens=7,
+            total_cost_usd=0.07,
+            known_cost_usd=0.07,
+        ),
     )
     monkeypatch.setattr(
         runner_module,
@@ -355,6 +515,8 @@ def test_run_experiment_writes_full_replication_artifacts(
     assert (replication_dir / "raw_metrics.csv").exists()
     assert (replication_dir / "raw_metrics.jsonl").exists()
     assert (replication_dir / "raw_metrics_summary.json").exists()
+    assert (replication_dir / "validation_audit.json").exists()
+    assert (replication_dir / "eval_failure_manifest.jsonl").exists()
     assert (replication_dir / "gepa_logs").is_dir()
 
     cost_summary = json.loads((replication_dir / "cost_summary.json").read_text(encoding="utf-8"))
@@ -376,11 +538,13 @@ def test_run_experiment_writes_full_replication_artifacts(
         "episodes": 5,
         "correct": 0,
         "accuracy": 0.0,
+        "scorable": 0,
     }
     assert metadata["optimized_validation"] == {
         "episodes": 5,
         "correct": 5,
         "accuracy": 1.0,
+        "scorable": 0,
     }
     assert metadata["baseline_eval"]["accuracy"] == 1.0
     assert metadata["baseline_eval"]["episodes"] == 1
@@ -397,22 +561,36 @@ def test_run_experiment_writes_full_replication_artifacts(
     assert raw_summary["scope"] == "heldout_eval"
     assert raw_summary["baseline_eval"]["episodes"] == 1
     assert raw_summary["baseline_eval"]["successes"] == 1
+    assert raw_summary["baseline_eval_denominators"]["episodes_attempted"] == 1
     assert raw_summary["optimized_eval"]["episodes"] == 1
     assert raw_summary["optimized_eval"]["successes"] == 1
+    assert raw_summary["optimized_eval_denominators"]["episodes_completed"] == 1
     assert raw_summary["heldout_total"]["episodes"] == 2
     assert raw_summary["heldout_total"]["successes"] == 2
+    assert raw_summary["heldout_total_denominators"]["episodes_attempted"] == 2
+    assert raw_summary["eval_failure_manifest"]["count"] == 0
     assert raw_summary["heldout_total"]["mean_cost_data_coverage"] > 0
     assert raw_summary["heldout_total"]["mean_token_data_coverage"] > 0
+
+    validation_audit = json.loads(
+        (replication_dir / "validation_audit.json").read_text(encoding="utf-8")
+    )
+    assert validation_audit["source"] == "gepa_detailed_results"
+    assert validation_audit["episodes"] == 5
+    assert validation_audit["baseline"]["accuracy"] == pytest.approx(0.0)
+    assert validation_audit["optimized"]["accuracy"] == pytest.approx(1.0)
 
     assert summary["models"]["Qwen3-1.7B-Base"]["42"]["baseline_validation"] == {
         "episodes": 5,
         "correct": 0,
         "accuracy": 0.0,
+        "scorable": 0,
     }
     assert summary["models"]["Qwen3-1.7B-Base"]["42"]["optimized_validation"] == {
         "episodes": 5,
         "correct": 5,
         "accuracy": 1.0,
+        "scorable": 0,
     }
     assert summary["models"]["Qwen3-1.7B-Base"]["42"]["status"] == "completed"
 
@@ -568,81 +746,94 @@ def test_raw_metrics_summary_aggregates_correctly() -> None:
 # ── _extract_reflection_usage ──────────────────────────────────────────────
 
 
-def test_extract_reflection_usage_none_lm() -> None:
-    tokens, cost = _extract_reflection_usage(None)
-    assert tokens == 0
-    assert cost == 0.0
+_SENTINEL_RESPONSE = object()
 
 
-def test_extract_reflection_usage_no_history_attr() -> None:
-    lm = SimpleNamespace()  # no `history` attribute
-    tokens, cost = _extract_reflection_usage(lm)
-    assert tokens == 0
-    assert cost == 0.0
-
-
-def test_extract_reflection_usage_empty_history() -> None:
-    lm = SimpleNamespace(history=[])
-    tokens, cost = _extract_reflection_usage(lm)
-    assert tokens == 0
-    assert cost == 0.0
-
-
-def test_extract_reflection_usage_non_dict_entry_ignored() -> None:
-    lm = SimpleNamespace(history=["not a dict", 42, None])
-    tokens, cost = _extract_reflection_usage(lm)
-    assert tokens == 0
-    assert cost == 0.0
-
-
-def test_extract_reflection_usage_with_tokens_only() -> None:
-    history = [{"usage": {"total_tokens": 150}, "response": None}]
-    lm = SimpleNamespace(history=history)
-    tokens, cost = _extract_reflection_usage(lm)
-    assert tokens == 150
-    assert cost == 0.0
-
-
-def test_extract_reflection_usage_missing_usage_key() -> None:
-    history = [{"response": None}]
-    lm = SimpleNamespace(history=history)
-    tokens, cost = _extract_reflection_usage(lm)
-    assert tokens == 0
+@pytest.mark.parametrize(
+    (
+        "lm",
+        "expected_total_tokens",
+        "expected_known_total_tokens",
+        "expected_total_cost_usd",
+        "expected_known_cost_usd",
+        "expected_token_coverage",
+        "expected_cost_coverage",
+    ),
+    [
+        # (None LM, no-history attr, empty list, non-dict entries) all collapse to empty summary.
+        (None, 0, 0, 0.0, 0.0, 1.0, 1.0),
+        (SimpleNamespace(), 0, 0, 0.0, 0.0, 1.0, 1.0),
+        (SimpleNamespace(history=[]), 0, 0, 0.0, 0.0, 1.0, 1.0),
+        (SimpleNamespace(history=["not a dict", 42, None]), 0, 0, 0.0, 0.0, 1.0, 1.0),
+        # Tokens present but no response -> cost coverage 0, tokens fully known.
+        (
+            SimpleNamespace(history=[{"usage": {"total_tokens": 150}, "response": None}]),
+            150,
+            150,
+            None,
+            0.0,
+            1.0,
+            0.0,
+        ),
+        # Missing usage key -> tokens coverage 0, totals None.
+        (SimpleNamespace(history=[{"response": None}]), None, 0, None, 0.0, 0.0, 0.0),
+        # Multiple entries accumulate known totals.
+        (
+            SimpleNamespace(
+                history=[
+                    {"usage": {"total_tokens": 50}, "response": None},
+                    {"usage": {"total_tokens": 100}, "response": None},
+                ]
+            ),
+            150,
+            150,
+            None,
+            0.0,
+            1.0,
+            0.0,
+        ),
+    ],
+)
+def test_extract_reflection_usage_from_history(
+    lm: Any,
+    expected_total_tokens: int | None,
+    expected_known_total_tokens: int,
+    expected_total_cost_usd: float | None,
+    expected_known_cost_usd: float,
+    expected_token_coverage: float,
+    expected_cost_coverage: float,
+) -> None:
+    usage = _extract_reflection_usage(lm)
+    assert usage.total_tokens == expected_total_tokens
+    assert usage.known_total_tokens == expected_known_total_tokens
+    assert usage.total_cost_usd == expected_total_cost_usd
+    assert usage.known_cost_usd == pytest.approx(expected_known_cost_usd)
+    assert usage.token_data_coverage == pytest.approx(expected_token_coverage)
+    assert usage.cost_data_coverage == pytest.approx(expected_cost_coverage)
 
 
 def test_extract_reflection_usage_completion_cost_exception() -> None:
     """completion_cost raising an exception should be swallowed."""
-    history = [{"usage": {"total_tokens": 10}, "response": object()}]
-    lm = SimpleNamespace(history=history)
+    lm = SimpleNamespace(history=[{"usage": {"total_tokens": 10}, "response": _SENTINEL_RESPONSE}])
     with patch(
         "trajectory_aware_gym.experiments.runner.completion_cost",
         side_effect=ValueError("fail"),
     ):
-        tokens, cost = _extract_reflection_usage(lm)
-    assert tokens == 10
-    assert cost == 0.0
-
-
-def test_extract_reflection_usage_accumulates_multiple_entries() -> None:
-    history = [
-        {"usage": {"total_tokens": 50}, "response": None},
-        {"usage": {"total_tokens": 100}, "response": None},
-    ]
-    lm = SimpleNamespace(history=history)
-    tokens, cost = _extract_reflection_usage(lm)
-    assert tokens == 150
+        usage = _extract_reflection_usage(lm)
+    assert usage.total_tokens == 10
+    assert usage.total_cost_usd is None
+    assert usage.known_cost_usd == 0.0
 
 
 def test_extract_reflection_usage_adds_numeric_completion_cost() -> None:
-    history = [{"usage": {"total_tokens": 11}, "response": object()}]
-    lm = SimpleNamespace(history=history)
+    lm = SimpleNamespace(history=[{"usage": {"total_tokens": 11}, "response": _SENTINEL_RESPONSE}])
     with patch(
         "trajectory_aware_gym.experiments.runner.completion_cost",
         return_value=0.123,
     ):
-        tokens, cost = _extract_reflection_usage(lm)
-    assert tokens == 11
-    assert cost == pytest.approx(0.123)
+        usage = _extract_reflection_usage(lm)
+    assert usage.total_tokens == 11
+    assert usage.total_cost_usd == pytest.approx(0.123)
 
 
 # ── dataset/eval helpers ───────────────────────────────────────────────────
@@ -748,10 +939,14 @@ def test_run_heldout_eval_rollouts_and_summary(monkeypatch: pytest.MonkeyPatch) 
 
     assert len(results) == 4
     assert summary["episodes_attempted"] == 4
+    assert summary["episodes_completed"] == 4
+    assert summary["episodes_scorable"] == 4
     assert summary["episodes"] == 4
     assert summary["failed"] == 0
     assert summary["successes"] == 2
     assert summary["success_rate"] == pytest.approx(0.5)
+    assert summary["completion_rate"] == pytest.approx(1.0)
+    assert summary["attempted_success_rate"] == pytest.approx(0.5)
     assert summary["correct"] == 2
     assert summary["accuracy"] == pytest.approx(0.5)
     # ThreadPoolExecutor order is non-deterministic; sort by episode_index.
@@ -761,6 +956,104 @@ def test_run_heldout_eval_rollouts_and_summary(monkeypatch: pytest.MonkeyPatch) 
         (2, 200, "p2"),
         (3, 201, None),
     ]
+
+
+def test_run_heldout_eval_records_timeout_manifest_entries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Wall-clock TimeoutError in as_completed populates timed_out records, not exception records."""
+    import concurrent.futures as cf
+    import threading
+
+    import trajectory_aware_gym.experiments.runner as runner_module
+
+    config = ExperimentConfig.from_yaml(QUICK_TEST_CONFIG)
+    eval_examples = [
+        SimpleNamespace(seed=500, problem="slow1"),
+        SimpleNamespace(seed=600, problem="slow2"),
+    ]
+
+    # Workers block on an event that never fires, guaranteeing every future is
+    # still `not done()` when the wall-clock timeout is raised.
+    block_until = threading.Event()
+
+    def fake_run_eval_task(task, config, task_model_id, experiment_run_id=None):
+        block_until.wait(timeout=5.0)
+        return _make_episode_result(f"eval-{task.episode_index}", success=True, cost=0.0, tokens=1)
+
+    def fake_as_completed(future_map, timeout=None):
+        if False:
+            yield
+        raise TimeoutError
+
+    monkeypatch.setattr(runner_module, "_eval_examples", lambda cfg: eval_examples)
+    monkeypatch.setattr(runner_module, "_run_eval_task", fake_run_eval_task)
+    monkeypatch.setattr(cf, "as_completed", fake_as_completed)
+
+    try:
+        results, summary = runner_module._run_heldout_eval(
+            config=config,
+            task_model_id=config.task_models[0].model_id,
+            instructions="prompt",
+        )
+    finally:
+        block_until.set()
+
+    rollouts = config.eval_protocol.rollouts_per_task
+    expected_attempted = len(eval_examples) * rollouts
+    assert results == []
+    assert summary["episodes_attempted"] == expected_attempted
+    assert summary["episodes_completed"] == 0
+    assert summary["timed_out"] == expected_attempted
+    assert summary["failed"] == expected_attempted
+    failure_records = summary["failure_records"]
+    assert len(failure_records) == expected_attempted
+    assert all(record["status"] == "timed_out" for record in failure_records)
+    assert all(record["error_type"] == "TimeoutError" for record in failure_records)
+    assert {record["seed"] for record in failure_records} == {
+        int(ex.seed) + rollout for ex in eval_examples for rollout in range(rollouts)
+    }
+
+
+def test_run_heldout_eval_records_failure_manifest_entries(monkeypatch: pytest.MonkeyPatch) -> None:
+    import trajectory_aware_gym.experiments.runner as runner_module
+
+    config = ExperimentConfig.from_yaml(QUICK_TEST_CONFIG)
+    eval_examples = [
+        SimpleNamespace(seed=100, problem="p1"),
+        SimpleNamespace(seed=200, problem="p2"),
+    ]
+
+    def fake_run_eval_task(task, config, task_model_id, experiment_run_id=None):
+        if task.episode_index == 1:
+            raise RuntimeError("eval boom")
+        return _make_episode_result(
+            f"eval-{task.episode_index}",
+            success=True,
+            cost=0.0,
+            tokens=1,
+        )
+
+    monkeypatch.setattr(runner_module, "_eval_examples", lambda cfg: eval_examples)
+    monkeypatch.setattr(runner_module, "_run_eval_task", fake_run_eval_task)
+
+    results, summary = runner_module._run_heldout_eval(
+        config=config,
+        task_model_id="ollama/qwen3-1.7b-base",
+        instructions="prompt",
+    )
+
+    assert len(results) == 1
+    assert summary["episodes_attempted"] == 2
+    assert summary["episodes_completed"] == 1
+    assert summary["episodes_scorable"] == 1
+    assert summary["failed"] == 1
+    assert summary["timed_out"] == 0
+    failure_records = summary["failure_records"]
+    assert len(failure_records) == 1
+    assert failure_records[0]["episode_index"] == 1
+    assert failure_records[0]["seed"] == 200
+    assert failure_records[0]["status"] == "exception"
+    assert failure_records[0]["error_type"] == "RuntimeError"
+    assert "RuntimeError: eval boom" in failure_records[0]["traceback"]
 
 
 # ── _extract_task_usage ────────────────────────────────────────────────────
@@ -783,6 +1076,23 @@ def test_extract_task_usage_accumulates() -> None:
     assert summary["total_cost_usd"] == pytest.approx(0.30)
     assert summary["known_total_tokens"] == 30
     assert summary["known_cost_usd"] == pytest.approx(0.30)
+
+
+def test_format_eval_detail_line_includes_all_denominators() -> None:
+    detail = _format_eval_detail_line(
+        {
+            "episodes_attempted": 500,
+            "episodes_completed": 392,
+            "episodes_scorable": 392,
+            "failed": 108,
+            "timed_out": 12,
+            "metrics_unavailable": 3,
+        }
+    )
+
+    assert detail == (
+        "attempted=500 completed=392 scorable=392 failed=108 timed_out=12 metrics_unavailable=3"
+    )
 
 
 # ── _extract_fitness_history ───────────────────────────────────────────────
@@ -1173,18 +1483,29 @@ def _default_eval_summary(
     episodes: int = 1,
     successes: int = 1,
     correct: int = 1,
+    *,
+    failure_records: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     total = episodes
-    return {
+    summary = {
         "episodes_attempted": total,
+        "episodes_completed": total,
+        "episodes_scorable": total,
         "episodes": total,
         "failed": 0,
+        "timed_out": 0,
+        "metrics_unavailable": 0,
         "successes": successes,
         "success_rate": (successes / total) if total else 0.0,
+        "completion_rate": 1.0 if total else 0.0,
+        "attempted_success_rate": (successes / total) if total else 0.0,
         "correct": correct,
         "accuracy": (correct / total) if total else 0.0,
         "temperature_eval": 0.0,
     }
+    if failure_records is not None:
+        summary["failure_records"] = failure_records
+    return summary
 
 
 def _setup_fake_runner(
@@ -1232,7 +1553,12 @@ def _setup_fake_runner(
     monkeypatch.setattr(
         runner_module,
         "_extract_reflection_usage",
-        lambda lm: (reflection_tokens, reflection_cost),
+        lambda lm: ReflectionUsageSummary(
+            total_tokens=reflection_tokens,
+            known_total_tokens=reflection_tokens,
+            total_cost_usd=reflection_cost,
+            known_cost_usd=reflection_cost,
+        ),
     )
     monkeypatch.setattr(
         runner_module,
@@ -1495,7 +1821,9 @@ def test_run_experiment_continue_on_failure_runs_remaining_seeds(
     monkeypatch.setattr(runner_module.dspy, "configure", lambda **kwargs: None)
     monkeypatch.setattr(runner_module, "_build_task_lm", lambda *a, **k: SimpleNamespace())
     monkeypatch.setattr(runner_module, "get_reflection_lm", lambda *a, **k: SimpleNamespace())
-    monkeypatch.setattr(runner_module, "_extract_reflection_usage", lambda lm: (0, 0.0))
+    monkeypatch.setattr(
+        runner_module, "_extract_reflection_usage", lambda lm: ReflectionUsageSummary.empty()
+    )
     monkeypatch.setattr(
         runner_module,
         "_run_heldout_eval",
@@ -1610,7 +1938,9 @@ def test_run_experiment_result_none_when_no_detailed_results(
     monkeypatch.setattr(runner_module.dspy, "configure", lambda **kwargs: None)
     monkeypatch.setattr(runner_module, "_build_task_lm", lambda *a, **k: SimpleNamespace())
     monkeypatch.setattr(runner_module, "get_reflection_lm", lambda *a, **k: SimpleNamespace())
-    monkeypatch.setattr(runner_module, "_extract_reflection_usage", lambda lm: (0, 0.0))
+    monkeypatch.setattr(
+        runner_module, "_extract_reflection_usage", lambda lm: ReflectionUsageSummary.empty()
+    )
     monkeypatch.setattr(
         runner_module,
         "_run_heldout_eval",
@@ -1881,7 +2211,9 @@ def test_run_experiment_resume_gepa_done_reuses_experiment_run_id(
     monkeypatch.setattr(runner_module.dspy, "configure", lambda **kwargs: None)
     monkeypatch.setattr(runner_module, "_build_task_lm", lambda *a, **k: SimpleNamespace())
     monkeypatch.setattr(runner_module, "get_reflection_lm", lambda *a, **k: SimpleNamespace())
-    monkeypatch.setattr(runner_module, "_extract_reflection_usage", lambda lm: (0, 0.0))
+    monkeypatch.setattr(
+        runner_module, "_extract_reflection_usage", lambda lm: ReflectionUsageSummary.empty()
+    )
     monkeypatch.setattr(
         runner_module,
         "_run_heldout_eval",
@@ -2116,6 +2448,11 @@ def test_run_experiment_resume_gepa_done_preserves_saved_phase_artifacts(
     assert raw_summary["scope"] == "heldout_eval"
     assert raw_summary["heldout_total"]["episodes"] == 2
     assert raw_summary["heldout_total"]["successes"] == 2
+    validation_audit = json.loads(
+        (replication_dir / "validation_audit.json").read_text(encoding="utf-8")
+    )
+    assert validation_audit["source"] == "resume_saved_result"
+    assert validation_audit["details_available"] is False
 
     run_report = json.loads((replication_dir / "run_report.json").read_text(encoding="utf-8"))
     assert run_report["cost_type"] == "actual"
@@ -2130,6 +2467,182 @@ def test_run_experiment_resume_gepa_done_preserves_saved_phase_artifacts(
         "accuracy": 1.0,
     }
     assert run_report["logging_summary"]["numeric_anomaly_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("saved_logging_summary", "expected_event_kind"),
+    [
+        (None, "gepa_logging_summary_missing"),
+        ({"status": "bogus"}, "gepa_logging_summary_invalid"),
+    ],
+)
+def test_run_experiment_resume_gepa_done_records_saved_logging_summary_issues(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    saved_logging_summary: dict[str, Any] | None,
+    expected_event_kind: str,
+) -> None:
+    import trajectory_aware_gym.experiments.runner as runner_module
+
+    config = ExperimentConfig.from_yaml(QUICK_TEST_CONFIG)
+    snapshot = _build_effective_config_snapshot(
+        config,
+        seed_prompt=config.seed_prompt,
+        budget_mode=config.gepa_budget.mode,
+        seed_prompt_override=None,
+        budget_mode_override=None,
+        max_metric_calls_override=None,
+    )
+    config_hash = _config_hash(snapshot)
+    replication_dir = _setup_gepa_done_resume_replication(
+        tmp_path,
+        config_hash=config_hash,
+        experiment_run_id=f"resume-log-issue-{expected_event_kind}",
+        training_rows=[
+            _make_metric("train-1", success=True, cost=0.10, tokens=10),
+            _make_metric("train-2", success=False, cost=0.20, tokens=20),
+        ],
+        gepa_phase_summary={
+            "training_usage": {
+                "episodes": 2,
+                "total_tokens": 30,
+                "known_total_tokens": 30,
+                "token_data_coverage": 1.0,
+                "total_cost_usd": 0.3,
+                "known_cost_usd": 0.3,
+                "cost_data_coverage": 1.0,
+                "has_missing_cost_data": False,
+                "metrics_unavailable_episodes": 0,
+            },
+            "logging_summary": saved_logging_summary,
+            "reflection_usage": {
+                "total_tokens": 11,
+                "known_total_tokens": 11,
+                "token_data_coverage": 1.0,
+                "total_cost_usd": 0.11,
+                "known_cost_usd": 0.11,
+                "cost_data_coverage": 1.0,
+            },
+        },
+    )
+
+    _patch_gepa_done_resume_runtime(
+        monkeypatch,
+        runner_module,
+        config=config,
+        baseline_eval_results=[
+            _make_episode_result("baseline-1", success=True, cost=0.05, tokens=5)
+        ],
+        eval_results=[_make_episode_result("eval-1", success=True, cost=0.05, tokens=5)],
+    )
+
+    run_experiment(RunExperimentArgs(config_path=QUICK_TEST_CONFIG, results_root=tmp_path))
+
+    metadata = json.loads((replication_dir / "run_metadata.json").read_text(encoding="utf-8"))
+    assert metadata["status"] == "completed"
+    assert metadata["logging_summary"]["status"] == "partial"
+    assert any(
+        event["kind"] == expected_event_kind for event in metadata["logging_summary"]["events"]
+    )
+
+    cost_summary = json.loads((replication_dir / "cost_summary.json").read_text(encoding="utf-8"))
+    assert cost_summary["training_task_model_tokens"] == 30
+    assert cost_summary["reflection_tokens"] == 11
+    assert cost_summary["total_cost"] == pytest.approx(0.51)
+
+    validation_audit = json.loads(
+        (replication_dir / "validation_audit.json").read_text(encoding="utf-8")
+    )
+    assert validation_audit["source"] == "resume_saved_result"
+
+    run_report = json.loads((replication_dir / "run_report.json").read_text(encoding="utf-8"))
+    assert run_report["logging_summary"]["status"] == "partial"
+    assert any(
+        event["kind"] == expected_event_kind for event in run_report["logging_summary"]["events"]
+    )
+
+
+def test_run_experiment_resume_gepa_done_records_missing_reflection_usage(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import trajectory_aware_gym.experiments.runner as runner_module
+
+    config = ExperimentConfig.from_yaml(QUICK_TEST_CONFIG)
+    snapshot = _build_effective_config_snapshot(
+        config,
+        seed_prompt=config.seed_prompt,
+        budget_mode=config.gepa_budget.mode,
+        seed_prompt_override=None,
+        budget_mode_override=None,
+        max_metric_calls_override=None,
+    )
+    config_hash = _config_hash(snapshot)
+    replication_dir = _setup_gepa_done_resume_replication(
+        tmp_path,
+        config_hash=config_hash,
+        experiment_run_id="resume-reflection-missing",
+        training_rows=[
+            _make_metric("train-1", success=True, cost=0.10, tokens=10),
+            _make_metric("train-2", success=False, cost=0.20, tokens=20),
+        ],
+        gepa_phase_summary={
+            "training_usage": {
+                "episodes": 2,
+                "total_tokens": 30,
+                "known_total_tokens": 30,
+                "token_data_coverage": 1.0,
+                "total_cost_usd": 0.3,
+                "known_cost_usd": 0.3,
+                "cost_data_coverage": 1.0,
+                "has_missing_cost_data": False,
+                "metrics_unavailable_episodes": 0,
+            },
+            "logging_summary": {
+                "status": "complete",
+                "trajectory_persisted_episodes": 2,
+                "trajectory_failed_episodes": 0,
+                "metrics_unavailable_episodes": 0,
+                "numeric_anomaly_count": 0,
+                "events": [],
+                "events_truncated": False,
+            },
+        },
+    )
+
+    _patch_gepa_done_resume_runtime(
+        monkeypatch,
+        runner_module,
+        config=config,
+        baseline_eval_results=[
+            _make_episode_result("baseline-1", success=True, cost=0.05, tokens=5)
+        ],
+        eval_results=[_make_episode_result("eval-1", success=True, cost=0.05, tokens=5)],
+    )
+
+    run_experiment(RunExperimentArgs(config_path=QUICK_TEST_CONFIG, results_root=tmp_path))
+
+    metadata = json.loads((replication_dir / "run_metadata.json").read_text(encoding="utf-8"))
+    assert metadata["status"] == "completed"
+    assert metadata["logging_summary"]["status"] == "partial"
+    assert metadata["logging_summary"]["trajectory_persisted_episodes"] == 2
+    assert any(
+        event["kind"] == "gepa_reflection_usage_missing"
+        for event in metadata["logging_summary"]["events"]
+    )
+
+    cost_summary = json.loads((replication_dir / "cost_summary.json").read_text(encoding="utf-8"))
+    assert cost_summary["reflection_tokens"] is None
+    assert cost_summary["reflection_cost"] is None
+    assert cost_summary["total_tokens"] is None
+    assert cost_summary["total_cost"] is None
+    assert cost_summary["total_tokens_known"] == 40
+    assert cost_summary["total_cost_known"] == pytest.approx(0.4)
+    assert cost_summary["cost_type"] == "partial"
+
+    run_report = json.loads((replication_dir / "run_report.json").read_text(encoding="utf-8"))
+    assert run_report["cost_type"] == "partial"
+    assert run_report["logging_summary"]["status"] == "partial"
 
 
 def test_run_experiment_saves_experiment_run_record(
@@ -2273,6 +2786,7 @@ def test_run_experiment_writes_run_report_json(
     # Mock build_run_report to avoid needing a real DB.
     from trajectory_aware_gym.metrics.run_report import RunReport
 
+    captured_kwargs: dict[str, object] = {}
     fake_report = RunReport(
         experiment_run_id="fake-id",
         config_name="quick-test",
@@ -2283,7 +2797,12 @@ def test_run_experiment_writes_run_report_json(
         seed=42,
         cost_type="unavailable",
     )
-    monkeypatch.setattr(runner_module, "build_run_report", lambda **kw: fake_report)
+
+    def _fake_build_run_report(**kwargs: object) -> RunReport:
+        captured_kwargs.update(kwargs)
+        return fake_report
+
+    monkeypatch.setattr(runner_module, "build_run_report", _fake_build_run_report)
 
     run_experiment(
         RunExperimentArgs(
@@ -2300,6 +2819,7 @@ def test_run_experiment_writes_run_report_json(
     assert report_data["config_name"] == "quick-test"
     assert report_data["provider"] == "ollama"
     assert "logging_summary" in report_data
+    assert isinstance(captured_kwargs["finished_at"], str)
 
 
 def test_run_experiment_records_logging_summary_in_metadata(
@@ -2312,6 +2832,23 @@ def test_run_experiment_records_logging_summary_in_metadata(
     _setup_fake_runner(monkeypatch, runner_module)
     monkeypatch.setattr(runner_module, "save_experiment_run", lambda *a, **k: None)
     monkeypatch.setattr(runner_module, "update_experiment_run", lambda *a, **k: None)
+    from trajectory_aware_gym.metrics.run_report import RunReport
+
+    monkeypatch.setattr(
+        runner_module,
+        "build_run_report",
+        lambda **kwargs: RunReport(
+            experiment_run_id=kwargs["experiment_run_id"],
+            config_name="quick-test",
+            operator="test",
+            provider="ollama",
+            task_model_id="ollama/qwen3-1.7b-base",
+            environment_id="math:Orz57K",
+            seed=42,
+            cost_type="unavailable",
+            logging_summary=kwargs["logging_summary"],
+        ),
+    )
     summary = run_experiment(
         RunExperimentArgs(
             config_path=QUICK_TEST_CONFIG,
@@ -2323,3 +2860,374 @@ def test_run_experiment_records_logging_summary_in_metadata(
     replication_dir = _find_replication_dir(tmp_path, "quick-test", "Qwen3-1.7B-Base", 42)
     metadata = json.loads((replication_dir / "run_metadata.json").read_text(encoding="utf-8"))
     assert metadata["logging_summary"]["status"] == "complete"
+
+
+def test_run_experiment_writes_eval_failure_manifest_and_logging_event(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import trajectory_aware_gym.experiments.runner as runner_module
+
+    _setup_fake_runner(monkeypatch, runner_module)
+
+    eval_calls = {"count": 0}
+
+    def fake_eval(**kwargs):
+        eval_calls["count"] += 1
+        if eval_calls["count"] == 1:
+            return (
+                [_make_episode_result("baseline-ok", success=True, cost=0.01, tokens=1)],
+                {
+                    "episodes_attempted": 2,
+                    "episodes_completed": 1,
+                    "episodes_scorable": 1,
+                    "episodes": 1,
+                    "failed": 1,
+                    "timed_out": 0,
+                    "metrics_unavailable": 0,
+                    "successes": 1,
+                    "success_rate": 1.0,
+                    "completion_rate": 0.5,
+                    "attempted_success_rate": 0.5,
+                    "correct": 1,
+                    "accuracy": 1.0,
+                    "temperature_eval": 0.0,
+                    "failure_records": [
+                        {
+                            "episode_index": 1,
+                            "seed": 43,
+                            "status": "exception",
+                            "timed_out": False,
+                            "error_type": "RuntimeError",
+                            "error_repr": "RuntimeError('baseline boom')",
+                        }
+                    ],
+                },
+            )
+        return (
+            [_make_episode_result("optimized-ok", success=True, cost=0.01, tokens=1)],
+            _default_eval_summary(episodes=1, successes=1, correct=1),
+        )
+
+    monkeypatch.setattr(runner_module, "_run_heldout_eval", fake_eval)
+
+    run_experiment(
+        RunExperimentArgs(
+            config_path=QUICK_TEST_CONFIG,
+            max_metric_calls=8,
+            results_root=tmp_path,
+        )
+    )
+
+    replication_dir = _find_replication_dir(tmp_path, "quick-test", "Qwen3-1.7B-Base", 42)
+    metadata = json.loads((replication_dir / "run_metadata.json").read_text(encoding="utf-8"))
+    manifest_lines = (
+        (replication_dir / "eval_failure_manifest.jsonl")
+        .read_text(encoding="utf-8")
+        .strip()
+        .splitlines()
+    )
+
+    assert metadata["logging_summary"]["status"] == "partial"
+    assert any(
+        event["kind"] == "eval_failures_recorded" for event in metadata["logging_summary"]["events"]
+    )
+    assert len(manifest_lines) == 1
+    manifest_row = json.loads(manifest_lines[0])
+    assert manifest_row["phase"] == "baseline"
+    assert manifest_row["episode_index"] == 1
+    assert manifest_row["error_type"] == "RuntimeError"
+    assert "RuntimeError('baseline boom')" == manifest_row["error_repr"]
+
+    raw_summary = json.loads(
+        (replication_dir / "raw_metrics_summary.json").read_text(encoding="utf-8")
+    )
+    assert raw_summary["eval_failure_manifest"]["count"] == 1
+    assert raw_summary["baseline_eval_denominators"]["failed"] == 1
+    assert raw_summary["heldout_total_denominators"]["episodes_attempted"] == 3
+
+
+def test_run_experiment_records_run_report_failure_in_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import trajectory_aware_gym.experiments.runner as runner_module
+
+    _setup_fake_runner(monkeypatch, runner_module)
+    monkeypatch.setattr(runner_module, "save_experiment_run", lambda *a, **k: None)
+    monkeypatch.setattr(runner_module, "update_experiment_run", lambda *a, **k: None)
+    monkeypatch.setattr(
+        runner_module,
+        "build_run_report",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("report boom")),
+    )
+
+    run_experiment(
+        RunExperimentArgs(
+            config_path=QUICK_TEST_CONFIG,
+            max_metric_calls=8,
+            results_root=tmp_path,
+        )
+    )
+
+    replication_dir = _find_replication_dir(tmp_path, "quick-test", "Qwen3-1.7B-Base", 42)
+    metadata = json.loads((replication_dir / "run_metadata.json").read_text(encoding="utf-8"))
+
+    assert metadata["logging_summary"]["status"] == "partial"
+    assert any(
+        event["kind"] == "run_report_failed" for event in metadata["logging_summary"]["events"]
+    )
+    assert not (replication_dir / "run_report.json").exists()
+
+
+def test_run_experiment_records_experiment_run_update_failure_locally(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import trajectory_aware_gym.experiments.runner as runner_module
+    from trajectory_aware_gym.metrics.run_report import RunReport
+
+    _setup_fake_runner(monkeypatch, runner_module)
+    monkeypatch.setattr(runner_module, "save_experiment_run", lambda *a, **k: None)
+    monkeypatch.setattr(
+        runner_module,
+        "update_experiment_run",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("db boom")),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "build_run_report",
+        lambda **kwargs: RunReport(
+            experiment_run_id=kwargs["experiment_run_id"],
+            config_name="quick-test",
+            operator="test",
+            provider="ollama",
+            task_model_id="ollama/qwen3-1.7b-base",
+            environment_id="math:Orz57K",
+            seed=42,
+            cost_type="unavailable",
+            logging_summary=kwargs["logging_summary"],
+        ),
+    )
+
+    run_experiment(
+        RunExperimentArgs(
+            config_path=QUICK_TEST_CONFIG,
+            max_metric_calls=8,
+            results_root=tmp_path,
+        )
+    )
+
+    replication_dir = _find_replication_dir(tmp_path, "quick-test", "Qwen3-1.7B-Base", 42)
+    metadata = json.loads((replication_dir / "run_metadata.json").read_text(encoding="utf-8"))
+    run_report = json.loads((replication_dir / "run_report.json").read_text(encoding="utf-8"))
+
+    assert metadata["logging_summary"]["status"] == "partial"
+    assert any(
+        event["kind"] == "experiment_run_update_failed"
+        for event in metadata["logging_summary"]["events"]
+    )
+    assert run_report["logging_summary"]["status"] == "partial"
+
+
+def test_run_experiment_salvages_training_trajectories_after_compile_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import trajectory_aware_gym.experiments.runner as runner_module
+
+    train_result = GEMEpisodeResult(
+        trajectory=_make_training_trajectory("train-1", success=True),
+        log_path=None,
+        raw_metrics=_make_metric("train-1", success=True, cost=0.01, tokens=10),
+        logging_summary=EpisodeLoggingSummary(
+            status="complete",
+            persistence_requested=False,
+            trajectory_persisted=False,
+            metrics_available=True,
+        ),
+    )
+    save_calls: list[str] = []
+
+    class FakeRunner:
+        def __init__(self, **kwargs):
+            self.episode_history = (train_result,)
+
+    class FakeSolverModule:
+        def __init__(self, runner, default_instructions: str, **kwargs):
+            self.instructions = default_instructions
+
+    class BrokenGEPA:
+        def __init__(self, **kwargs):
+            pass
+
+        def compile(self, student, trainset, valset):
+            raise RuntimeError("compile boom")
+
+    _stub_train_and_valsets(monkeypatch, runner_module)
+    monkeypatch.setattr(runner_module, "GEMEpisodeRunner", FakeRunner)
+    monkeypatch.setattr(runner_module, "GEMSolverModule", FakeSolverModule)
+    monkeypatch.setattr(runner_module.dspy, "GEPA", BrokenGEPA)
+    monkeypatch.setattr(runner_module.dspy, "configure", lambda **kwargs: None)
+    monkeypatch.setattr(runner_module, "_build_task_lm", lambda *a, **k: SimpleNamespace())
+    monkeypatch.setattr(runner_module, "get_reflection_lm", lambda *a, **k: SimpleNamespace())
+    monkeypatch.setattr(runner_module, "save_experiment_run", lambda *a, **k: None)
+    monkeypatch.setattr(runner_module, "update_experiment_run", lambda *a, **k: None)
+    monkeypatch.setattr(
+        runner_module,
+        "save_trajectory",
+        lambda db_path, log, *, experiment_run_id=None: save_calls.append(experiment_run_id or ""),
+    )
+
+    summary = run_experiment(
+        RunExperimentArgs(
+            config_path=QUICK_TEST_CONFIG,
+            max_metric_calls=8,
+            results_root=tmp_path,
+            fail_fast=False,
+        )
+    )
+
+    replication_dir = _find_replication_dir(tmp_path, "quick-test", "Qwen3-1.7B-Base", 42)
+    metadata = json.loads((replication_dir / "run_metadata.json").read_text(encoding="utf-8"))
+
+    assert summary["models"]["Qwen3-1.7B-Base"]["42"]["status"] == "failed"
+    assert len(save_calls) == 1
+    assert (replication_dir / "training_metrics.jsonl").exists()
+    assert any(
+        event["kind"] == "training_trajectories_salvaged"
+        for event in metadata["logging_summary"]["events"]
+    )
+
+
+def test_run_experiment_records_salvage_failure_event(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """When the post-compile salvage path itself raises, it emits a salvage-failed event."""
+    import trajectory_aware_gym.experiments.runner as runner_module
+
+    train_result = GEMEpisodeResult(
+        trajectory=_make_training_trajectory("train-1", success=True),
+        log_path=None,
+        raw_metrics=_make_metric("train-1", success=True, cost=0.01, tokens=10),
+        logging_summary=EpisodeLoggingSummary(
+            status="complete",
+            persistence_requested=False,
+            trajectory_persisted=False,
+            metrics_available=True,
+        ),
+    )
+
+    class FakeRunner:
+        def __init__(self, **kwargs):
+            self.episode_history = (train_result,)
+
+    class FakeSolverModule:
+        def __init__(self, runner, default_instructions: str, **kwargs):
+            self.instructions = default_instructions
+
+    class BrokenGEPA:
+        def __init__(self, **kwargs):
+            pass
+
+        def compile(self, student, trainset, valset):
+            raise RuntimeError("compile boom")
+
+    def exploding_persist(results, *, experiment_run_id, db_path=None):
+        raise RuntimeError("salvage disk full")
+
+    _stub_train_and_valsets(monkeypatch, runner_module)
+    monkeypatch.setattr(runner_module, "GEMEpisodeRunner", FakeRunner)
+    monkeypatch.setattr(runner_module, "GEMSolverModule", FakeSolverModule)
+    monkeypatch.setattr(runner_module.dspy, "GEPA", BrokenGEPA)
+    monkeypatch.setattr(runner_module.dspy, "configure", lambda **kwargs: None)
+    monkeypatch.setattr(runner_module, "_build_task_lm", lambda *a, **k: SimpleNamespace())
+    monkeypatch.setattr(runner_module, "get_reflection_lm", lambda *a, **k: SimpleNamespace())
+    monkeypatch.setattr(runner_module, "save_experiment_run", lambda *a, **k: None)
+    monkeypatch.setattr(runner_module, "update_experiment_run", lambda *a, **k: None)
+    monkeypatch.setattr(runner_module, "_persist_training_trajectories", exploding_persist)
+
+    run_experiment(
+        RunExperimentArgs(
+            config_path=QUICK_TEST_CONFIG,
+            max_metric_calls=8,
+            results_root=tmp_path,
+            fail_fast=False,
+        )
+    )
+
+    replication_dir = _find_replication_dir(tmp_path, "quick-test", "Qwen3-1.7B-Base", 42)
+    metadata = json.loads((replication_dir / "run_metadata.json").read_text(encoding="utf-8"))
+
+    salvage_failed_events = [
+        event
+        for event in metadata["logging_summary"]["events"]
+        if event["kind"] == "training_trajectory_salvage_failed"
+    ]
+    assert len(salvage_failed_events) == 1
+    # Error context is embedded in the message, not leaking as a traceback.
+    assert "RuntimeError" in salvage_failed_events[0]["message"]
+    assert "salvage disk full" in salvage_failed_events[0]["message"]
+    assert not any(
+        event["kind"] == "training_trajectories_salvaged"
+        for event in metadata["logging_summary"]["events"]
+    )
+
+
+def test_run_experiment_records_gepa_done_publish_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """An exception from update_experiment_run(gepa_done) is surfaced without aborting the replication."""
+    import trajectory_aware_gym.experiments.runner as runner_module
+    from trajectory_aware_gym.metrics.run_report import RunReport
+
+    update_call_kinds: list[str] = []
+
+    def fake_update_experiment_run(*args, **kwargs):
+        status = kwargs.get("status")
+        update_call_kinds.append(status or "unknown")
+        if status == "gepa_done":
+            raise RuntimeError("gepa_done publish boom")
+
+    _setup_fake_runner(monkeypatch, runner_module)
+    monkeypatch.setattr(runner_module, "save_experiment_run", lambda *a, **k: None)
+    monkeypatch.setattr(runner_module, "update_experiment_run", fake_update_experiment_run)
+    monkeypatch.setattr(
+        runner_module,
+        "build_run_report",
+        lambda **kwargs: RunReport(
+            experiment_run_id=kwargs["experiment_run_id"],
+            config_name="quick-test",
+            operator="test",
+            provider="ollama",
+            task_model_id="ollama/qwen3-1.7b-base",
+            environment_id="math:Orz57K",
+            seed=42,
+            cost_type="unavailable",
+            logging_summary=kwargs["logging_summary"],
+        ),
+    )
+
+    run_experiment(
+        RunExperimentArgs(
+            config_path=QUICK_TEST_CONFIG,
+            max_metric_calls=8,
+            results_root=tmp_path,
+        )
+    )
+
+    replication_dir = _find_replication_dir(tmp_path, "quick-test", "Qwen3-1.7B-Base", 42)
+    metadata = json.loads((replication_dir / "run_metadata.json").read_text(encoding="utf-8"))
+
+    assert update_call_kinds[0] == "gepa_done"
+    # Replication still completed despite the gepa_done publish failure.
+    assert metadata["status"] == "completed"
+    gepa_phase_events = metadata["gepa_phase_summary"]["logging_summary"]["events"]
+    assert any(
+        event["kind"] == "experiment_run_update_failed"
+        and "gepa_done" in event["message"]
+        and "RuntimeError" in event["message"]
+        for event in gepa_phase_events
+    )

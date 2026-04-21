@@ -106,9 +106,9 @@ The project evaluates two optimization paradigms:
 **Trajectory Storage** (`src/trajectory_aware_gym/storage/`):
 - SQLite-backed persistence for trajectory logs, tool call records, and experiment runs (`trajectories.db`)
 - WAL mode enabled for concurrent read access during writes
-- Schema version 1.3.0 — tables: `episodes`, `steps`, `llm_calls`, `tool_calls`, `experiment_runs`
+- Schema version 1.4.0 — tables: `episodes`, `steps`, `llm_calls`, `tool_calls`, `experiment_runs`
 - Legacy pre-v1.2 SQLite files are migrated in place on first open before new indexes are created
-- `llm_calls` tracks `provider` (derived from model_id prefix: `ollama/`, `bedrock/`, `sagemaker/`), `cost_type` (currently `"actual"` | `"unavailable"` in stored rows), `latency_ms`, and `cost_usd` per call
+- `llm_calls` tracks `provider` (derived from model_id prefix: `ollama/`, `bedrock/`, `sagemaker/`), `token_usage_known`, `cost_type` (currently `"actual"` | `"unavailable"` in stored rows), `latency_ms`, and `cost_usd` per call
 - `tool_calls` tracks `duration_ms` per tool execution
 - `experiment_runs` table (24 columns): full experiment-level registry with the effective runtime config snapshot (including CLI overrides), operator, git info, status lifecycle (`running` → `gepa_done` → `completed` | `failed`), result/cost summaries, `error_summary`, and `logging_summary`
 - Episodes link to experiment runs via nullable `experiment_run_id` FK
@@ -121,7 +121,7 @@ The project evaluates two optimization paradigms:
 - Resume semantics: `run_metadata.json` persists `experiment_run_id` immediately, and resumes from `gepa_done` must reuse that same ID so evaluation, reporting, and any later artifact sync stay attached to one logical replication
 - S3 sync (`storage/s3_upload.py`, `scripts/upload_experiment_artifacts.py`): experiment execution never uploads to S3 directly; post-run sync is explicit and writes `upload_manifest.json` locally. `upload_artifact_bundle()` remains immutable check-before-write, `upload_artifact_bundle_detailed()` returns uploaded/skipped/failed detail, `list_remote_runs()` paginates prefixes, and `download_artifact()` fetches single files. boto3 is imported lazily to avoid a hard dependency
 - Cost normalization (`metrics/cost_normalization.py`): `compute_normalized_cost()` maps Ollama token counts to Bedrock-equivalent USD using reference prices from `cost_normalization.reference_prices` config
-- Faithfulness rules: correctness metrics must use stored `episode_outcome` when available rather than inferring success from positive reward; unknown task-model cost must remain unknown instead of being coerced to zero
+- Faithfulness rules: correctness metrics must use stored `episode_outcome` when available rather than inferring success from positive reward; unknown task-model token usage and cost must remain unknown instead of being coerced to zero
 
 **AWS/LLM Infrastructure** (`src/trajectory_aware_gym/config/`):
 - All LLM calls route through **LiteLLM** for unified provider interface

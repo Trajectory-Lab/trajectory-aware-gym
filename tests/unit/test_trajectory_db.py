@@ -222,6 +222,7 @@ class TestSaveAndLoad:
         assert loaded.steps[0].tool_calls[0].duration_ms == 42.0
         assert len(loaded.steps[0].llm_calls) == 1
         assert loaded.steps[0].llm_calls[0].provider == "bedrock"
+        assert loaded.steps[0].llm_calls[0].token_usage_known is True
         assert len(loaded.steps[1].llm_calls) == 2
         assert loaded.steps[1].llm_calls[0].cost_usd == 0.001
 
@@ -272,6 +273,21 @@ class TestSaveAndLoad:
         loaded_lc = loaded.steps[0].llm_calls[0]
         assert loaded_lc.cost_usd == cost_usd
         assert loaded_lc.cost_type == cost_type
+
+    def test_llm_call_unknown_token_usage_round_trip(self, db_path):
+        lc = LLMCallMetadata(
+            model_id="bedrock/llama-8b",
+            prompt_tokens=0,
+            completion_tokens=0,
+            total_tokens=0,
+            token_usage_known=False,
+        )
+        step = _make_step(reward=0.0, terminated=True, llm_calls=[lc])
+        log = _make_log(steps=[step])
+        save_trajectory(db_path, log)
+        loaded = load_trajectory_by_id(db_path, log.run_id)
+
+        assert loaded.steps[0].llm_calls[0].token_usage_known is False
 
     def test_seed_none_preserved(self, db_path):
         log = _make_log(seed=None)
@@ -674,6 +690,7 @@ class TestSchemaMigration:
         assert "experiment_run_id" in episode_columns
         assert "provider" in llm_call_columns
         assert "cost_type" in llm_call_columns
+        assert "token_usage_known" in llm_call_columns
         assert "duration_ms" in tool_call_columns
         assert (
             conn.execute("SELECT version FROM schema_meta").fetchone()["version"] == SCHEMA_VERSION
@@ -682,6 +699,7 @@ class TestSchemaMigration:
         loaded = load_trajectory_by_id(db_path, log.run_id)
         assert loaded.steps[0].llm_calls[0].provider == "bedrock"
         assert loaded.steps[0].llm_calls[0].cost_type == "actual"
+        assert loaded.steps[0].llm_calls[0].token_usage_known is True
 
     def test_new_db_records_schema_version(self, db_path):
         save_experiment_run(db_path, _make_experiment_run(experiment_run_id="schema-meta-run"))

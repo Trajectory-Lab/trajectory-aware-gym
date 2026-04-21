@@ -97,11 +97,13 @@ results/
                 ├── pareto_frontier.json # Pareto frontier of candidate prompts
                 ├── cost_summary.json    # Token/cost breakdown (task vs reflection, train vs eval)
                 ├── run_report.json      # Unified summary (identical keys across providers)
+                ├── validation_audit.json # Validation-side audit trail (baseline vs best candidate)
                 ├── training_metrics.csv  # Per-episode metrics (training only)
                 ├── training_metrics_summary.json  # Aggregated training-phase stats
                 ├── raw_metrics.csv      # Per-episode metrics (held-out eval only)
                 ├── raw_metrics.jsonl    # Same data, JSONL format
-                ├── raw_metrics_summary.json  # Held-out eval stats split by baseline vs optimized
+                ├── raw_metrics_summary.json  # Held-out eval stats plus denominator breakdowns
+                ├── eval_failure_manifest.jsonl # Held-out eval exceptions/timeouts with phase + seed
                 ├── upload_manifest.json # Written only by the separate S3 sync script
                 └── gepa_logs/           # GEPA internal optimization logs
 ```
@@ -170,6 +172,9 @@ The upload script scans local replication folders, requires `run_metadata.json` 
 | `cost_summary.json` | Token/cost breakdown |
 | `optimized_prompt.txt` | GEPA-evolved system prompt |
 | `fitness_history.json` | Fitness scores per GEPA iteration |
+| `validation_audit.json` | Validation-side baseline/best-candidate audit details |
+| `raw_metrics_summary.json` | Held-out eval summaries plus attempted/completed/scorable denominators |
+| `eval_failure_manifest.jsonl` | Held-out eval exception/timeout records |
 | `run_report.json` | Unified cross-provider summary with provider, accuracy, cost, timing, and logging fields |
 
 S3 key format: `{s3_prefix}{experiment_run_id}/{filename}`
@@ -183,12 +188,17 @@ A unified summary with identical JSON keys regardless of provider (Bedrock or Ol
 Key fields:
 
 - `experiment_run_id`, `config_name`, `provider`, `task_model_id`, `environment_id`, `seed`
-- `baseline_eval`, `eval_summary`
-- `total_tokens`, `total_tokens_known`, `task_model_cost_usd`, `task_model_cost_known_usd`
-- `reflection_cost_usd`, `total_cost_usd`, `total_cost_known_usd`, `cost_type`
+- `baseline_eval`, `eval_summary` including `episodes_attempted`, `episodes_completed`, `episodes_scorable`, `failed`, `timed_out`, and `metrics_unavailable`
+- `total_tokens`, `total_tokens_known`, `task_model_cost_usd`, `task_model_cost_known_usd`, `task_model_token_data_coverage`, `task_model_cost_data_coverage`
+- `reflection_tokens`, `reflection_tokens_known`, `reflection_token_data_coverage`, `reflection_cost_usd`, `reflection_cost_known_usd`, `reflection_cost_data_coverage`
+- `total_cost_usd`, `total_cost_known_usd`, `cost_type`
 - `normalized_cost_usd`, `normalization_reference`
 - `wall_clock_seconds`, `mean_llm_latency_ms`
 - `git_commit`, `started_at`, `finished_at`, `logging_summary`
+
+Reflection cost/token fields are `null` when the reflection LM returned partial usage data;
+the matching `*_known` and `*_data_coverage` fields still carry the known sum and the
+fraction of reflection calls that reported usage, so partial runs remain auditable.
 
 ## Resume Behavior
 
@@ -229,7 +239,18 @@ Per-replication cost breakdown:
 
 ### raw_metrics.csv / .jsonl
 
-One row per held-out evaluation episode (baseline eval + optimized eval). Fields match the `EpisodeRawMetrics` schema documented in [phase3_raw_metrics.md](phase3_raw_metrics.md).
+One row per held-out evaluation episode that completed with `raw_metrics` available
+(baseline eval + optimized eval). Fields match the `EpisodeRawMetrics` schema documented
+in [phase3_raw_metrics.md](phase3_raw_metrics.md). Denominator counts for attempted,
+completed, scorable, failed, timed-out, and metrics-unavailable episodes live in
+`raw_metrics_summary.json`, `run_metadata.json`, and `run_report.json`.
+
+### validation_audit.json
+
+Validation-side audit artifact written per replication. When GEPA detailed results are
+available, it records the baseline and best-candidate validation subscores, accuracies,
+correct counts, and candidate indices. Resume paths that only have the saved GEPA result
+still emit this file with `details_available: false` so missing detail stays explicit.
 
 ### training_metrics.csv / .jsonl
 
@@ -242,7 +263,7 @@ The experiment config controls three distinct data partitions via the `environme
 | Field | Location | Purpose | Default |
 |-------|----------|---------|---------|
 | `train_size` | `environment` | Number of training examples for GEPA optimization | (required) |
-| `val_size` | `environment` | Validation set size (subset of trainset) | 10% of `train_size` |
+| `val_size` | `environment` | Validation set size (disjoint slice after the train seeds) | 10% of `train_size` when omitted |
 | `eval_size` | `environment.dataset` | Held-out evaluation set size (never seen during optimization) | — |
 
 Seed ranges ensure no overlap between the three disjoint splits
@@ -252,15 +273,15 @@ Seed ranges ensure no overlap between the three disjoint splits
 - **Val**:   seeds `[data_seed + train_size, data_seed + train_size + val_size)`
 - **Eval**:  seeds `[data_seed + train_size + val_size, data_seed + train_size + val_size + eval_size)`
 
-Example from `experiments/orz57k-tool/config.yaml` (with-tool variant):
+Illustrative example when `val_size` is omitted:
 
 ```yaml
 environment:
-  train_size: 500    # 500 Orz57K problems for GEPA optimization
-  # val_size omitted → defaults to 50 (10% of 500)
+  train_size: 500
+  # val_size omitted -> effective_val_size defaults to 50 (10% of 500)
   dataset:
     eval_split: MATH500
-    eval_size: 500   # 500 MATH500 problems for held-out eval
+    eval_size: 500
 ```
 
 ## Experiment Configs

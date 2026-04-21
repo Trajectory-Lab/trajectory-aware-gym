@@ -9,13 +9,19 @@ to the returned Prediction so the GEPA metric can score it.
 from __future__ import annotations
 
 import copy
+import logging
 from typing import Any, cast
 
 import dspy  # type: ignore[import-untyped]
 from dspy.utils.dummies import DummyLM  # type: ignore[import-untyped]
 
-from trajectory_aware_gym.adapters.gem_episode_runner import GEMEpisodeRunner
+from trajectory_aware_gym.adapters.gem_episode_runner import (
+    GEMEpisodeRunner,
+    run_episode_with_retry,
+)
 from trajectory_aware_gym.adapters.trajectory_logger import TrajectoryLog
+
+logger = logging.getLogger(__name__)
 
 
 class GEMSolverSignature(dspy.Signature):
@@ -85,13 +91,30 @@ class GEMSolverModule(dspy.Module):
         temperature_override: float | None = None
         if self._val_seeds is not None and seed is not None and seed in self._val_seeds:
             temperature_override = self._val_temperature
-        trajectory = self._runner.run(
-            system_prompt,
-            seed_override=seed,
-            expected_observation=problem,
-            temperature_override=temperature_override,
-        )
-        answer = _extract_final_answer(trajectory)
+
+        # Catch runner failures so the metric still gets called and can record
+        # the outcome. DSPy's ParallelExecutor swallows exceptions raised here
+        # and skips the metric entirely, which would hide infra failures from
+        # the validation-scorable count. ``run_episode_with_retry`` adds a
+        # bounded retry on transient infra errors (timeouts, connection blips)
+        # before we give up and mark the episode runner_error.
+        status = "ok"
+        trajectory: TrajectoryLog | None = None
+        try:
+            trajectory = run_episode_with_retry(
+                lambda: self._runner.run(
+                    system_prompt,
+                    seed_override=seed,
+                    expected_observation=problem,
+                    temperature_override=temperature_override,
+                ),
+                context_label=f"GEMSolverModule.forward seed={seed}",
+            )
+        except Exception as exc:  # noqa: BLE001 — GEM/tool layers raise bare Exception
+            logger.warning("GEMSolverModule.forward failed for seed=%s: %r", seed, exc)
+            status = "runner_error"
+
+        answer = _extract_final_answer(trajectory) if trajectory is not None else ""
 
         # GEPA needs a Predict invocation in the DSPy trace to build reflective
         # examples for instruction mutation.  We use a DummyLM so this populates
@@ -101,7 +124,12 @@ class GEMSolverModule(dspy.Module):
         with dspy.context(lm=trace_lm):
             self.predict(problem=problem, seed=seed)
 
-        return dspy.Prediction(answer=answer, trajectory=trajectory)
+        return dspy.Prediction(
+            answer=answer,
+            trajectory=trajectory,
+            status=status,
+            instructions=system_prompt,
+        )
 
 
 def _extract_final_answer(trajectory: TrajectoryLog) -> str:
