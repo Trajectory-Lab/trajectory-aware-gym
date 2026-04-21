@@ -266,6 +266,20 @@ class TestRunReportModel:
         assert report.logging_summary == logging_summary
         assert report.normalized_cost_usd is None
 
+    def test_finished_at_override_takes_precedence_over_db(self, tmp_path: Path) -> None:
+        record = _make_run_record().model_copy(update={"status": "running", "finished_at": None})
+        db = tmp_path / "test.db"
+        save_experiment_run(db, record)
+
+        report = build_run_report(
+            experiment_run_id=record.experiment_run_id,
+            db_path=db,
+            cost_summary=_COST_SUMMARY,
+            finished_at="2026-04-15T14:31:00Z",
+        )
+
+        assert report.finished_at == "2026-04-15T14:31:00Z"
+
     def test_mean_latency_is_scoped_to_experiment_run(self, tmp_path: Path) -> None:
         db = tmp_path / "test.db"
         record_a = _make_run_record().model_copy(update={"experiment_run_id": "run-a"})

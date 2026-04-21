@@ -2092,6 +2092,7 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                             )
 
                     finished = _utc_now()
+                    finished_iso = _format_iso(finished)
                     run_report_payload: dict[str, Any] | None = None
                     try:
                         run_report = build_run_report(
@@ -2106,6 +2107,7 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                             reference_prices=settings.cost_normalization.reference_prices,
                             prompt_token_ratio=settings.cost_normalization.prompt_token_ratio,
                             logging_summary=logging_summary.model_dump(mode="json"),
+                            finished_at=finished_iso,
                         )
                         run_report_payload = cast(
                             dict[str, Any],
@@ -2134,7 +2136,7 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                     metadata.update(
                         {
                             "status": "completed",
-                            "finished_at": _format_iso(finished),
+                            "finished_at": finished_iso,
                             "elapsed_seconds": round((finished - started_at).total_seconds(), 3),
                             "result": result.model_dump(mode="json")
                             if result is not None
@@ -2153,7 +2155,7 @@ def run_experiment(args: RunExperimentArgs) -> dict[str, Any]:
                             _DB_PATH,
                             exp_run_id,
                             status="completed",
-                            finished_at=_format_iso(finished),
+                            finished_at=finished_iso,
                             result_summary=eval_summary,
                             cost_summary=cost_summary,
                             logging_summary=logging_summary,

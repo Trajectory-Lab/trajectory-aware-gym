@@ -87,12 +87,15 @@ def build_run_report(
     reference_prices: dict[str, dict[str, float]] | None = None,
     prompt_token_ratio: float | None = None,
     logging_summary: dict[str, Any] | None = None,
+    finished_at: str | None = None,
 ) -> RunReport:
     """Assemble a RunReport from DB record + caller-provided summaries.
 
     The caller passes ``cost_summary``, ``eval_summary``, etc. because
     these are already computed in the runner and do not need to be
-    re-derived from raw episode data.
+    re-derived from raw episode data. ``finished_at`` may be provided by
+    the runner so the report can reflect completion even before the DB row
+    is updated from ``running`` to ``completed``.
     """
     run = load_experiment_run(db_path, experiment_run_id)
 
@@ -202,7 +205,11 @@ def build_run_report(
         mean_llm_latency_ms=mean_latency,
         git_commit=run.git_commit,
         started_at=run.started_at.isoformat() if run.started_at else None,
-        finished_at=run.finished_at.isoformat() if run.finished_at else None,
+        finished_at=finished_at
+        if finished_at is not None
+        else run.finished_at.isoformat()
+        if run.finished_at
+        else None,
         logging_summary=(
             logging_summary
             if logging_summary is not None
