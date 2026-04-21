@@ -175,9 +175,9 @@ def extract_episode_raw_metrics(trajectory: TrajectoryLog) -> EpisodeRawMetrics:
     total_token_values: list[int] = []
     llm_latency_values: list[float] = []
 
-    cost_seen_steps = 0.0
-    token_seen_steps = 0.0
-    latency_seen_steps = 0.0
+    cost_coverage_sum = 0.0
+    token_coverage_sum = 0.0
+    latency_coverage_sum = 0.0
 
     for step in trajectory.steps:
         info: Mapping[str, Any] = step.info if isinstance(step.info, Mapping) else {}
@@ -219,7 +219,7 @@ def extract_episode_raw_metrics(trajectory: TrajectoryLog) -> EpisodeRawMetrics:
 
         if step_cost is not None:
             cost_values.append(step_cost)
-        cost_seen_steps += step_cost_coverage
+        cost_coverage_sum += step_cost_coverage
 
         if (
             step_total_tokens is None
@@ -234,11 +234,11 @@ def extract_episode_raw_metrics(trajectory: TrajectoryLog) -> EpisodeRawMetrics:
             completion_token_values.append(step_completion_tokens)
         if step_total_tokens is not None:
             total_token_values.append(step_total_tokens)
-        token_seen_steps += step_token_coverage
+        token_coverage_sum += step_token_coverage
 
         if step_llm_latency is not None:
             llm_latency_values.append(step_llm_latency)
-        latency_seen_steps += step_latency_coverage
+        latency_coverage_sum += step_latency_coverage
 
     # Aggregate raw cost and token totals.
     llm_cost_usd = sum(cost_values) if cost_values else None
@@ -296,9 +296,9 @@ def extract_episode_raw_metrics(trajectory: TrajectoryLog) -> EpisodeRawMetrics:
         cost_per_step_usd=cost_per_step_usd,
         cost_per_success_usd=cost_per_success_usd,
         tokens_per_step=tokens_per_step,
-        cost_data_coverage=cost_seen_steps / denominator,
-        token_data_coverage=token_seen_steps / denominator,
-        llm_latency_data_coverage=latency_seen_steps / denominator,
+        cost_data_coverage=cost_coverage_sum / denominator,
+        token_data_coverage=token_coverage_sum / denominator,
+        llm_latency_data_coverage=latency_coverage_sum / denominator,
     )
 
 

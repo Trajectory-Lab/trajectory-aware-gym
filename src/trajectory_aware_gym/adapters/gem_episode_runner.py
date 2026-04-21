@@ -7,6 +7,7 @@ import logging
 import math
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
@@ -40,6 +41,7 @@ from trajectory_aware_gym.adapters.trajectory_logger import (
     ToolCall,
     TrajectoryLog,
     TrajectoryLogger,
+    resolve_token_usage,
 )
 from trajectory_aware_gym.config import ProjectPaths, settings
 from trajectory_aware_gym.metrics import EpisodeRawMetrics, extract_episode_raw_metrics
@@ -75,15 +77,24 @@ _RETRYABLE_EXCEPTIONS = (
 # ── Inference concurrency semaphore ─────────────────────────────
 _inference_semaphore: threading.Semaphore | None = None
 _semaphore_lock = threading.Lock()
+_inference_semaphore_size_override: int | None = None
 
 
 def _get_inference_semaphore() -> threading.Semaphore:
-    """Lazily initialise the inference semaphore from ``settings.retry``."""
+    """Lazily initialise the inference semaphore.
+
+    Uses the CLI override if set; otherwise falls back to ``settings.retry``.
+    """
     global _inference_semaphore  # noqa: PLW0603
     if _inference_semaphore is None:
         with _semaphore_lock:
             if _inference_semaphore is None:
-                _inference_semaphore = threading.Semaphore(settings.retry.inference_semaphore_size)
+                size = (
+                    _inference_semaphore_size_override
+                    if _inference_semaphore_size_override is not None
+                    else settings.retry.inference_semaphore_size
+                )
+                _inference_semaphore = threading.Semaphore(size)
     return _inference_semaphore
 
 
@@ -91,6 +102,80 @@ def _reset_inference_semaphore() -> None:
     """Reset the module-level semaphore (for test isolation)."""
     global _inference_semaphore  # noqa: PLW0603
     _inference_semaphore = None
+
+
+def set_inference_semaphore_size_override(size: int | None) -> None:
+    """Override ``settings.retry.inference_semaphore_size`` for this process.
+
+    Must be called before the first inference call — subsequent calls to
+    ``set_*`` also reset the underlying semaphore so the next acquire picks
+    up the new size.
+    """
+    global _inference_semaphore_size_override  # noqa: PLW0603
+    if size is not None and size < 1:
+        raise ValueError(f"inference_semaphore_size must be >= 1 (got {size})")
+    _inference_semaphore_size_override = size
+    _reset_inference_semaphore()
+
+
+# ── Episode-level retry on transient failures ──────────────────
+# These are exception types that are worth retrying at the episode level —
+# transient infrastructure issues. Deterministic exceptions (ValueError,
+# TypeError, AssertionError, KeyError) are deliberately excluded so we don't
+# waste compute on actual bugs. LLM-layer exceptions are already retried
+# inside ``_completion_with_retry``; retrying again here would multiply the
+# attempt count. ``tenacity.RetryError`` (raised when ``_completion_with_retry``
+# exhausts) is therefore also excluded.
+_EPISODE_RETRYABLE_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    TimeoutError,
+    ConnectionError,
+)
+
+# Max total attempts per episode. Kept conservative so a prompt that
+# systematically fails doesn't waste 3× compute before being recorded.
+_EPISODE_MAX_ATTEMPTS = 2
+
+
+def _is_episode_retryable(exc: Exception) -> bool:
+    """Decide whether an episode-level failure is worth retrying.
+
+    Excludes deterministic bugs (FileNotFoundError etc.) and anything already
+    exhausted by the LLM-layer retry, which would just waste budget.
+    """
+    if isinstance(exc, FileNotFoundError | IsADirectoryError | NotADirectoryError):
+        return False
+    # TimeoutError/ConnectionError plus miscellaneous IO/socket OSErrors.
+    return isinstance(exc, _EPISODE_RETRYABLE_EXCEPTIONS) or isinstance(exc, OSError)
+
+
+def run_episode_with_retry[T](
+    fn: Callable[[], T],
+    *,
+    context_label: str,
+    max_attempts: int = _EPISODE_MAX_ATTEMPTS,
+) -> T:
+    """Run ``fn()`` with bounded retries on transient infrastructure errors.
+
+    Used by both GEM solver forward calls and held-out eval workers to survive
+    transient failures (tool timeouts, connection blips) without retrying
+    deterministic bugs or already-exhausted LLM errors.
+    """
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001 — allowlist filtered below
+            if attempt >= max_attempts or not _is_episode_retryable(exc):
+                raise
+            logger.warning(
+                "%s failed on attempt %d/%d (%s: %r); retrying",
+                context_label,
+                attempt,
+                max_attempts,
+                type(exc).__name__,
+                exc,
+            )
+    # Unreachable — loop body either returns or raises.
+    raise AssertionError("run_episode_with_retry exited without returning or raising")
 
 
 def _completion_with_retry(
@@ -372,17 +457,11 @@ def _extract_llm_cost(model_id: str, response: Any) -> tuple[float | None, LLMCo
 def _extract_token_usage_metadata(response: Any) -> tuple[int, int, int, bool]:
     """Extract faithful token totals from a LiteLLM response."""
     usage = getattr(response, "usage", None)
-    prompt_raw = getattr(usage, "prompt_tokens", None) if usage is not None else None
-    completion_raw = getattr(usage, "completion_tokens", None) if usage is not None else None
-    total_raw = getattr(usage, "total_tokens", None) if usage is not None else None
-
-    prompt_tokens = int(prompt_raw or 0)
-    completion_tokens = int(completion_raw or 0)
-    if total_raw is not None:
-        return (prompt_tokens, completion_tokens, int(total_raw), True)
-    if prompt_raw is not None and completion_raw is not None:
-        return (prompt_tokens, completion_tokens, prompt_tokens + completion_tokens, True)
-    return (0, 0, 0, False)
+    return resolve_token_usage(
+        getattr(usage, "prompt_tokens", None) if usage is not None else None,
+        getattr(usage, "completion_tokens", None) if usage is not None else None,
+        getattr(usage, "total_tokens", None) if usage is not None else None,
+    )
 
 
 def _make_logging_event(

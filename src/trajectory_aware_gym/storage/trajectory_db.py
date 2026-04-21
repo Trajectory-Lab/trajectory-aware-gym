@@ -260,7 +260,7 @@ def _migrate_existing_schema(conn: sqlite3.Connection) -> None:
             "provider": "ALTER TABLE llm_calls ADD COLUMN provider TEXT",
             "cost_type": "ALTER TABLE llm_calls ADD COLUMN cost_type TEXT",
             "latency_ms": "ALTER TABLE llm_calls ADD COLUMN latency_ms REAL",
-            "token_usage_known": (
+            "token_usage_known": (  # nosec B105 — column name, not a password
                 "ALTER TABLE llm_calls ADD COLUMN token_usage_known INTEGER NOT NULL DEFAULT 1"
             ),
         },

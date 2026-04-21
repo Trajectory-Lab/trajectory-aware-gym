@@ -440,6 +440,27 @@ def filter_trajectories(
 # ---------------------------------------------------------------------------
 
 
+def resolve_token_usage(
+    prompt_raw: Any,
+    completion_raw: Any,
+    total_raw: Any,
+) -> tuple[int, int, int, bool]:
+    """Canonical rule for turning raw LLM-usage fields into `(prompt, completion, total, known)`.
+
+    Prefers an explicit `total_raw`; otherwise falls back to `prompt + completion`
+    when both are present; otherwise marks usage as unknown with zero totals.
+    Shared by LiteLLM `response.usage` (attr-shaped) and DSPy tracker (dict-shaped)
+    call sites so the two code paths cannot drift.
+    """
+    prompt = int(prompt_raw or 0)
+    completion = int(completion_raw or 0)
+    if total_raw is not None:
+        return (prompt, completion, int(total_raw), True)
+    if prompt_raw is not None and completion_raw is not None:
+        return (prompt, completion, prompt + completion, True)
+    return (0, 0, 0, False)
+
+
 def extract_llm_calls_from_tracker(tracker: Any) -> list[LLMCallMetadata]:
     """Convert a ``dspy.track_usage()`` tracker into LLMCallMetadata entries.
 
@@ -457,20 +478,11 @@ def extract_llm_calls_from_tracker(tracker: Any) -> list[LLMCallMetadata]:
     calls: list[LLMCallMetadata] = []
     for model_id, usages in getattr(tracker, "usage_data", {}).items():
         for usage in usages:
-            prompt_raw = usage.get("prompt_tokens")
-            completion_raw = usage.get("completion_tokens")
-            total_raw = usage.get("total_tokens")
-            prompt = int(prompt_raw or 0)
-            completion = int(completion_raw or 0)
-            if total_raw is not None:
-                total_tokens = int(total_raw)
-                token_usage_known = True
-            elif prompt_raw is not None and completion_raw is not None:
-                total_tokens = prompt + completion
-                token_usage_known = True
-            else:
-                total_tokens = 0
-                token_usage_known = False
+            prompt, completion, total_tokens, token_usage_known = resolve_token_usage(
+                usage.get("prompt_tokens"),
+                usage.get("completion_tokens"),
+                usage.get("total_tokens"),
+            )
             calls.append(
                 LLMCallMetadata(
                     model_id=model_id,

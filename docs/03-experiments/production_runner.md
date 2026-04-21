@@ -189,11 +189,16 @@ Key fields:
 
 - `experiment_run_id`, `config_name`, `provider`, `task_model_id`, `environment_id`, `seed`
 - `baseline_eval`, `eval_summary` including `episodes_attempted`, `episodes_completed`, `episodes_scorable`, `failed`, `timed_out`, and `metrics_unavailable`
-- `total_tokens`, `total_tokens_known`, `task_model_cost_usd`, `task_model_cost_known_usd`
-- `reflection_cost_usd`, `total_cost_usd`, `total_cost_known_usd`, `cost_type`
+- `total_tokens`, `total_tokens_known`, `task_model_cost_usd`, `task_model_cost_known_usd`, `task_model_token_data_coverage`, `task_model_cost_data_coverage`
+- `reflection_tokens`, `reflection_tokens_known`, `reflection_token_data_coverage`, `reflection_cost_usd`, `reflection_cost_known_usd`, `reflection_cost_data_coverage`
+- `total_cost_usd`, `total_cost_known_usd`, `cost_type`
 - `normalized_cost_usd`, `normalization_reference`
 - `wall_clock_seconds`, `mean_llm_latency_ms`
 - `git_commit`, `started_at`, `finished_at`, `logging_summary`
+
+Reflection cost/token fields are `null` when the reflection LM returned partial usage data;
+the matching `*_known` and `*_data_coverage` fields still carry the known sum and the
+fraction of reflection calls that reported usage, so partial runs remain auditable.
 
 ## Resume Behavior
 
