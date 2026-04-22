@@ -295,3 +295,8 @@ Primary configs live under `experiments/`:
 - `experiments/quick-test/config.yaml` — Lightweight config for development/CI
 
 Each config specifies environment settings, task models, reflection model, GEPA budget, replication seeds, evaluation protocol, and cost budget. See `src/trajectory_aware_gym/models/experiment.py` for the full `ExperimentConfig` schema.
+
+## Related Tooling
+
+- [publish_runner.md](publish_runner.md) — `poe publish` promotes a completed run from `results/` into `docs/07-results/`.
+- `scripts/upload_experiment_artifacts.py` (`poe upload-artifacts`) — optional S3 sync of replication artifacts.
