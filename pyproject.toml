@@ -89,6 +89,7 @@ fail_under = 85
 line-length = 100
 target-version = "py313"
 src = ["src", "tests"]
+extend-exclude = ["docs/07-results"]
 
 [tool.ruff.lint]
 select = [
@@ -115,7 +116,7 @@ pythonVersion = "3.13"
 typeCheckingMode = "basic"
 reportMissingImports = true
 reportMissingTypeStubs = false
-exclude = ["**/node_modules", "**/__pycache__", ".venv", "build", "dist"]
+exclude = ["**/node_modules", "**/__pycache__", ".venv", "build", "dist", "docs/07-results"]
 
 [tool.bandit]
 exclude_dirs = ["tests", ".venv", "build"]
@@ -183,3 +184,7 @@ help = "Run production GEPA experiment (pass --config and other flags after --)"
 [tool.poe.tasks.upload-artifacts]
 cmd = "python scripts/upload_experiment_artifacts.py"
 help = "Upload completed local experiment artifacts to S3"
+
+[tool.poe.tasks.publish]
+cmd = "python scripts/publish_run.py"
+help = "Publish the most recent experiment run (or --run-dir / --config) to docs/07-results"

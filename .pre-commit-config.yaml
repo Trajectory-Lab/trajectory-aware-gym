@@ -1,6 +1,8 @@
 # Pre-commit hooks configuration
 # See https://pre-commit.com for more information
 
+exclude: '^docs/07-results/'
+
 repos:
   # Standard pre-commit hooks
   - repo: https://github.com/pre-commit/pre-commit-hooks
