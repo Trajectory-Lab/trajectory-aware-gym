@@ -69,6 +69,11 @@ Source repos:
 - [mradermacher/Qwen3-1.7B-Base-GGUF](https://huggingface.co/mradermacher/Qwen3-1.7B-Base-GGUF) (quantized from [Qwen/Qwen3-1.7B-Base](https://huggingface.co/Qwen/Qwen3-1.7B-Base))
 - [mradermacher/Qwen3-4B-Base-GGUF](https://huggingface.co/mradermacher/Qwen3-4B-Base-GGUF) (quantized from [Qwen/Qwen3-4B-Base](https://huggingface.co/Qwen/Qwen3-4B-Base))
 
+Experimental disclosure:
+- These Ollama models are third-party GGUF quantizations of the official Qwen base checkpoints. They are not native Ollama-hosted or Bedrock-hosted official Qwen deployments.
+- When reporting results, describe them explicitly as `Qwen3-1.7B-Base/Qwen3-4B-Base (Q4_K_M GGUF via Ollama, quantized from the official Qwen checkpoint by mradermacher)`.
+- This gives us a reproducible local inference stack, but it means results are protocol-comparable to the paper setup rather than infrastructure-identical.
+
 ---
 
 ## Step 4: Register Models with Ollama
@@ -92,6 +97,17 @@ ollama list
 ```
 
 Both `qwen3-1.7b-base` and `qwen3-4b-base` should appear.
+
+For reproducibility, verify the registered model metadata:
+
+```bash
+ollama show qwen3-4b-base
+```
+
+Expected fields for the 4B setup in this repo:
+- `architecture: qwen3`
+- `parameters: 4.0B`
+- `quantization: Q4_K_M`
 
 ---
 
@@ -175,7 +191,7 @@ uv run python scripts/run_gem_episode.py \
 ## Notes
 
 - **Base models are completion models**, not chat models. They continue text from your prompt rather than answering questions. This is expected behavior for GEPA/GRPO experiments.
-- **Q4_K_M quantization** is a good balance of speed and quality. The 4090 can easily handle both models. Quantization introduces minor differences vs. the full-precision weights running on AWS SageMaker, but this does not affect relative comparisons between methods (GEPA vs GRPO) since both use the same quantized model.
+- **Q4_K_M quantization** is a good balance of speed and quality. The 4090 can easily handle both models. Quantization introduces differences vs. the full-precision or provider-hosted checkpoints, so these runs should be reported as local GGUF/Ollama experiments. Relative comparisons remain valid when the compared methods use the same quantized model and evaluation protocol.
 - **Ollama runs a persistent server** at `localhost:11434`. It starts automatically via systemd. If it's not running: `sudo systemctl start ollama`.
 - **GPU memory usage**: 1.7B ≈ 5GB VRAM, 4B ≈ 7GB VRAM. Both fit comfortably on a 24GB RTX 4090, even simultaneously.
 - **Stop sequences**: The episode runner automatically adds stop sequences (`<|endoftext|>`, `<|im_end|>`, etc.) for `ollama/` base models to prevent infinite text generation.
