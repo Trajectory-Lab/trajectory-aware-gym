@@ -1,0 +1,134 @@
+name: hotpotqa-notool
+description: 'GEPA prompt optimization on HotpotQA without tool access. Compares against
+  GEM''s published REINFORCE+ReBN no-tool baseline.
+
+  '
+environment:
+  gem_env_id: qa:HotpotQA
+  env_type: qa
+  dspy_module: react
+  train_size: 150
+  val_size: 300
+  test_split: test
+  max_steps: 10
+  discount_gamma: 0.9
+  tools: []
+  dataset:
+    hf_dataset_id: axon-rl/HotpotQA
+    total_train_size: 90400
+    subsample_size: 150
+    subsample_strategy: uniform
+    eval_dataset_id: axon-rl/search-eval
+    eval_split: hotpotqa
+    eval_size: 512
+seed_prompt: 'You are a multi-hop question answerer.
+
+
+  Reason through the question using only the knowledge you already have.
+
+  State a brief chain of reasoning, then commit your final answer by
+
+  responding with \boxed{...}. Example: \boxed{Florence}
+
+
+  The \boxed{} expression must be the last content in your response.
+
+  '
+eval_protocol:
+  max_response_tokens: 4096
+  temperature_train: 1.0
+  temperature_eval: 0.0
+  top_p: 1.0
+  top_k: -1
+  rollouts_per_task: 1
+  max_eval_workers: 32
+  eval_episode_timeout_seconds: 120
+  tost_margin: 0.05
+  tost_alpha: 0.05
+  bootstrap_iterations: 1000
+task_models:
+- name: Qwen3-1.7B-Base
+  model_id: ollama/qwen3-1.7b-base
+  provider: ollama
+  parameter_count: 1.7B
+- name: Qwen3-4B-Base
+  model_id: ollama/qwen3-4b-base
+  provider: ollama
+  parameter_count: 4B
+- name: Llama-3.1-8B-Instruct
+  model_id: bedrock/us.meta.llama3-1-8b-instruct-v1:0
+  provider: bedrock
+  parameter_count: 8B
+- name: Gemma-3-4B-IT
+  model_id: bedrock/google.gemma-3-4b-it
+  provider: bedrock
+  parameter_count: 4B
+- name: Mistral-7B-Instruct
+  model_id: bedrock/mistral.mistral-7b-instruct-v0:2
+  provider: bedrock
+  parameter_count: 7B
+- name: Nemotron-Nano-9B
+  model_id: bedrock/nvidia.nemotron-nano-9b-v2
+  provider: bedrock
+  parameter_count: 9B
+reflection_model:
+  model_id: us.anthropic.claude-sonnet-4-5-20250929-v1:0
+  provider: bedrock
+  temperature: 1.0
+  max_tokens: 4096
+gepa_budget:
+  mode: medium
+  tasks_per_minibatch: 3
+seeds:
+  data_seed: 42
+  replication_seeds:
+  - 42
+  - 123
+  - 456
+num_replications: 3
+rl_baselines:
+- algorithm: REINFORCE+ReBN
+  environment: qa:HotpotQA
+  model_name: Qwen3-4B
+  model_size: 4B
+  success_rate: 0.211
+  tool_augmented: false
+  training_condition: single
+  metric_name: pass@1
+  source: GEM (Liu et al., 2025)
+  source_detail: Table 2, HotpotQA, +RL (no tool, single env)
+  estimated: false
+  training_details:
+    learning_rate: 1.0e-06
+    optimizer: AdamW
+    adam_betas:
+    - 0.9
+    - 0.95
+    gradient_clip: 1.0
+    policy_clip: 0.2
+    kl_coefficient: 0.0
+    inner_epochs: 2
+    gae_lambda: 0.95
+    training_steps: 500
+    infrastructure: 8x A100 GPUs, ~1 day
+comparison_protocol:
+  primary_metric: success_rate
+  equivalence_test: TOST
+  primary_rl_baseline: REINFORCE+ReBN (no tool, single)
+  prompt_baselines:
+  - name: zero-shot
+    description: Unoptimized DSPy agent with hand-written instructions
+    requires_optimization: false
+  - name: miprov2
+    description: DSPy's Bayesian prompt optimizer baseline
+    optimizer: MIPROv2
+    requires_optimization: true
+cost_budget:
+  estimated_tokens_per_experiment: 94000000
+  total_budget_usd: 2500.0
+  buffer_pct: 0.25
+fitness_override:
+  gamma: 0.9
+  max_steps: 10
+runtime_overrides:
+  budget_mode: medium

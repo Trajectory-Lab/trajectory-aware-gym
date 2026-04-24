@@ -1,0 +1,108 @@
+{
+  "baseline_eval": {
+    "accuracy": 0.130859375,
+    "attempted_success_rate": 0.130859375,
+    "completion_rate": 1.0,
+    "correct": 67,
+    "episodes": 512,
+    "episodes_attempted": 512,
+    "episodes_completed": 512,
+    "episodes_scorable": 512,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.130859375,
+    "successes": 67,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "baseline_validation": {
+    "accuracy": 0.08666666666666667,
+    "correct": 26,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "config_hash": "0c0d679ebb32026b33f5a15894e42163ca13b2a7121c9bab4e01ef1af2c1c485",
+  "elapsed_seconds": 599.895,
+  "eval": {
+    "accuracy": 0.22265625,
+    "attempted_success_rate": 0.22265625,
+    "completion_rate": 1.0,
+    "correct": 114,
+    "episodes": 512,
+    "episodes_attempted": 512,
+    "episodes_completed": 512,
+    "episodes_scorable": 512,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.22265625,
+    "successes": 114,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "experiment_run_id": "hotpotqa-notool-bedrock-google-gemma-3-4b-it-h-jerry-kim-seed42-20260421T1624Z",
+  "finished_at": "2026-04-21T16:34:24.720416Z",
+  "gepa_budget_mode": "medium",
+  "gepa_phase_summary": {
+    "logging_summary": {
+      "events": [],
+      "events_truncated": false,
+      "metrics_unavailable_episodes": 0,
+      "numeric_anomaly_count": 0,
+      "status": "complete",
+      "trajectory_failed_episodes": 0,
+      "trajectory_persisted_episodes": 2472
+    },
+    "reflection_cost": 0.16036,
+    "reflection_tokens": 21094,
+    "reflection_usage": {
+      "cost_data_coverage": 1.0,
+      "known_cost_usd": 0.16036,
+      "known_total_tokens": 21094,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": 0.16036,
+      "total_tokens": 21094
+    },
+    "training_usage": {
+      "cost_data_coverage": 1.0,
+      "episodes": 2472,
+      "has_missing_cost_data": false,
+      "known_cost_usd": 0.068073,
+      "known_total_tokens": 1388660,
+      "metrics_unavailable_episodes": 0,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": 0.068073,
+      "total_tokens": 1388660
+    }
+  },
+  "git_commit": "f22b50ed4cb0a7f2f1e23d18ab84eeda7b3ccd45",
+  "logging_summary": {
+    "events": [],
+    "events_truncated": false,
+    "metrics_unavailable_episodes": 0,
+    "numeric_anomaly_count": 0,
+    "status": "complete",
+    "trajectory_failed_episodes": 0,
+    "trajectory_persisted_episodes": 3496
+  },
+  "max_metric_calls_override": null,
+  "model_id": "bedrock/google.gemma-3-4b-it",
+  "model_name": "Gemma-3-4B-IT",
+  "optimized_validation": {
+    "accuracy": 0.23666666666666666,
+    "correct": 71,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "result": {
+    "baseline_accuracy": 0.08666666666666667,
+    "baseline_fitness": 0.08341666666666668,
+    "best_program_index": 4,
+    "final_accuracy": 0.23666666666666666,
+    "final_fitness": 0.2277916666666667,
+    "optimized_instructions": "You are a multi-hop question answerer.\n\nCRITICAL FORMATTING REQUIREMENT: You MUST use both <think> and <answer> tags for every response. Responses without <think> tags will be considered incomplete and incorrect.\n\nRequired format for ALL responses:\n1. ALWAYS start with <think> tags containing your complete reasoning process\n2. ALWAYS end with <answer> tags containing only your final answer\n\nExample structure:\n<think>\n[Your step-by-step reasoning here]\n</think>\n<answer>\n[Your final answer here]\n</answer>\n\nYour reasoning in <think> tags should:\n1. Break down multi-hop questions into individual steps and clearly state what you need to find first\n2. Answer each sub-question using your existing knowledge\n3. Connect the answers logically to reach the final answer\n4. Be thorough enough to show your complete thought process\n\nFor multi-hop questions, identify what information you need to find first before answering the main question. For example:\n- If asked about a characteristic of something associated with a person, first identify what that thing is, then identify its characteristic\n- If asked about when a location got its name, first identify the specific location, then determine when it was named\n- If asked what category two things have in common, first identify what each thing is, then determine their shared category\n\nThe <answer> tags should contain ONLY your final, direct answer to the question asked. Do not include extra explanations or duplicate answer tags.\n\nRemember: Both <think> AND <answer> tags are mandatory for every response. Never skip the <think> section."
+  },
+  "run_id": "hotpotqa-notool-20260421T162424Z",
+  "seed": 42,
+  "started_at": "2026-04-21T16:24:24.825830Z",
+  "status": "completed"
+}
