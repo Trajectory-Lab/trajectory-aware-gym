@@ -1,0 +1,88 @@
+{
+  "history": [
+    {
+      "accuracy": 0.18,
+      "index": 0,
+      "metric_calls": 0,
+      "val_aggregate_score": 0.17241666666666666
+    },
+    {
+      "accuracy": 0.2,
+      "index": 1,
+      "metric_calls": 62,
+      "val_aggregate_score": 0.192
+    },
+    {
+      "accuracy": 0.22,
+      "index": 2,
+      "metric_calls": 142,
+      "val_aggregate_score": 0.21158333333333335
+    },
+    {
+      "accuracy": 0.22,
+      "index": 3,
+      "metric_calls": 198,
+      "val_aggregate_score": 0.21141666666666667
+    },
+    {
+      "accuracy": 0.04,
+      "index": 4,
+      "metric_calls": 254,
+      "val_aggregate_score": 0.0375
+    },
+    {
+      "accuracy": 0.24,
+      "index": 5,
+      "metric_calls": 334,
+      "val_aggregate_score": 0.22949999999999998
+    },
+    {
+      "accuracy": 0.24,
+      "index": 6,
+      "metric_calls": 438,
+      "val_aggregate_score": 0.2305
+    },
+    {
+      "accuracy": 0.08,
+      "index": 7,
+      "metric_calls": 494,
+      "val_aggregate_score": 0.07633333333333332
+    },
+    {
+      "accuracy": 0.12,
+      "index": 8,
+      "metric_calls": 556,
+      "val_aggregate_score": 0.11383333333333333
+    },
+    {
+      "accuracy": 0.28,
+      "index": 9,
+      "metric_calls": 630,
+      "val_aggregate_score": 0.26916666666666667
+    },
+    {
+      "accuracy": 0.1,
+      "index": 10,
+      "metric_calls": 698,
+      "val_aggregate_score": 0.09608333333333334
+    },
+    {
+      "accuracy": 0.22,
+      "index": 11,
+      "metric_calls": 772,
+      "val_aggregate_score": 0.21075
+    },
+    {
+      "accuracy": 0.14,
+      "index": 12,
+      "metric_calls": 828,
+      "val_aggregate_score": 0.13375
+    },
+    {
+      "accuracy": 0.24,
+      "index": 13,
+      "metric_calls": 884,
+      "val_aggregate_score": 0.23016666666666666
+    }
+  ]
+}
