@@ -1,0 +1,108 @@
+{
+  "baseline_eval": {
+    "accuracy": 0.125,
+    "attempted_success_rate": 0.125,
+    "completion_rate": 1.0,
+    "correct": 64,
+    "episodes": 512,
+    "episodes_attempted": 512,
+    "episodes_completed": 512,
+    "episodes_scorable": 512,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.125,
+    "successes": 64,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "baseline_validation": {
+    "accuracy": 0.11,
+    "correct": 33,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "config_hash": "0c0d679ebb32026b33f5a15894e42163ca13b2a7121c9bab4e01ef1af2c1c485",
+  "elapsed_seconds": 2952.041,
+  "eval": {
+    "accuracy": 0.158203125,
+    "attempted_success_rate": 0.158203125,
+    "completion_rate": 1.0,
+    "correct": 81,
+    "episodes": 512,
+    "episodes_attempted": 512,
+    "episodes_completed": 512,
+    "episodes_scorable": 512,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.158203125,
+    "successes": 81,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "experiment_run_id": "hotpotqa-notool-bedrock-nvidia-nemotron-nano-9b-v2-h-jerry-kim-seed42-20260421T1654Z",
+  "finished_at": "2026-04-21T17:44:03.605734Z",
+  "gepa_budget_mode": "medium",
+  "gepa_phase_summary": {
+    "logging_summary": {
+      "events": [],
+      "events_truncated": false,
+      "metrics_unavailable_episodes": 0,
+      "numeric_anomaly_count": 0,
+      "status": "complete",
+      "trajectory_failed_episodes": 0,
+      "trajectory_persisted_episodes": 2190
+    },
+    "reflection_cost": 0.37525,
+    "reflection_tokens": 69268,
+    "reflection_usage": {
+      "cost_data_coverage": 1.0,
+      "known_cost_usd": 0.37525,
+      "known_total_tokens": 69268,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": 0.37525,
+      "total_tokens": 69268
+    },
+    "training_usage": {
+      "cost_data_coverage": 1.0,
+      "episodes": 2190,
+      "has_missing_cost_data": false,
+      "known_cost_usd": 0.599489,
+      "known_total_tokens": 3489899,
+      "metrics_unavailable_episodes": 0,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": 0.599489,
+      "total_tokens": 3489899
+    }
+  },
+  "git_commit": "f22b50ed4cb0a7f2f1e23d18ab84eeda7b3ccd45",
+  "logging_summary": {
+    "events": [],
+    "events_truncated": false,
+    "metrics_unavailable_episodes": 0,
+    "numeric_anomaly_count": 0,
+    "status": "complete",
+    "trajectory_failed_episodes": 0,
+    "trajectory_persisted_episodes": 3214
+  },
+  "max_metric_calls_override": null,
+  "model_id": "bedrock/nvidia.nemotron-nano-9b-v2",
+  "model_name": "Nemotron-Nano-9B",
+  "optimized_validation": {
+    "accuracy": 0.14666666666666667,
+    "correct": 44,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "result": {
+    "baseline_accuracy": 0.11,
+    "baseline_fitness": 0.105875,
+    "best_program_index": 3,
+    "final_accuracy": 0.14666666666666667,
+    "final_fitness": 0.14116666666666666,
+    "optimized_instructions": "You are a multi-hop question answerer that provides concise, accurate responses.\n\nFor any question, always reason through your thought process using:\n<think> your reasoning here </think>\n\nThen, provide your final answer using:\n<answer> your answer here </answer>\n\nImportant guidelines:\n1. Keep your reasoning concise and focused - avoid excessive speculation\n2. Break down multi-hop questions into component parts systematically\n3. Use only factual knowledge you are confident about\n4. When you lack confidence, acknowledge uncertainty clearly and avoid making up information\n5. Focus on the most direct path to the answer rather than exploring multiple unlikely possibilities\n6. For questions about categories or classifications, identify the most specific common attribute\n\nKey factual information to remember:\n- \"How to Talk to a Liberal (If You Must)\" is a book by Ann Coulter, who is a conservative political commentator\n- Stachyurus and Pleioblastus are both plant genera - \"genus\" is the taxonomic category they share\n- \"The Girl from Ipanema\" by Astrud Gilberto (note correct spelling: Astrud, not Astrid) won Grammy for Record of the Year in 1965\n- Elizabeth Violet Polunin was a stage designer who worked with Sergei Diaghilev and the Ballets Russes. Diaghilev was born in 1872.\n- The film \"The Bookshop\" (2017) stars Emily Mortimer as Florence Green. Emily Mortimer was born on December 1, 1971.\n\nYour reasoning in <think> tags should:\n- Identify what information is needed (break down the question into sub-questions)\n- Work through each hop of reasoning systematically\n- Stop speculation when you reach a confident answer\n- Avoid repetitive exploration of unlikely possibilities\n- Be concise (aim for clarity over exhaustive exploration)\n\nAlways end your response with <answer> tags containing your final answer. Keep answers brief and direct - typically just the specific information requested (a name, date, category, etc.), not full sentences unless the question requires explanation."
+  },
+  "run_id": "hotpotqa-notool-20260421T165451Z",
+  "seed": 42,
+  "started_at": "2026-04-21T16:54:51.564838Z",
+  "status": "completed"
+}
