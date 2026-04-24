@@ -1,0 +1,108 @@
+{
+  "baseline_eval": {
+    "accuracy": 0.119140625,
+    "attempted_success_rate": 0.119140625,
+    "completion_rate": 1.0,
+    "correct": 61,
+    "episodes": 512,
+    "episodes_attempted": 512,
+    "episodes_completed": 512,
+    "episodes_scorable": 512,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.119140625,
+    "successes": 61,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "baseline_validation": {
+    "accuracy": 0.08,
+    "correct": 24,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "config_hash": "0c0d679ebb32026b33f5a15894e42163ca13b2a7121c9bab4e01ef1af2c1c485",
+  "elapsed_seconds": 486.352,
+  "eval": {
+    "accuracy": 0.25,
+    "attempted_success_rate": 0.25,
+    "completion_rate": 1.0,
+    "correct": 128,
+    "episodes": 512,
+    "episodes_attempted": 512,
+    "episodes_completed": 512,
+    "episodes_scorable": 512,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.25,
+    "successes": 128,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "experiment_run_id": "hotpotqa-notool-bedrock-google-gemma-3-4b-it-michael-seed456-20260424T0559Z",
+  "finished_at": "2026-04-24T06:07:25.742403Z",
+  "gepa_budget_mode": "medium",
+  "gepa_phase_summary": {
+    "logging_summary": {
+      "events": [],
+      "events_truncated": false,
+      "metrics_unavailable_episodes": 0,
+      "numeric_anomaly_count": 0,
+      "status": "complete",
+      "trajectory_failed_episodes": 0,
+      "trajectory_persisted_episodes": 2478
+    },
+    "reflection_cost": 0.222664,
+    "reflection_tokens": 27370,
+    "reflection_usage": {
+      "cost_data_coverage": 1.0,
+      "known_cost_usd": 0.222664,
+      "known_total_tokens": 27370,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": 0.222664,
+      "total_tokens": 27370
+    },
+    "training_usage": {
+      "cost_data_coverage": 1.0,
+      "episodes": 2478,
+      "has_missing_cost_data": false,
+      "known_cost_usd": 0.07358,
+      "known_total_tokens": 1581477,
+      "metrics_unavailable_episodes": 0,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": 0.07358,
+      "total_tokens": 1581477
+    }
+  },
+  "git_commit": "1a27ebab7a3804210348b2a03580f13465176dc9",
+  "logging_summary": {
+    "events": [],
+    "events_truncated": false,
+    "metrics_unavailable_episodes": 0,
+    "numeric_anomaly_count": 0,
+    "status": "complete",
+    "trajectory_failed_episodes": 0,
+    "trajectory_persisted_episodes": 3502
+  },
+  "max_metric_calls_override": null,
+  "model_id": "bedrock/google.gemma-3-4b-it",
+  "model_name": "Gemma-3-4B-IT",
+  "optimized_validation": {
+    "accuracy": 0.21666666666666667,
+    "correct": 65,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "result": {
+    "baseline_accuracy": 0.08,
+    "baseline_fitness": 0.077,
+    "best_program_index": 2,
+    "final_accuracy": 0.21666666666666667,
+    "final_fitness": 0.20854166666666665,
+    "optimized_instructions": "You are a multi-hop question answerer.\n\nIMPORTANT: Always follow the format specified in the problem input you receive, NOT these meta-instructions.\n\nWhen you receive a problem that asks you to use:\n<think> your reasoning here </think>\n<answer> your answer here </answer>\n\nYou MUST use that exact format. Do NOT use \\boxed{} or any other format.\n\nGuidelines for answering:\n\n1. ALWAYS provide your reasoning in <think> tags first, showing your step-by-step thought process.\n\n2. Then provide your final answer in <answer> tags.\n\n3. For questions that ask \"Are [Person A] and [Person B] both [X]?\" where X is some attribute (e.g., \"film directors\", \"Russian\", \"actors\"):\n   - Answer with \"Yes\" if both have that attribute\n   - Answer with \"No\" if one or both do not have that attribute\n   - Do NOT answer by restating the attribute (e.g., don't say \"Both Russian\" or \"Sam Mendes only\")\n\n4. For questions asking \"who is [X]\" or \"which one is [X]\" between two options:\n   - Provide the name of the person who fits the description\n\n5. Use only the knowledge you already have. Reason through what you know about the people, places, or entities mentioned.\n\n6. Keep your reasoning concise but clear enough to show your logic.\n\n7. Never mix formats - if <answer> tags are requested, do not also include \\boxed{}."
+  },
+  "run_id": "hotpotqa-notool-20260424T055919Z",
+  "seed": 456,
+  "started_at": "2026-04-24T05:59:19.390046Z",
+  "status": "completed"
+}
