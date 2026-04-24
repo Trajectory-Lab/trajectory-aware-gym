@@ -1,0 +1,46 @@
+{
+  "history": [
+    {
+      "accuracy": 0.31333333333333335,
+      "index": 0,
+      "metric_calls": 0,
+      "val_aggregate_score": 0.30158333333333337
+    },
+    {
+      "accuracy": 0.2866666666666667,
+      "index": 1,
+      "metric_calls": 330,
+      "val_aggregate_score": 0.2759166666666667
+    },
+    {
+      "accuracy": 0.24,
+      "index": 2,
+      "metric_calls": 660,
+      "val_aggregate_score": 0.23099999999999998
+    },
+    {
+      "accuracy": 0.19,
+      "index": 3,
+      "metric_calls": 978,
+      "val_aggregate_score": 0.182875
+    },
+    {
+      "accuracy": 0.2833333333333333,
+      "index": 4,
+      "metric_calls": 1296,
+      "val_aggregate_score": 0.27270833333333333
+    },
+    {
+      "accuracy": 0.19666666666666666,
+      "index": 5,
+      "metric_calls": 1614,
+      "val_aggregate_score": 0.18929166666666666
+    },
+    {
+      "accuracy": 0.2866666666666667,
+      "index": 6,
+      "metric_calls": 1926,
+      "val_aggregate_score": 0.2759166666666667
+    }
+  ]
+}

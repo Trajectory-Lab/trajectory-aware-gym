@@ -1,0 +1,93 @@
+{
+  "baseline_eval": {
+    "episodes": 512,
+    "known_total_cost_usd": 0.007259,
+    "known_total_tokens": 127739,
+    "mean_cost_data_coverage": 1.0,
+    "mean_latency_seconds": 0.855013,
+    "mean_llm_latency_data_coverage": 1.0,
+    "mean_token_data_coverage": 1.0,
+    "metrics_unavailable_episodes": 0,
+    "successes": 67,
+    "total_cost_usd": 0.007259,
+    "total_tokens": 127739
+  },
+  "baseline_eval_denominators": {
+    "accuracy": 0.130859375,
+    "attempted_success_rate": 0.130859375,
+    "completion_rate": 1.0,
+    "correct": 67,
+    "episodes": 512,
+    "episodes_attempted": 512,
+    "episodes_completed": 512,
+    "episodes_scorable": 512,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.130859375,
+    "successes": 67,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "eval_failure_manifest": {
+    "count": 0,
+    "path": "eval_failure_manifest.jsonl"
+  },
+  "heldout_total": {
+    "episodes": 1024,
+    "known_total_cost_usd": 0.022847,
+    "known_total_tokens": 429739,
+    "mean_cost_data_coverage": 1.0,
+    "mean_latency_seconds": 1.012345,
+    "mean_llm_latency_data_coverage": 1.0,
+    "mean_token_data_coverage": 1.0,
+    "metrics_unavailable_episodes": 0,
+    "successes": 181,
+    "total_cost_usd": 0.022847,
+    "total_tokens": 429739
+  },
+  "heldout_total_denominators": {
+    "accuracy": 0.1767578125,
+    "attempted_success_rate": 0.1767578125,
+    "completion_rate": 1.0,
+    "correct": 181,
+    "episodes": 1024,
+    "episodes_attempted": 1024,
+    "episodes_completed": 1024,
+    "episodes_scorable": 1024,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.1767578125,
+    "successes": 181,
+    "timed_out": 0
+  },
+  "optimized_eval": {
+    "episodes": 512,
+    "known_total_cost_usd": 0.015588,
+    "known_total_tokens": 302000,
+    "mean_cost_data_coverage": 1.0,
+    "mean_latency_seconds": 1.169676,
+    "mean_llm_latency_data_coverage": 1.0,
+    "mean_token_data_coverage": 1.0,
+    "metrics_unavailable_episodes": 0,
+    "successes": 114,
+    "total_cost_usd": 0.015588,
+    "total_tokens": 302000
+  },
+  "optimized_eval_denominators": {
+    "accuracy": 0.22265625,
+    "attempted_success_rate": 0.22265625,
+    "completion_rate": 1.0,
+    "correct": 114,
+    "episodes": 512,
+    "episodes_attempted": 512,
+    "episodes_completed": 512,
+    "episodes_scorable": 512,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.22265625,
+    "successes": 114,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "scope": "heldout_eval"
+}
