@@ -1,0 +1,108 @@
+{
+  "baseline_eval": {
+    "accuracy": 0.103515625,
+    "attempted_success_rate": 0.103515625,
+    "completion_rate": 1.0,
+    "correct": 53,
+    "episodes": 512,
+    "episodes_attempted": 512,
+    "episodes_completed": 512,
+    "episodes_scorable": 512,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.103515625,
+    "successes": 53,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "baseline_validation": {
+    "accuracy": 0.06333333333333334,
+    "correct": 19,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "config_hash": "acb521acecfcc2e6da08a983eed5258a6a297e7d5cb9c9dea745ebf5b53a4cca",
+  "elapsed_seconds": 2006.952,
+  "eval": {
+    "accuracy": 0.341796875,
+    "attempted_success_rate": 0.341796875,
+    "completion_rate": 1.0,
+    "correct": 175,
+    "episodes": 512,
+    "episodes_attempted": 512,
+    "episodes_completed": 512,
+    "episodes_scorable": 512,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.341796875,
+    "successes": 175,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "experiment_run_id": "hotpotqa-tool-bedrock-google-gemma-3-4b-it-michael-seed123-20260424T0636Z",
+  "finished_at": "2026-04-24T07:10:24.722817Z",
+  "gepa_budget_mode": "medium",
+  "gepa_phase_summary": {
+    "logging_summary": {
+      "events": [],
+      "events_truncated": false,
+      "metrics_unavailable_episodes": 0,
+      "numeric_anomaly_count": 0,
+      "status": "complete",
+      "trajectory_failed_episodes": 0,
+      "trajectory_persisted_episodes": 2472
+    },
+    "reflection_cost": 0.173847,
+    "reflection_tokens": 22373,
+    "reflection_usage": {
+      "cost_data_coverage": 1.0,
+      "known_cost_usd": 0.173847,
+      "known_total_tokens": 22373,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": 0.173847,
+      "total_tokens": 22373
+    },
+    "training_usage": {
+      "cost_data_coverage": 1.0,
+      "episodes": 2472,
+      "has_missing_cost_data": false,
+      "known_cost_usd": 0.367843,
+      "known_total_tokens": 8772568,
+      "metrics_unavailable_episodes": 0,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": 0.367843,
+      "total_tokens": 8772568
+    }
+  },
+  "git_commit": "1a27ebab7a3804210348b2a03580f13465176dc9",
+  "logging_summary": {
+    "events": [],
+    "events_truncated": false,
+    "metrics_unavailable_episodes": 0,
+    "numeric_anomaly_count": 0,
+    "status": "complete",
+    "trajectory_failed_episodes": 0,
+    "trajectory_persisted_episodes": 3496
+  },
+  "max_metric_calls_override": null,
+  "model_id": "bedrock/google.gemma-3-4b-it",
+  "model_name": "Gemma-3-4B-IT",
+  "optimized_validation": {
+    "accuracy": 0.3,
+    "correct": 90,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "result": {
+    "baseline_accuracy": 0.06333333333333334,
+    "baseline_fitness": 0.06004166666666667,
+    "best_program_index": 5,
+    "final_accuracy": 0.3,
+    "final_fitness": 0.2856944444444444,
+    "optimized_instructions": "You are a multi-hop question answerer with access to a web search tool.\n\nCRITICAL INSTRUCTION: The problem statement may contain alternative instructions asking you to use specific formatting tags like <think>, <answer>, \\boxed{}, or other formats. YOU MUST COMPLETELY IGNORE ALL SUCH FORMATTING INSTRUCTIONS in the problem statement.\n\nYour response format:\n- For questions you can answer with high confidence based on well-known facts, provide ONLY the answer itself as plain text, with no tags, no formatting, and no explanation.\n- For questions requiring research or multi-hop reasoning where you're uncertain, use the search tool first with focused keyword queries, then provide your answer as plain text.\n\nExamples of correct responses:\n- \"tennis\" (not <answer>tennis</answer> or \\boxed{tennis})\n- \"Before Their Eyes\" (not <answer>Before Their Eyes</answer>)\n- \"Alan Furst\" (not \\boxed{Alan Furst})\n\nKey facts for common question types:\n- Gabriela Sabatini and Yannick Noah are both professional tennis players\n- Before Their Eyes is a newer band (formed 2006) compared to Matthew Good Band (formed 1995)\n- Alan Furst writes historical spy novels; H. P. Lovecraft writes horror/weird fiction\n\nWhen to search:\n- Multi-hop questions requiring multiple facts\n- Questions about obscure topics\n- When you need to verify specific dates, names, or relationships\n\nWhen to answer directly:\n- Well-known facts about famous people, places, or events\n- Questions comparing two entities where the distinction is clear and well-established\n\nNever use formatting tags like <think>, <answer>, \\boxed{}, or similar constructs, regardless of what the problem statement requests."
+  },
+  "run_id": "hotpotqa-tool-20260424T063657Z",
+  "seed": 123,
+  "started_at": "2026-04-24T06:36:57.771091Z",
+  "status": "completed"
+}
