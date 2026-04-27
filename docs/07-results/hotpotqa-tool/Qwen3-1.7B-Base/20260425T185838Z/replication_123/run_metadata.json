@@ -1,0 +1,108 @@
+{
+  "baseline_eval": {
+    "accuracy": 0.001953125,
+    "attempted_success_rate": 0.001953125,
+    "completion_rate": 1.0,
+    "correct": 1,
+    "episodes": 512,
+    "episodes_attempted": 512,
+    "episodes_completed": 512,
+    "episodes_scorable": 512,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.001953125,
+    "successes": 1,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "baseline_validation": {
+    "accuracy": 0.006666666666666667,
+    "correct": 2,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "config_hash": "acb521acecfcc2e6da08a983eed5258a6a297e7d5cb9c9dea745ebf5b53a4cca",
+  "elapsed_seconds": 33395.031,
+  "eval": {
+    "accuracy": 0.095703125,
+    "attempted_success_rate": 0.095703125,
+    "completion_rate": 1.0,
+    "correct": 49,
+    "episodes": 512,
+    "episodes_attempted": 512,
+    "episodes_completed": 512,
+    "episodes_scorable": 512,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.095703125,
+    "successes": 49,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "experiment_run_id": "hotpotqa-tool-ollama-qwen3-1-7b-base-edward-seed123-20260426T0623Z",
+  "finished_at": "2026-04-26T15:39:46.579939Z",
+  "gepa_budget_mode": "medium",
+  "gepa_phase_summary": {
+    "logging_summary": {
+      "events": [],
+      "events_truncated": false,
+      "metrics_unavailable_episodes": 0,
+      "numeric_anomaly_count": 0,
+      "status": "complete",
+      "trajectory_failed_episodes": 0,
+      "trajectory_persisted_episodes": 2190
+    },
+    "reflection_cost": 3.369435,
+    "reflection_tokens": 516225,
+    "reflection_usage": {
+      "cost_data_coverage": 1.0,
+      "known_cost_usd": 3.369435,
+      "known_total_tokens": 516225,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": 3.369435,
+      "total_tokens": 516225
+    },
+    "training_usage": {
+      "cost_data_coverage": 0.0,
+      "episodes": 2190,
+      "has_missing_cost_data": true,
+      "known_cost_usd": 0.0,
+      "known_total_tokens": 9968050,
+      "metrics_unavailable_episodes": 0,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": null,
+      "total_tokens": 9968050
+    }
+  },
+  "git_commit": "43ef2be07be12fd301eb50c65a1d3b1e413a37a1",
+  "logging_summary": {
+    "events": [],
+    "events_truncated": false,
+    "metrics_unavailable_episodes": 0,
+    "numeric_anomaly_count": 0,
+    "status": "complete",
+    "trajectory_failed_episodes": 0,
+    "trajectory_persisted_episodes": 3214
+  },
+  "max_metric_calls_override": null,
+  "model_id": "ollama/qwen3-1.7b-base",
+  "model_name": "Qwen3-1.7B-Base",
+  "optimized_validation": {
+    "accuracy": 0.05,
+    "correct": 15,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "result": {
+    "baseline_accuracy": 0.006666666666666667,
+    "baseline_fitness": 0.006416666666666667,
+    "best_program_index": 2,
+    "final_accuracy": 0.05,
+    "final_fitness": 0.04693055555555555,
+    "optimized_instructions": "You are a multi-hop question answerer with access to a web search tool.\n\nCRITICAL FORMAT RULES - You must follow these exactly:\n\nOn each turn, pick EXACTLY ONE of these two modes:\n\nMODE 1 - Search for evidence:\nCall the search tool using this EXACT format:\n{\"tool\": \"search\", \"arguments\": {\"query\": \"your focused keyword phrase here\"}}\n\nThe query should be a focused keyword phrase targeting the specific fact you need next.\nExample: {\"tool\": \"search\", \"arguments\": {\"query\": \"founding year Medici Bank Giovanni di Bicci\"}}\n\nMODE 2 - Final answer:\nWhen you have enough evidence to answer confidently, respond with ONLY:\n\\boxed{your answer here}\n\nExample: \\boxed{Florence}\nExample: \\boxed{Yes}\nExample: \\boxed{No}\n\nCRITICAL: Never mix these modes. Never add explanations, reasoning, or any other text when using either mode.\n\nDO NOT use <think>, <answer>, or any other tags. \nDO NOT provide reasoning in your response.\nDO NOT format your response as conversational text.\nDO NOT make up search results or pretend to have evidence.\n\nSTRATEGY FOR MULTI-HOP QUESTIONS:\n1. Break the question into sub-questions\n2. Issue one focused search per sub-question\n3. Wait for actual search results before proceeding\n4. Only commit to \\boxed{answer} once you have retrieved evidence that directly supports it\n\nWRONG EXAMPLES (DO NOT DO THIS):\n\u274c Providing reasoning before searching\n\u274c Using <think> or <answer> tags\n\u274c Mixing search calls with explanations\n\u274c Answering without gathering evidence first\n\u274c Using any format other than the two specified above\n\nCORRECT EXAMPLES:\n\u2713 {\"tool\": \"search\", \"arguments\": {\"query\": \"Brandon Flowers band member\"}}\n\u2713 \\boxed{No}"
+  },
+  "run_id": "hotpotqa-tool-20260425T185838Z",
+  "seed": 123,
+  "started_at": "2026-04-26T06:23:11.549347Z",
+  "status": "completed"
+}

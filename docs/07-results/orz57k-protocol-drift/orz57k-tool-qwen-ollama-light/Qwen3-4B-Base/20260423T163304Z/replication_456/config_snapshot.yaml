@@ -1,0 +1,113 @@
+name: orz57k-tool-qwen-ollama-light
+description: 'Paper-aligned GEPA prompt optimization on Orz57K with Python tool access,
+  using Qwen3-4B via local Ollama for the task model and Bedrock for reflection. Matches
+  the canonical Orz57K experimental design except for task-model routing and the light
+  GEPA budget.
+
+  '
+environment:
+  gem_env_id: math:Orz57K
+  env_type: math
+  dspy_module: react
+  train_size: 500
+  val_size: 50
+  test_split: test
+  max_steps: 10
+  discount_gamma: 1.0
+  tools:
+  - python_exec
+  dataset:
+    hf_dataset_id: axon-rl/ORZ-57k
+    total_train_size: 57000
+    subsample_size: 500
+    subsample_strategy: uniform
+    eval_dataset_id: axon-rl/math-eval
+    eval_split: MATH500
+    eval_size: 500
+seed_prompt: "You are a math problem solver with access to a Python execution tool.\n\
+  \nHow to respond on each turn, pick exactly ONE of:\n\n1. Call the `python_exec`\
+  \ tool to compute a value. The `code` argument must\n   be a valid Python snippet\
+  \ that PRINTS the values you want to see back \u2014\n   values that are not printed\
+  \ are invisible to you.\n   Example tool call:\n     {\"tool\": \"python_exec\"\
+  , \"arguments\": {\"code\": \"print(sum(i for i in range(1, 101) if i % 3 == 0))\"\
+  }}\n\n2. Commit your final answer by responding with ONLY \\boxed{...}, nothing\n\
+  \   else. Example: \\boxed{42}\n\nNever mix these two modes in a single response.\
+  \ Never write Python code in\na markdown fence \u2014 the only way to execute code\
+  \ is via the tool call.\n\nUse the tool whenever arithmetic, enumeration, or verification\
+  \ would help.\nWhen you are confident in the answer, emit the \\boxed{} response.\n"
+eval_protocol:
+  max_response_tokens: 4096
+  temperature_train: 1.0
+  temperature_eval: 0.0
+  top_p: 1.0
+  top_k: -1
+  rollouts_per_task: 5
+  max_eval_workers: 32
+  eval_episode_timeout_seconds: 120
+  tost_margin: 0.05
+  tost_alpha: 0.05
+  bootstrap_iterations: 1000
+task_models:
+- name: Qwen3-4B-Base
+  model_id: ollama/qwen3-4b-base
+  provider: ollama
+  parameter_count: 4B
+reflection_model:
+  model_id: us.anthropic.claude-sonnet-4-5-20250929-v1:0
+  provider: bedrock
+  temperature: 1.0
+  max_tokens: 4096
+gepa_budget:
+  mode: light
+  tasks_per_minibatch: 3
+seeds:
+  data_seed: 42
+  replication_seeds:
+  - 42
+  - 123
+  - 456
+num_replications: 3
+rl_baselines:
+- algorithm: REINFORCE+ReBN
+  environment: math:Orz57K
+  model_name: Qwen3-4B
+  model_size: 4B
+  success_rate: 0.71
+  tool_augmented: true
+  training_condition: single
+  metric_name: pass@1
+  source: GEM (Liu et al., 2025)
+  source_detail: Table 1, MATH500, Base+RL (with tool)
+  estimated: false
+  training_details:
+    learning_rate: 1.0e-06
+    optimizer: AdamW
+    adam_betas:
+    - 0.9
+    - 0.95
+    gradient_clip: 1.0
+    policy_clip: 0.2
+    kl_coefficient: 0.0
+    inner_epochs: 2
+    gae_lambda: 0.95
+    training_steps: 500
+    infrastructure: 8x A100 GPUs, ~1 day
+comparison_protocol:
+  primary_metric: success_rate
+  equivalence_test: TOST
+  primary_rl_baseline: REINFORCE+ReBN (+tool)
+  prompt_baselines:
+  - name: zero-shot
+    description: Unoptimized DSPy agent with hand-written instructions
+    requires_optimization: false
+  - name: miprov2
+    description: DSPy's Bayesian prompt optimizer baseline
+    optimizer: MIPROv2
+    requires_optimization: true
+cost_budget:
+  estimated_tokens_per_experiment: 94000000
+  total_budget_usd: 2500.0
+  buffer_pct: 0.25
+fitness_override:
+  gamma: 1.0
+  max_steps: 10

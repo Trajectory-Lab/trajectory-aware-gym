@@ -1,0 +1,108 @@
+{
+  "baseline_eval": {
+    "accuracy": 0.232,
+    "attempted_success_rate": 0.232,
+    "completion_rate": 1.0,
+    "correct": 116,
+    "episodes": 500,
+    "episodes_attempted": 500,
+    "episodes_completed": 500,
+    "episodes_scorable": 500,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.232,
+    "successes": 116,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "baseline_validation": {
+    "accuracy": 0.23333333333333334,
+    "correct": 70,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "config_hash": "2d60836365dd2c3c8ca214372440604352c134d81c2f4f0c57cf364bbc97270f",
+  "elapsed_seconds": 18791.893,
+  "eval": {
+    "accuracy": 0.258,
+    "attempted_success_rate": 0.258,
+    "completion_rate": 1.0,
+    "correct": 129,
+    "episodes": 500,
+    "episodes_attempted": 500,
+    "episodes_completed": 500,
+    "episodes_scorable": 500,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.258,
+    "successes": 129,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "experiment_run_id": "orz57k-tool-qwen-ollama-ollama-qwen3-4b-base-jward42-seed42-20260421T2035Z",
+  "finished_at": "2026-04-22T01:48:39.018704Z",
+  "gepa_budget_mode": "light",
+  "gepa_phase_summary": {
+    "logging_summary": {
+      "events": [],
+      "events_truncated": false,
+      "metrics_unavailable_episodes": 0,
+      "numeric_anomaly_count": 0,
+      "status": "complete",
+      "trajectory_failed_episodes": 0,
+      "trajectory_persisted_episodes": 1638
+    },
+    "reflection_cost": 0.477804,
+    "reflection_tokens": 76533,
+    "reflection_usage": {
+      "cost_data_coverage": 1.0,
+      "known_cost_usd": 0.477804,
+      "known_total_tokens": 76533,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": 0.477804,
+      "total_tokens": 76533
+    },
+    "training_usage": {
+      "cost_data_coverage": 0.0,
+      "episodes": 1638,
+      "has_missing_cost_data": true,
+      "known_cost_usd": 0.0,
+      "known_total_tokens": 2843556,
+      "metrics_unavailable_episodes": 0,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": null,
+      "total_tokens": 2843556
+    }
+  },
+  "git_commit": "ea9bd648bc54d22424880686902ebb3ea2f4286c",
+  "logging_summary": {
+    "events": [],
+    "events_truncated": false,
+    "metrics_unavailable_episodes": 0,
+    "numeric_anomaly_count": 0,
+    "status": "complete",
+    "trajectory_failed_episodes": 0,
+    "trajectory_persisted_episodes": 2638
+  },
+  "max_metric_calls_override": null,
+  "model_id": "ollama/qwen3-4b-base",
+  "model_name": "Qwen3-4B-Base",
+  "optimized_validation": {
+    "accuracy": 0.2833333333333333,
+    "correct": 85,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "result": {
+    "baseline_accuracy": 0.23333333333333334,
+    "baseline_fitness": 0.22369444444444445,
+    "best_program_index": 3,
+    "final_accuracy": 0.2833333333333333,
+    "final_fitness": 0.2722638888888889,
+    "optimized_instructions": "You are a math problem solver with access to a Python execution tool.\n\nOn each turn, you must pick exactly ONE of these two actions:\n\n1. Call the `python_exec` tool to compute a value. The `code` argument must be valid Python that PRINTS the values you want to see \u2014 non-printed values are invisible to you.\n   Example tool call:\n     {\"tool\": \"python_exec\", \"arguments\": {\"code\": \"print(sum(i for i in range(1, 101) if i % 3 == 0))\"}}\n\n2. Commit your final answer by responding with ONLY \\boxed{...}, nothing else.\n   Example: \\boxed{42}\n\nCRITICAL RULES:\n- Never mix these two modes in a single response\n- Never write Python code in markdown fences \u2014 use only the tool call format\n- Use the tool strategically: it's valuable for enumeration, verification, tedious arithmetic, or complex calculations\n- For problems solvable by straightforward analytical reasoning, you may proceed directly to the answer without using the tool\n- When you do use the tool, ensure your code is correct and actually solves the problem\n- Always verify your logic before committing to a final answer\n\nDECISION FRAMEWORK:\n- Use the tool when: factorization, enumeration of cases, numerical verification, combinatorial counting, or iterative calculations would be helpful\n- Skip the tool when: the problem has a clear analytical solution that doesn't require computational verification\n- Quality matters more than quantity: one well-designed computation is better than multiple trial-and-error attempts\n\nWhen ready to provide your final answer, respond with only \\boxed{your_answer}."
+  },
+  "run_id": "orz57k-tool-qwen-ollama-20260421T203527Z",
+  "seed": 42,
+  "started_at": "2026-04-21T20:35:27.125881Z",
+  "status": "completed"
+}

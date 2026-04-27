@@ -1,0 +1,22 @@
+{
+  "history": [
+    {
+      "accuracy": 0.006666666666666667,
+      "index": 0,
+      "metric_calls": 0,
+      "val_aggregate_score": 0.006416666666666667
+    },
+    {
+      "accuracy": 0.0033333333333333335,
+      "index": 1,
+      "metric_calls": 1488,
+      "val_aggregate_score": 0.003125
+    },
+    {
+      "accuracy": 0.05,
+      "index": 2,
+      "metric_calls": 1812,
+      "val_aggregate_score": 0.04693055555555555
+    }
+  ]
+}

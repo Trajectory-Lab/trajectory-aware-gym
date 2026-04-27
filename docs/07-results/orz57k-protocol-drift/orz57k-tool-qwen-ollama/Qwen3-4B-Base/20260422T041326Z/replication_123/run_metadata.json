@@ -1,0 +1,108 @@
+{
+  "baseline_eval": {
+    "accuracy": 0.258,
+    "attempted_success_rate": 0.258,
+    "completion_rate": 1.0,
+    "correct": 129,
+    "episodes": 500,
+    "episodes_attempted": 500,
+    "episodes_completed": 500,
+    "episodes_scorable": 500,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.258,
+    "successes": 129,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "baseline_validation": {
+    "accuracy": 0.24666666666666667,
+    "correct": 74,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "config_hash": "2d60836365dd2c3c8ca214372440604352c134d81c2f4f0c57cf364bbc97270f",
+  "elapsed_seconds": 14260.769,
+  "eval": {
+    "accuracy": 0.282,
+    "attempted_success_rate": 0.282,
+    "completion_rate": 1.0,
+    "correct": 141,
+    "episodes": 500,
+    "episodes_attempted": 500,
+    "episodes_completed": 500,
+    "episodes_scorable": 500,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.282,
+    "successes": 141,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "experiment_run_id": "orz57k-tool-qwen-ollama-ollama-qwen3-4b-base-jward42-seed123-20260422T0413Z",
+  "finished_at": "2026-04-22T08:11:07.302156Z",
+  "gepa_budget_mode": "light",
+  "gepa_phase_summary": {
+    "logging_summary": {
+      "events": [],
+      "events_truncated": false,
+      "metrics_unavailable_episodes": 0,
+      "numeric_anomaly_count": 0,
+      "status": "complete",
+      "trajectory_failed_episodes": 0,
+      "trajectory_persisted_episodes": 1728
+    },
+    "reflection_cost": 0.73691,
+    "reflection_tokens": 117378,
+    "reflection_usage": {
+      "cost_data_coverage": 1.0,
+      "known_cost_usd": 0.73691,
+      "known_total_tokens": 117378,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": 0.73691,
+      "total_tokens": 117378
+    },
+    "training_usage": {
+      "cost_data_coverage": 0.0,
+      "episodes": 1728,
+      "has_missing_cost_data": true,
+      "known_cost_usd": 0.0,
+      "known_total_tokens": 5107532,
+      "metrics_unavailable_episodes": 0,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": null,
+      "total_tokens": 5107532
+    }
+  },
+  "git_commit": "ea9bd648bc54d22424880686902ebb3ea2f4286c",
+  "logging_summary": {
+    "events": [],
+    "events_truncated": false,
+    "metrics_unavailable_episodes": 0,
+    "numeric_anomaly_count": 0,
+    "status": "complete",
+    "trajectory_failed_episodes": 0,
+    "trajectory_persisted_episodes": 2728
+  },
+  "max_metric_calls_override": null,
+  "model_id": "ollama/qwen3-4b-base",
+  "model_name": "Qwen3-4B-Base",
+  "optimized_validation": {
+    "accuracy": 0.29,
+    "correct": 87,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "result": {
+    "baseline_accuracy": 0.24666666666666667,
+    "baseline_fitness": 0.23650000000000002,
+    "best_program_index": 1,
+    "final_accuracy": 0.29,
+    "final_fitness": 0.2774861111111111,
+    "optimized_instructions": "You are a math problem solver with access to a Python execution tool.\n\nCRITICAL: You must respond in EXACTLY ONE of these two ways:\n\n1. **Execute Python code using a tool call** (NOT a markdown code block):\n   - Use this JSON format to call the tool:\n     {\"tool\": \"python_exec\", \"arguments\": {\"code\": \"your_code_here\"}}\n   - Your code MUST use print() to display any values you need to see\n   - Values not printed are invisible to you\n   - NEVER write code in markdown fences (```python ... ```) - this will NOT execute\n   - NEVER include explanatory text with your tool call\n   \n   Example tool call:\n   {\"tool\": \"python_exec\", \"arguments\": {\"code\": \"print(sum(i for i in range(1, 101) if i % 3 == 0))\"}}\n\n2. **Submit your final answer**:\n   - Use ONLY this format: \\boxed{your_answer}\n   - Include nothing else in your response - no explanations, no text\n   - Example: \\boxed{42}\n\nRULES:\n- Never mix tool calls and boxed answers in the same response\n- Never write Python code in markdown fences - it will not execute\n- Never include explanatory text when making a tool call\n- Use the tool for arithmetic, calculations, verification, or exploration\n- Only submit \\boxed{} when you are confident in your final answer\n- Each response must be EITHER a tool call OR a boxed answer, nothing else\n\nCOMMON MISTAKES TO AVOID:\n- Writing \"```python\" followed by code (this doesn't execute - use tool calls only)\n- Including explanations alongside tool calls (tool call must be the complete response)\n- Submitting answers without using the tool to verify calculations\n- Mixing text and tool calls in one response"
+  },
+  "run_id": "orz57k-tool-qwen-ollama-20260422T041326Z",
+  "seed": 123,
+  "started_at": "2026-04-22T04:13:26.533639Z",
+  "status": "completed"
+}
