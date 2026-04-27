@@ -1,0 +1,108 @@
+{
+  "baseline_eval": {
+    "accuracy": 0.0546875,
+    "attempted_success_rate": 0.0546875,
+    "completion_rate": 1.0,
+    "correct": 28,
+    "episodes": 512,
+    "episodes_attempted": 512,
+    "episodes_completed": 512,
+    "episodes_scorable": 512,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.0546875,
+    "successes": 28,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "baseline_validation": {
+    "accuracy": 0.02,
+    "correct": 6,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "config_hash": "0c0d679ebb32026b33f5a15894e42163ca13b2a7121c9bab4e01ef1af2c1c485",
+  "elapsed_seconds": 4732.944,
+  "eval": {
+    "accuracy": 0.115234375,
+    "attempted_success_rate": 0.115234375,
+    "completion_rate": 1.0,
+    "correct": 59,
+    "episodes": 512,
+    "episodes_attempted": 512,
+    "episodes_completed": 512,
+    "episodes_scorable": 512,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.115234375,
+    "successes": 59,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "experiment_run_id": "hotpotqa-notool-ollama-qwen3-1-7b-base-edward-seed456-20260425T0021Z",
+  "finished_at": "2026-04-25T01:40:31.987233Z",
+  "gepa_budget_mode": "medium",
+  "gepa_phase_summary": {
+    "logging_summary": {
+      "events": [],
+      "events_truncated": false,
+      "metrics_unavailable_episodes": 0,
+      "numeric_anomaly_count": 0,
+      "status": "complete",
+      "trajectory_failed_episodes": 0,
+      "trajectory_persisted_episodes": 2376
+    },
+    "reflection_cost": 0.811354,
+    "reflection_tokens": 126861,
+    "reflection_usage": {
+      "cost_data_coverage": 1.0,
+      "known_cost_usd": 0.811354,
+      "known_total_tokens": 126861,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": 0.811354,
+      "total_tokens": 126861
+    },
+    "training_usage": {
+      "cost_data_coverage": 0.0,
+      "episodes": 2376,
+      "has_missing_cost_data": true,
+      "known_cost_usd": 0.0,
+      "known_total_tokens": 1750570,
+      "metrics_unavailable_episodes": 0,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": null,
+      "total_tokens": 1750570
+    }
+  },
+  "git_commit": "43ef2be07be12fd301eb50c65a1d3b1e413a37a1",
+  "logging_summary": {
+    "events": [],
+    "events_truncated": false,
+    "metrics_unavailable_episodes": 0,
+    "numeric_anomaly_count": 0,
+    "status": "complete",
+    "trajectory_failed_episodes": 0,
+    "trajectory_persisted_episodes": 3400
+  },
+  "max_metric_calls_override": null,
+  "model_id": "ollama/qwen3-1.7b-base",
+  "model_name": "Qwen3-1.7B-Base",
+  "optimized_validation": {
+    "accuracy": 0.12333333333333334,
+    "correct": 37,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "result": {
+    "baseline_accuracy": 0.02,
+    "baseline_fitness": 0.01925,
+    "best_program_index": 4,
+    "final_accuracy": 0.12333333333333334,
+    "final_fitness": 0.11870833333333335,
+    "optimized_instructions": "You are a multi-hop question answerer. You will receive questions that require combining multiple pieces of factual knowledge to answer correctly.\n\nCRITICAL INSTRUCTIONS:\n\n1. **Format Requirements**: \n   - Always structure your response with <think> tags containing your reasoning\n   - Always end with <answer> tags containing ONLY your final answer\n   - The answer should be concise and directly answer what was asked\n\n2. **Question Analysis**:\n   - Read the question carefully to identify exactly what is being asked\n   - If the question asks for a NUMBER, your answer must be a specific number\n   - If the question asks for a NAME, your answer must be a specific name\n   - If the question asks for a YEAR, your answer must be a specific year\n\n3. **Reasoning Process**:\n   - Break down multi-hop questions into steps\n   - Identify each entity or fact you need to know\n   - Connect the facts logically to reach your answer\n   - Example: \"X was named after Y. Y won a prize in what year?\" requires: (1) Identify who Y is, (2) Find when Y won the prize\n\n4. **Handling Uncertainty**:\n   - If you don't know a required fact, state this clearly in your <think> section\n   - Do NOT make up or hallucinate information\n   - Do NOT provide vague or non-committal answers\n   - If you cannot answer with confidence, state \"I don't have enough information to answer this question\" in the <answer> section\n\n5. **Common Question Types**:\n   - \"Alvarezsauroidea was named after a physicist who won the Nobel Prize in Physics in what year?\" - Requires: identifying the physicist (Luis Alvarez) and the year he won (1968)\n   - \"Dean Martin was nicknamed what?\" - Requires: knowing his specific nickname (\"The King of Cool\" or \"Dino\")\n   - \"How many lead roles has [actor] of [movie] had?\" - Requires: identifying the correct actor from that specific movie, then counting their lead roles as a specific number\n\n6. **Answer Format Examples**:\n   - For years: <answer>1968</answer>\n   - For nicknames: <answer>The King of Cool</answer>\n   - For numbers: <answer>57</answer> (not \"at least one\" or \"multiple\")\n   - For names: <answer>Luis Alvarez</answer>\n\nRemember: Precision and accuracy are essential. A wrong answer is worse than admitting you don't know."
+  },
+  "run_id": "hotpotqa-notool-20260424T211901Z",
+  "seed": 456,
+  "started_at": "2026-04-25T00:21:39.043516Z",
+  "status": "completed"
+}

@@ -1,0 +1,108 @@
+{
+  "baseline_eval": {
+    "accuracy": 0.037109375,
+    "attempted_success_rate": 0.037109375,
+    "completion_rate": 1.0,
+    "correct": 19,
+    "episodes": 512,
+    "episodes_attempted": 512,
+    "episodes_completed": 512,
+    "episodes_scorable": 512,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.037109375,
+    "successes": 19,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "baseline_validation": {
+    "accuracy": 0.013333333333333334,
+    "correct": 4,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "config_hash": "0c0d679ebb32026b33f5a15894e42163ca13b2a7121c9bab4e01ef1af2c1c485",
+  "elapsed_seconds": 4142.077,
+  "eval": {
+    "accuracy": 0.119140625,
+    "attempted_success_rate": 0.119140625,
+    "completion_rate": 1.0,
+    "correct": 61,
+    "episodes": 512,
+    "episodes_attempted": 512,
+    "episodes_completed": 512,
+    "episodes_scorable": 512,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.119140625,
+    "successes": 61,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "experiment_run_id": "hotpotqa-notool-ollama-qwen3-1-7b-base-edward-seed123-20260424T2312Z",
+  "finished_at": "2026-04-25T00:21:38.921851Z",
+  "gepa_budget_mode": "medium",
+  "gepa_phase_summary": {
+    "logging_summary": {
+      "events": [],
+      "events_truncated": false,
+      "metrics_unavailable_episodes": 0,
+      "numeric_anomaly_count": 0,
+      "status": "complete",
+      "trajectory_failed_episodes": 0,
+      "trajectory_persisted_episodes": 2232
+    },
+    "reflection_cost": 0.380728,
+    "reflection_tokens": 58992,
+    "reflection_usage": {
+      "cost_data_coverage": 1.0,
+      "known_cost_usd": 0.380728,
+      "known_total_tokens": 58992,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": 0.380728,
+      "total_tokens": 58992
+    },
+    "training_usage": {
+      "cost_data_coverage": 0.0,
+      "episodes": 2232,
+      "has_missing_cost_data": true,
+      "known_cost_usd": 0.0,
+      "known_total_tokens": 1877051,
+      "metrics_unavailable_episodes": 0,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": null,
+      "total_tokens": 1877051
+    }
+  },
+  "git_commit": "43ef2be07be12fd301eb50c65a1d3b1e413a37a1",
+  "logging_summary": {
+    "events": [],
+    "events_truncated": false,
+    "metrics_unavailable_episodes": 0,
+    "numeric_anomaly_count": 0,
+    "status": "complete",
+    "trajectory_failed_episodes": 0,
+    "trajectory_persisted_episodes": 3256
+  },
+  "max_metric_calls_override": null,
+  "model_id": "ollama/qwen3-1.7b-base",
+  "model_name": "Qwen3-1.7B-Base",
+  "optimized_validation": {
+    "accuracy": 0.13,
+    "correct": 39,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "result": {
+    "baseline_accuracy": 0.013333333333333334,
+    "baseline_fitness": 0.012833333333333334,
+    "best_program_index": 5,
+    "final_accuracy": 0.13,
+    "final_fitness": 0.12512500000000001,
+    "optimized_instructions": "You are a multi-hop question answerer. You will be given questions that require reasoning through multiple steps to reach the final answer.\n\nCRITICAL FORMATTING REQUIREMENTS - YOU MUST FOLLOW THESE EXACTLY:\n1. Your response MUST contain exactly two sections: <think> and <answer>\n2. Start with: <think> followed by your step-by-step reasoning, then </think>\n3. Immediately follow with: <answer> followed by ONLY the direct answer, then </answer>\n4. The <answer> section must contain ONLY the final answer - no explanations, no extra text, no reasoning\n5. Do NOT include any text before <think> or after </answer>\n6. Do NOT include labels like \"extracomments:\", \"Your response here:\", or any other formatting\n\nCORRECT FORMAT EXAMPLE:\n<think>\n1. Don Henley was a founding member of the Eagles and is known as both a drummer and vocalist\n2. He has written and co-written many songs including \"Hotel California\"\n3. Morrissey was the lead singer of The Smiths and has had a solo career\n4. He is known for writing his own lyrics and music\n5. Both are singers and both are songwriters\n</think>\n<answer>Yes</answer>\n\nREASONING APPROACH:\n1. Break down the question into sub-questions\n2. Answer each sub-question using factual knowledge\n3. Combine the answers logically to reach your conclusion\n4. State your reasoning clearly in the <think> section\n5. Provide ONLY the direct answer in the <answer> section\n\nANSWER FORMAT GUIDELINES:\n- For yes/no questions: answer with \"Yes\" or \"No\"\n- For \"who\" questions: answer with the person's name only\n- For \"where\" questions: answer with the location only\n- For \"when\" questions: answer with the date/year only\n- For \"which\" questions: answer with the specific item/person asked about\n- Never include phrases like \"The answer is...\", \"It was...\", or any explanation in <answer>\n\nFACTUAL ACCURACY:\n- Ensure all factual claims are accurate\n- Don Henley: drummer and vocalist for the Eagles, songwriter\n- Morrissey: lead singer of The Smiths, solo artist, songwriter\n- If uncertain about a fact, acknowledge it in <think> but still provide your best answer\n\nYour response must always start with <think> and end with </answer>. Nothing else should appear before or after these tags."
+  },
+  "run_id": "hotpotqa-notool-20260424T211901Z",
+  "seed": 123,
+  "started_at": "2026-04-24T23:12:36.844901Z",
+  "status": "completed"
+}
