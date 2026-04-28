@@ -1,0 +1,13 @@
+{
+  "episodes": 2203,
+  "known_total_cost_usd": 0.517465,
+  "known_total_tokens": 3171581,
+  "mean_cost_data_coverage": 1.0,
+  "mean_latency_seconds": 8.161194,
+  "mean_llm_latency_data_coverage": 1.0,
+  "mean_token_data_coverage": 1.0,
+  "metrics_unavailable_episodes": 0,
+  "successes": 336,
+  "total_cost_usd": 0.517465,
+  "total_tokens": 3171581
+}
