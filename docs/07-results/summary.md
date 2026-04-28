@@ -23,8 +23,8 @@ _Last updated: 2026-04-28 11:17Z. Only replications with `gepa_budget.mode = med
 | Qwen3-4B-Base         |    3 | 42, 123, 456 |     0.057 ± 0.038 |      0.168 ± 0.080 |
 | Llama-3.1-8B-Instruct |    3 | 42, 123, 456 |     0.340 ± 0.003 |      0.333 ± 0.010 |
 | Gemma-3-4B-IT         |    3 | 42, 123, 456 |     0.122 ± 0.008 |      0.245 ± 0.021 |
-| Mistral-7B-Instruct   |    1 | 42           |             0.100 |              0.227 |
-| Nemotron-Nano-9B      |    1 | 42           |             0.125 |              0.158 |
+| Mistral-7B-Instruct   |    3 | 42, 123, 456 |     0.098 ± 0.002 |      0.196 ± 0.027 |
+| Nemotron-Nano-9B      |    3 | 42, 123, 456 |     0.123 ± 0.007 |      0.186 ± 0.060 |
 
 ## Orz57K (with tool)  `orz57k-tool`
 
