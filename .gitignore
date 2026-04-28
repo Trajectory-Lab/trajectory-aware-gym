@@ -238,6 +238,9 @@ tmp/
 temp/
 *.tmp
 
+# Personal / scratch work — never tracked
+local/
+
 # uv lock file (uncomment if you want to track it)
 # uv.lock
 
