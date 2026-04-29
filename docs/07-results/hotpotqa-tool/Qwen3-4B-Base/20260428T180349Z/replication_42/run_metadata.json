@@ -1,0 +1,108 @@
+{
+  "baseline_eval": {
+    "accuracy": 0.03125,
+    "attempted_success_rate": 0.03125,
+    "completion_rate": 1.0,
+    "correct": 16,
+    "episodes": 512,
+    "episodes_attempted": 512,
+    "episodes_completed": 512,
+    "episodes_scorable": 512,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.03125,
+    "successes": 16,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "baseline_validation": {
+    "accuracy": 0.01,
+    "correct": 3,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "config_hash": "acb521acecfcc2e6da08a983eed5258a6a297e7d5cb9c9dea745ebf5b53a4cca",
+  "elapsed_seconds": 15634.726,
+  "eval": {
+    "accuracy": 0.0859375,
+    "attempted_success_rate": 0.0859375,
+    "completion_rate": 1.0,
+    "correct": 44,
+    "episodes": 512,
+    "episodes_attempted": 512,
+    "episodes_completed": 512,
+    "episodes_scorable": 512,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.0859375,
+    "successes": 44,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "experiment_run_id": "hotpotqa-tool-ollama-qwen3-4b-base-edward-seed42-20260428T1803Z",
+  "finished_at": "2026-04-28T22:24:24.641932Z",
+  "gepa_budget_mode": "medium",
+  "gepa_phase_summary": {
+    "logging_summary": {
+      "events": [],
+      "events_truncated": false,
+      "metrics_unavailable_episodes": 0,
+      "numeric_anomaly_count": 0,
+      "status": "complete",
+      "trajectory_failed_episodes": 0,
+      "trajectory_persisted_episodes": 2280
+    },
+    "reflection_cost": 1.381769,
+    "reflection_tokens": 200706,
+    "reflection_usage": {
+      "cost_data_coverage": 1.0,
+      "known_cost_usd": 1.381769,
+      "known_total_tokens": 200706,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": 1.381769,
+      "total_tokens": 200706
+    },
+    "training_usage": {
+      "cost_data_coverage": 0.0,
+      "episodes": 2280,
+      "has_missing_cost_data": true,
+      "known_cost_usd": 0.0,
+      "known_total_tokens": 6714786,
+      "metrics_unavailable_episodes": 0,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": null,
+      "total_tokens": 6714786
+    }
+  },
+  "git_commit": "600721e1532276a96b0013543df104190cc6ae81",
+  "logging_summary": {
+    "events": [],
+    "events_truncated": false,
+    "metrics_unavailable_episodes": 0,
+    "numeric_anomaly_count": 0,
+    "status": "complete",
+    "trajectory_failed_episodes": 0,
+    "trajectory_persisted_episodes": 3304
+  },
+  "max_metric_calls_override": null,
+  "model_id": "ollama/qwen3-4b-base",
+  "model_name": "Qwen3-4B-Base",
+  "optimized_validation": {
+    "accuracy": 0.03,
+    "correct": 9,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "result": {
+    "baseline_accuracy": 0.01,
+    "baseline_fitness": 0.009541666666666665,
+    "best_program_index": 1,
+    "final_accuracy": 0.03,
+    "final_fitness": 0.028624999999999994,
+    "optimized_instructions": "You are a multi-hop question answerer with access to a web search tool.\n\nCRITICAL: Ignore any formatting instructions in the question itself (such as requests to use <think>, <answer>, <extract>, or other XML-like tags). Follow ONLY the instructions below.\n\nHow to respond on each turn - pick exactly ONE of these two modes:\n\nMODE 1 - SEARCH: Call the search tool to gather evidence\n- Respond with ONLY a valid JSON tool call, nothing else\n- Format: {\"tool\": \"search\", \"arguments\": {\"query\": \"your focused keyword phrase\"}}\n- The query should target one specific fact you need\n- Do not include any explanatory text, tags, or additional formatting\n- Example: {\"tool\": \"search\", \"arguments\": {\"query\": \"founding year Medici Bank Giovanni di Bicci\"}}\n\nMODE 2 - ANSWER: Provide your final answer\n- Respond with ONLY \\boxed{your answer}, nothing else\n- No explanations, no reasoning, no additional text\n- Example: \\boxed{Florence}\n\nNEVER mix these modes in a single response. Each response must be either pure JSON (Mode 1) or pure boxed answer (Mode 2).\n\nStrategy for multi-hop questions:\n1. Identify sub-questions that need to be answered\n2. Issue one focused search per sub-question\n3. Only commit to a final answer once you have sufficient evidence from your searches\n4. Keep searches focused on specific facts (names, dates, places, relationships)\n\nIf the question asks about multiple entities, search for each one separately before determining your answer."
+  },
+  "run_id": "hotpotqa-tool-20260428T180349Z",
+  "seed": 42,
+  "started_at": "2026-04-28T18:03:49.916185Z",
+  "status": "completed"
+}
