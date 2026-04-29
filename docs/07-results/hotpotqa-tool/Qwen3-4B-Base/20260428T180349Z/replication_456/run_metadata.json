@@ -1,0 +1,108 @@
+{
+  "baseline_eval": {
+    "accuracy": 0.021484375,
+    "attempted_success_rate": 0.021484375,
+    "completion_rate": 1.0,
+    "correct": 11,
+    "episodes": 512,
+    "episodes_attempted": 512,
+    "episodes_completed": 512,
+    "episodes_scorable": 512,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.021484375,
+    "successes": 11,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "baseline_validation": {
+    "accuracy": 0.03333333333333333,
+    "correct": 10,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "config_hash": "acb521acecfcc2e6da08a983eed5258a6a297e7d5cb9c9dea745ebf5b53a4cca",
+  "elapsed_seconds": 16874.946,
+  "eval": {
+    "accuracy": 0.021484375,
+    "attempted_success_rate": 0.021484375,
+    "completion_rate": 1.0,
+    "correct": 11,
+    "episodes": 512,
+    "episodes_attempted": 512,
+    "episodes_completed": 512,
+    "episodes_scorable": 512,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.021484375,
+    "successes": 11,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "experiment_run_id": "hotpotqa-tool-ollama-qwen3-4b-base-edward-seed456-20260429T0408Z",
+  "finished_at": "2026-04-29T08:49:25.152951Z",
+  "gepa_budget_mode": "medium",
+  "gepa_phase_summary": {
+    "logging_summary": {
+      "events": [],
+      "events_truncated": false,
+      "metrics_unavailable_episodes": 0,
+      "numeric_anomaly_count": 0,
+      "status": "complete",
+      "trajectory_failed_episodes": 0,
+      "trajectory_persisted_episodes": 2406
+    },
+    "reflection_cost": 1.625296,
+    "reflection_tokens": 236222,
+    "reflection_usage": {
+      "cost_data_coverage": 1.0,
+      "known_cost_usd": 1.625296,
+      "known_total_tokens": 236222,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": 1.625296,
+      "total_tokens": 236222
+    },
+    "training_usage": {
+      "cost_data_coverage": 0.0,
+      "episodes": 2406,
+      "has_missing_cost_data": true,
+      "known_cost_usd": 0.0,
+      "known_total_tokens": 7406921,
+      "metrics_unavailable_episodes": 0,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": null,
+      "total_tokens": 7406921
+    }
+  },
+  "git_commit": "600721e1532276a96b0013543df104190cc6ae81",
+  "logging_summary": {
+    "events": [],
+    "events_truncated": false,
+    "metrics_unavailable_episodes": 0,
+    "numeric_anomaly_count": 0,
+    "status": "complete",
+    "trajectory_failed_episodes": 0,
+    "trajectory_persisted_episodes": 3430
+  },
+  "max_metric_calls_override": null,
+  "model_id": "ollama/qwen3-4b-base",
+  "model_name": "Qwen3-4B-Base",
+  "optimized_validation": {
+    "accuracy": 0.03333333333333333,
+    "correct": 10,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "result": {
+    "baseline_accuracy": 0.03333333333333333,
+    "baseline_fitness": 0.03169444444444444,
+    "best_program_index": 0,
+    "final_accuracy": 0.03333333333333333,
+    "final_fitness": 0.03169444444444444,
+    "optimized_instructions": "You are a multi-hop question answerer with access to a web search tool.\n\nHow to respond on each turn, pick exactly ONE of:\n\n1. Call the `search` tool to look up evidence. The `query` argument must\n   be a focused keyword phrase targeting the specific fact you need next.\n   Example tool call:\n     {\"tool\": \"search\", \"arguments\": {\"query\": \"founding year Medici Bank Giovanni di Bicci\"}}\n\n2. Commit your final answer by responding with ONLY \\boxed{...}, nothing\n   else. Example: \\boxed{Florence}\n\nNever mix these two modes in a single response.\n\nFor multi-hop questions, break the question into sub-questions and issue\none focused search per sub-question. Only commit an answer once the\nretrieved evidence directly supports it."
+  },
+  "run_id": "hotpotqa-tool-20260428T180349Z",
+  "seed": 456,
+  "started_at": "2026-04-29T04:08:10.206760Z",
+  "status": "completed"
+}
