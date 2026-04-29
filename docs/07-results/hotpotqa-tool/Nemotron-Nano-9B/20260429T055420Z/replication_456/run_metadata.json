@@ -1,0 +1,108 @@
+{
+  "baseline_eval": {
+    "accuracy": 0.095703125,
+    "attempted_success_rate": 0.095703125,
+    "completion_rate": 1.0,
+    "correct": 49,
+    "episodes": 512,
+    "episodes_attempted": 512,
+    "episodes_completed": 512,
+    "episodes_scorable": 512,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.095703125,
+    "successes": 49,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "baseline_validation": {
+    "accuracy": 0.07333333333333333,
+    "correct": 22,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "config_hash": "acb521acecfcc2e6da08a983eed5258a6a297e7d5cb9c9dea745ebf5b53a4cca",
+  "elapsed_seconds": 15859.909,
+  "eval": {
+    "accuracy": 0.078125,
+    "attempted_success_rate": 0.078125,
+    "completion_rate": 1.0,
+    "correct": 40,
+    "episodes": 512,
+    "episodes_attempted": 512,
+    "episodes_completed": 512,
+    "episodes_scorable": 512,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.078125,
+    "successes": 40,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "experiment_run_id": "hotpotqa-tool-bedrock-nvidia-nemotron-nano-9b-v2-h-jerry-kim-seed456-20260429T0554Z",
+  "finished_at": "2026-04-29T10:18:40.507563Z",
+  "gepa_budget_mode": "medium",
+  "gepa_phase_summary": {
+    "logging_summary": {
+      "events": [],
+      "events_truncated": false,
+      "metrics_unavailable_episodes": 0,
+      "numeric_anomaly_count": 0,
+      "status": "complete",
+      "trajectory_failed_episodes": 0,
+      "trajectory_persisted_episodes": 2190
+    },
+    "reflection_cost": 2.659486,
+    "reflection_tokens": 456029,
+    "reflection_usage": {
+      "cost_data_coverage": 1.0,
+      "known_cost_usd": 2.659486,
+      "known_total_tokens": 456029,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": 2.659486,
+      "total_tokens": 456029
+    },
+    "training_usage": {
+      "cost_data_coverage": 1.0,
+      "episodes": 2190,
+      "has_missing_cost_data": false,
+      "known_cost_usd": 1.108476,
+      "known_total_tokens": 9354081,
+      "metrics_unavailable_episodes": 0,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": 1.108476,
+      "total_tokens": 9354081
+    }
+  },
+  "git_commit": "82498ddef7dd2c4976feddbe6a2f3cbcd937ae09",
+  "logging_summary": {
+    "events": [],
+    "events_truncated": false,
+    "metrics_unavailable_episodes": 0,
+    "numeric_anomaly_count": 0,
+    "status": "complete",
+    "trajectory_failed_episodes": 0,
+    "trajectory_persisted_episodes": 3214
+  },
+  "max_metric_calls_override": null,
+  "model_id": "bedrock/nvidia.nemotron-nano-9b-v2",
+  "model_name": "Nemotron-Nano-9B",
+  "optimized_validation": {
+    "accuracy": 0.07333333333333333,
+    "correct": 22,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "result": {
+    "baseline_accuracy": 0.07333333333333333,
+    "baseline_fitness": 0.07008333333333333,
+    "best_program_index": 0,
+    "final_accuracy": 0.07333333333333333,
+    "final_fitness": 0.07008333333333333,
+    "optimized_instructions": "You are a multi-hop question answerer with access to a web search tool.\n\nHow to respond on each turn, pick exactly ONE of:\n\n1. Call the `search` tool to look up evidence. The `query` argument must\n   be a focused keyword phrase targeting the specific fact you need next.\n   Example tool call:\n     {\"tool\": \"search\", \"arguments\": {\"query\": \"founding year Medici Bank Giovanni di Bicci\"}}\n\n2. Commit your final answer by responding with ONLY \\boxed{...}, nothing\n   else. Example: \\boxed{Florence}\n\nNever mix these two modes in a single response.\n\nFor multi-hop questions, break the question into sub-questions and issue\none focused search per sub-question. Only commit an answer once the\nretrieved evidence directly supports it."
+  },
+  "run_id": "hotpotqa-tool-20260429T055420Z",
+  "seed": 456,
+  "started_at": "2026-04-29T05:54:20.598650Z",
+  "status": "completed"
+}
