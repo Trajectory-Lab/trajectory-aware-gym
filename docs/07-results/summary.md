@@ -13,7 +13,7 @@ _Last updated: 2026-04-29 06:31Z. Only replications with `gepa_budget.mode = med
 | Llama-3.1-8B-Instruct |    1 | 42           |             0.084 |              0.422 |
 | Gemma-3-4B-IT         |    2 | 42, 123      |     0.111 ± 0.011 |      0.314 ± 0.039 |
 | Mistral-7B-Instruct   |    1 | 42           |             0.035 |              0.193 |
-| Nemotron-Nano-9B      |    1 | 42           |             0.104 |              0.127 |
+| Nemotron-Nano-9B      |    3 | 42, 123, 456 |     0.095 ± 0.009 |      0.101 ± 0.025 |
 
 ## HotpotQA (no tool)  `hotpotqa-notool`
 
