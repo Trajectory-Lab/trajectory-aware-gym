@@ -41,7 +41,7 @@ _Last updated: 2026-04-30 05:54Z. Only replications with `gepa_budget.mode = med
 | Model                 | Runs | Seeds        | Baseline accuracy | Optimized accuracy |
 |:----------------------|-----:|:-------------|------------------:|-------------------:|
 | Qwen3-4B-Base         |    — | —            |                 — |                  — |
-| Llama-3.1-8B-Instruct |    — | —            |                 — |                  — |
+| Llama-3.1-8B-Instruct |    3 | 42, 123, 456 |     0.327 ± 0.007 |      0.346 ± 0.020 |
 | Gemma-3-4B-IT         |    3 | 42, 123, 456 |     0.629 ± 0.009 |      0.613 ± 0.027 |
 | Mistral-7B-Instruct   |    — | —            |                 — |                  — |
 | Nemotron-Nano-9B      |    — | —            |                 — |                  — |

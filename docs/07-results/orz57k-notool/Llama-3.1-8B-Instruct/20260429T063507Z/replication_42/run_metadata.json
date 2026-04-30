@@ -1,0 +1,108 @@
+{
+  "baseline_eval": {
+    "accuracy": 0.334,
+    "attempted_success_rate": 0.334,
+    "completion_rate": 1.0,
+    "correct": 167,
+    "episodes": 500,
+    "episodes_attempted": 500,
+    "episodes_completed": 500,
+    "episodes_scorable": 500,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.334,
+    "successes": 167,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "baseline_validation": {
+    "accuracy": 0.2833333333333333,
+    "correct": 85,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "config_hash": "b816b43eb59e1b64b9dc2305781169c456346686e69cd104454997aa2bcf915d",
+  "elapsed_seconds": 2032.894,
+  "eval": {
+    "accuracy": 0.33,
+    "attempted_success_rate": 0.33,
+    "completion_rate": 1.0,
+    "correct": 165,
+    "episodes": 500,
+    "episodes_attempted": 500,
+    "episodes_completed": 500,
+    "episodes_scorable": 500,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.33,
+    "successes": 165,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "experiment_run_id": "orz57k-notool-bedrock-us-meta-llama3-1-8b-instruct-v1-0-michael-seed42-20260429T0635Z",
+  "finished_at": "2026-04-29T07:09:00.506008Z",
+  "gepa_budget_mode": "medium",
+  "gepa_phase_summary": {
+    "logging_summary": {
+      "events": [],
+      "events_truncated": false,
+      "metrics_unavailable_episodes": 0,
+      "numeric_anomaly_count": 0,
+      "status": "complete",
+      "trajectory_failed_episodes": 0,
+      "trajectory_persisted_episodes": 2244
+    },
+    "reflection_cost": 0.697947,
+    "reflection_tokens": 154251,
+    "reflection_usage": {
+      "cost_data_coverage": 1.0,
+      "known_cost_usd": 0.697947,
+      "known_total_tokens": 154251,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": 0.697947,
+      "total_tokens": 154251
+    },
+    "training_usage": {
+      "cost_data_coverage": 1.0,
+      "episodes": 2244,
+      "has_missing_cost_data": false,
+      "known_cost_usd": 0.825852,
+      "known_total_tokens": 3753875,
+      "metrics_unavailable_episodes": 0,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": 0.825852,
+      "total_tokens": 3753875
+    }
+  },
+  "git_commit": "ecf8908aea7f5fc6e3d06ef080791c276554a495",
+  "logging_summary": {
+    "events": [],
+    "events_truncated": false,
+    "metrics_unavailable_episodes": 0,
+    "numeric_anomaly_count": 0,
+    "status": "complete",
+    "trajectory_failed_episodes": 0,
+    "trajectory_persisted_episodes": 3244
+  },
+  "max_metric_calls_override": null,
+  "model_id": "bedrock/us.meta.llama3-1-8b-instruct-v1:0",
+  "model_name": "Llama-3.1-8B-Instruct",
+  "optimized_validation": {
+    "accuracy": 0.33666666666666667,
+    "correct": 101,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "result": {
+    "baseline_accuracy": 0.2833333333333333,
+    "baseline_fitness": 0.27270833333333333,
+    "best_program_index": 2,
+    "final_accuracy": 0.33666666666666667,
+    "final_fitness": 0.3240416666666667,
+    "optimized_instructions": "You are a math problem solver. Your goal is to provide clear, accurate, step-by-step solutions to mathematical problems.\n\nCRITICAL REQUIREMENTS:\n\n1. READ THE PROBLEM CAREFULLY\n   - Identify what is being asked\n   - Note all given information\n   - Define variables clearly at the start\n\n2. SOLUTION STRUCTURE\n   - Break the problem into logical steps\n   - Show ALL mathematical work with proper notation\n   - Explain your reasoning briefly at each step\n   - Stay focused on the problem - do not ramble or include irrelevant text\n   - If you find yourself writing without making progress, STOP and restart with a clearer approach\n\n3. MATHEMATICAL RIGOR\n   - Set up equations correctly based on the problem statement\n   - Check units and dimensions\n   - Verify each calculation before proceeding\n   - Double-check your arithmetic\n   - Ensure your logic is sound at each step\n\n4. FORMATTING RULES (STRICTLY ENFORCED)\n   - Use proper mathematical notation (fractions, exponents, etc.)\n   - The final answer MUST be in \\boxed{...} format\n   - The \\boxed{...} line MUST be the absolute last line of your response\n   - Do NOT add any text, explanation, or content after the \\boxed{} line\n   - Do NOT include incomplete thoughts or unfinished calculations\n\n5. QUALITY CONTROL\n   - Before providing your final answer, verify it makes sense in context\n   - Check that your answer addresses what was actually asked\n   - Ensure all steps follow logically from one to another\n   - If the problem involves ratios, fractions, or comparisons, verify the format of your answer matches what's requested\n\nEXAMPLE OF PROPER FORMAT:\nLet x = speed of first cyclist, y = speed of second cyclist.\n\nFrom the first condition, when traveling toward each other:\nx + y = 50/2 = 25 miles per hour\n\n[Continue with clear logical steps...]\n\nTherefore, the ratio is:\n\\boxed{3:2}\n\nRemember: Clarity, accuracy, and proper formatting are essential. Stay focused and concise."
+  },
+  "run_id": "orz57k-notool-20260429T063507Z",
+  "seed": 42,
+  "started_at": "2026-04-29T06:35:07.612156Z",
+  "status": "completed"
+}
