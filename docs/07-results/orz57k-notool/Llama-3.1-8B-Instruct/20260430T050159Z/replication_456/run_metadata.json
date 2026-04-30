@@ -1,0 +1,108 @@
+{
+  "baseline_eval": {
+    "accuracy": 0.328,
+    "attempted_success_rate": 0.328,
+    "completion_rate": 1.0,
+    "correct": 164,
+    "episodes": 500,
+    "episodes_attempted": 500,
+    "episodes_completed": 500,
+    "episodes_scorable": 500,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.328,
+    "successes": 164,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "baseline_validation": {
+    "accuracy": 0.2966666666666667,
+    "correct": 89,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "config_hash": "b816b43eb59e1b64b9dc2305781169c456346686e69cd104454997aa2bcf915d",
+  "elapsed_seconds": 2348.627,
+  "eval": {
+    "accuracy": 0.368,
+    "attempted_success_rate": 0.368,
+    "completion_rate": 1.0,
+    "correct": 184,
+    "episodes": 500,
+    "episodes_attempted": 500,
+    "episodes_completed": 500,
+    "episodes_scorable": 500,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.368,
+    "successes": 184,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "experiment_run_id": "orz57k-notool-bedrock-us-meta-llama3-1-8b-instruct-v1-0-michael-seed456-20260430T0501Z",
+  "finished_at": "2026-04-30T05:41:08.211492Z",
+  "gepa_budget_mode": "medium",
+  "gepa_phase_summary": {
+    "logging_summary": {
+      "events": [],
+      "events_truncated": false,
+      "metrics_unavailable_episodes": 0,
+      "numeric_anomaly_count": 0,
+      "status": "complete",
+      "trajectory_failed_episodes": 0,
+      "trajectory_persisted_episodes": 2268
+    },
+    "reflection_cost": 1.022023,
+    "reflection_tokens": 208292,
+    "reflection_usage": {
+      "cost_data_coverage": 1.0,
+      "known_cost_usd": 1.022023,
+      "known_total_tokens": 208292,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": 1.022023,
+      "total_tokens": 208292
+    },
+    "training_usage": {
+      "cost_data_coverage": 1.0,
+      "episodes": 2268,
+      "has_missing_cost_data": false,
+      "known_cost_usd": 0.926845,
+      "known_total_tokens": 4212932,
+      "metrics_unavailable_episodes": 0,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": 0.926845,
+      "total_tokens": 4212932
+    }
+  },
+  "git_commit": "09819017c00f414d88a48417a3adcf058e39ffb1",
+  "logging_summary": {
+    "events": [],
+    "events_truncated": false,
+    "metrics_unavailable_episodes": 0,
+    "numeric_anomaly_count": 0,
+    "status": "complete",
+    "trajectory_failed_episodes": 0,
+    "trajectory_persisted_episodes": 3268
+  },
+  "max_metric_calls_override": null,
+  "model_id": "bedrock/us.meta.llama3-1-8b-instruct-v1:0",
+  "model_name": "Llama-3.1-8B-Instruct",
+  "optimized_validation": {
+    "accuracy": 0.35333333333333333,
+    "correct": 106,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "result": {
+    "baseline_accuracy": 0.2966666666666667,
+    "baseline_fitness": 0.2855416666666667,
+    "best_program_index": 6,
+    "final_accuracy": 0.35333333333333333,
+    "final_fitness": 0.34008333333333335,
+    "optimized_instructions": "You are a math problem solver. Your goal is to solve mathematical problems accurately and show clear reasoning.\n\nCRITICAL REQUIREMENTS:\n1. Read the problem statement very carefully. Pay attention to exactly what is being asked.\n2. Identify key constraints and conditions explicitly stated in the problem.\n3. Show your work step-by-step with clear, correct algebraic manipulations.\n4. Verify your answer makes sense given the problem constraints before finalizing.\n5. For optimization problems, use standard techniques like Cauchy-Schwarz inequality, AM-GM inequality, or Lagrange multipliers correctly.\n6. When a problem asks for \"different\" objects, determine from context whether this means distinct values or whether order matters.\n7. Double-check all arithmetic and algebraic steps - a single error propagates through the solution.\n\nCOMMON PITFALLS TO AVOID:\n- Misinterpreting what \"different\" means (usually means distinct values, not necessarily ordered pairs)\n- Incorrectly applying inequalities (make sure the setup matches the constraint)\n- Making algebraic errors when combining like terms or using logarithm properties\n- Finding when equality holds in an inequality but not verifying it satisfies the original constraints\n- Multiplying equations by constants incorrectly\n\nWhen you have the final answer, respond with ONLY \\boxed{...} as the final line of your response. The answer inside \\boxed{} should be simplified and exact (not approximations unless specifically requested).\n\nExample format:\n\\boxed{42}\n\nThe \\boxed{} expression must be the last content in your response."
+  },
+  "run_id": "orz57k-notool-20260430T050159Z",
+  "seed": 456,
+  "started_at": "2026-04-30T05:01:59.584023Z",
+  "status": "completed"
+}
