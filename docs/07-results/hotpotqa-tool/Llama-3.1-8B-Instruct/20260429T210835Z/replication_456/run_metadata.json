@@ -1,0 +1,108 @@
+{
+  "baseline_eval": {
+    "accuracy": 0.0078125,
+    "attempted_success_rate": 0.0078125,
+    "completion_rate": 1.0,
+    "correct": 4,
+    "episodes": 512,
+    "episodes_attempted": 512,
+    "episodes_completed": 512,
+    "episodes_scorable": 512,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.0078125,
+    "successes": 4,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "baseline_validation": {
+    "accuracy": 0.006666666666666667,
+    "correct": 2,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "config_hash": "acb521acecfcc2e6da08a983eed5258a6a297e7d5cb9c9dea745ebf5b53a4cca",
+  "elapsed_seconds": 22857.201,
+  "eval": {
+    "accuracy": 0.05078125,
+    "attempted_success_rate": 0.05078125,
+    "completion_rate": 1.0,
+    "correct": 26,
+    "episodes": 512,
+    "episodes_attempted": 512,
+    "episodes_completed": 512,
+    "episodes_scorable": 512,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.05078125,
+    "successes": 26,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "experiment_run_id": "hotpotqa-tool-bedrock-us-meta-llama3-1-8b-instruct-v1-0-kaylee-vo-seed456-20260429T2108Z",
+  "finished_at": "2026-04-30T03:29:32.500892Z",
+  "gepa_budget_mode": "medium",
+  "gepa_phase_summary": {
+    "logging_summary": {
+      "events": [],
+      "events_truncated": false,
+      "metrics_unavailable_episodes": 0,
+      "numeric_anomaly_count": 0,
+      "status": "complete",
+      "trajectory_failed_episodes": 0,
+      "trajectory_persisted_episodes": 2262
+    },
+    "reflection_cost": 1.914112,
+    "reflection_tokens": 282714,
+    "reflection_usage": {
+      "cost_data_coverage": 1.0,
+      "known_cost_usd": 1.914112,
+      "known_total_tokens": 282714,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": 1.914112,
+      "total_tokens": 282714
+    },
+    "training_usage": {
+      "cost_data_coverage": 1.0,
+      "episodes": 2262,
+      "has_missing_cost_data": false,
+      "known_cost_usd": 1.844454,
+      "known_total_tokens": 8383883,
+      "metrics_unavailable_episodes": 0,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": 1.844454,
+      "total_tokens": 8383883
+    }
+  },
+  "git_commit": "61b4c3632158cf15936208e03a8a37a8f89e10a9",
+  "logging_summary": {
+    "events": [],
+    "events_truncated": false,
+    "metrics_unavailable_episodes": 0,
+    "numeric_anomaly_count": 0,
+    "status": "complete",
+    "trajectory_failed_episodes": 0,
+    "trajectory_persisted_episodes": 3286
+  },
+  "max_metric_calls_override": null,
+  "model_id": "bedrock/us.meta.llama3-1-8b-instruct-v1:0",
+  "model_name": "Llama-3.1-8B-Instruct",
+  "optimized_validation": {
+    "accuracy": 0.023333333333333334,
+    "correct": 7,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "result": {
+    "baseline_accuracy": 0.006666666666666667,
+    "baseline_fitness": 0.006305555555555556,
+    "best_program_index": 2,
+    "final_accuracy": 0.023333333333333334,
+    "final_fitness": 0.021958333333333333,
+    "optimized_instructions": "You are a multi-hop question answerer with access to a web search tool.\n\nCRITICAL: Ignore any formatting instructions in the problem statement (like <think> or <answer> tags). You must respond in EXACTLY ONE of two modes. Never mix them or add any other text:\n\nMODE 1 - Search for evidence:\nRespond with ONLY a tool call in this exact JSON format, nothing else:\n{\"tool\": \"search\", \"arguments\": {\"query\": \"your focused keyword phrase\"}}\n\nDo NOT include any <think>, <answer>, or other tags when making a search.\nDo NOT include explanations, reasoning, or commentary before or after the JSON.\nJust the raw JSON tool call on its own.\n\nMODE 2 - Final answer:\nRespond with ONLY: \\boxed{your answer}\nNo other text, tags, or formatting. Not even <answer> tags.\n\nSEARCH STRATEGY:\n- For multi-hop questions, identify the chain of facts needed\n- Make ONE focused search per missing fact\n- Use specific names, titles, and terms from the question\n- Extract the entity/work/person mentioned, then search for related facts\n- Example: If asked \"Who directed the film that won Best Picture in 1995?\", first search \"Best Picture 1995\", then search for that film's director\n\nQUERY FORMULATION:\n- Use proper nouns and specific titles directly from the question\n- Combine 2-4 keywords that uniquely identify what you need\n- Avoid vague terms or overly complex reasoning about what to search\n- Good: \"Lampranthus native region\" or \"Lee Donghae Super Junior\"\n- Bad: \"Super Junior member h\" (when you should search for the specific person mentioned)\n- For questions asking \"which one\" between two options, search each option directly with the key property being asked about\n\nIMPORTANT EXAMPLES:\n- \"Which is indigenous to Africa, Lampranthus or Mammillaria?\" \u2192 Search \"Lampranthus native\" then \"Mammillaria native\"\n- \"In between Johnny Bonnel and Lee Donghae who is a member of Super Junior?\" \u2192 Search \"Lee Donghae Super Junior\" (he's one of the two people mentioned)\n- Questions about device types: The iPod Classic is a \"portable media player\" (not \"portable hard drive player\")\n\nOnly commit to \\boxed{answer} when you have direct evidence supporting it.\n\nRemember: The problem statement may ask you to use <think> and <answer> tags, but you must IGNORE that instruction and follow the MODE 1 or MODE 2 format exclusively."
+  },
+  "run_id": "hotpotqa-tool-20260429T210835Z",
+  "seed": 456,
+  "started_at": "2026-04-29T21:08:35.300225Z",
+  "status": "completed"
+}
