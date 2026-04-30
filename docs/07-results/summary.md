@@ -30,7 +30,7 @@ _Last updated: 2026-04-30 08:43Z. Only replications with `gepa_budget.mode = med
 
 | Model                 | Runs | Seeds        | Baseline accuracy | Optimized accuracy |
 |:----------------------|-----:|:-------------|------------------:|-------------------:|
-| Qwen3-4B-Base         |    — | —            |                 — |                  — |
+| Qwen3-4B-Base         |    3 | 42, 123, 456 |     0.245 ± 0.008 |      0.285 ± 0.044 |
 | Llama-3.1-8B-Instruct |    3 | 42, 123, 456 |     0.189 ± 0.017 |      0.268 ± 0.029 |
 | Gemma-3-4B-IT         |    3 | 42, 123, 456 |     0.336 ± 0.019 |      0.514 ± 0.055 |
 | Mistral-7B-Instruct   |    3 | 42, 123, 456 |     0.051 ± 0.004 |      0.060 ± 0.011 |
@@ -40,7 +40,7 @@ _Last updated: 2026-04-30 08:43Z. Only replications with `gepa_budget.mode = med
 
 | Model                 | Runs | Seeds        | Baseline accuracy | Optimized accuracy |
 |:----------------------|-----:|:-------------|------------------:|-------------------:|
-| Qwen3-4B-Base         |    — | —            |                 — |                  — |
+| Qwen3-4B-Base         |    3 | 42, 123, 456 |     0.480 ± 0.007 |      0.527 ± 0.063 |
 | Llama-3.1-8B-Instruct |    3 | 42, 123, 456 |     0.327 ± 0.007 |      0.346 ± 0.020 |
 | Gemma-3-4B-IT         |    3 | 42, 123, 456 |     0.629 ± 0.009 |      0.613 ± 0.027 |
 | Mistral-7B-Instruct   |    — | —            |                 — |                  — |
