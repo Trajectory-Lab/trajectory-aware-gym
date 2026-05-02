@@ -1,0 +1,108 @@
+{
+  "baseline_eval": {
+    "accuracy": 0.73,
+    "attempted_success_rate": 0.73,
+    "completion_rate": 1.0,
+    "correct": 365,
+    "episodes": 500,
+    "episodes_attempted": 500,
+    "episodes_completed": 500,
+    "episodes_scorable": 500,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.73,
+    "successes": 365,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "baseline_validation": {
+    "accuracy": 0.6966666666666667,
+    "correct": 209,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "config_hash": "b816b43eb59e1b64b9dc2305781169c456346686e69cd104454997aa2bcf915d",
+  "elapsed_seconds": 8162.012,
+  "eval": {
+    "accuracy": 0.728,
+    "attempted_success_rate": 0.728,
+    "completion_rate": 1.0,
+    "correct": 364,
+    "episodes": 500,
+    "episodes_attempted": 500,
+    "episodes_completed": 500,
+    "episodes_scorable": 500,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.728,
+    "successes": 364,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "experiment_run_id": "orz57k-notool-bedrock-nvidia-nemotron-nano-9b-v2-michael-seed456-20260501T2309Z",
+  "finished_at": "2026-05-02T01:25:35.748094Z",
+  "gepa_budget_mode": "medium",
+  "gepa_phase_summary": {
+    "logging_summary": {
+      "events": [],
+      "events_truncated": false,
+      "metrics_unavailable_episodes": 0,
+      "numeric_anomaly_count": 0,
+      "status": "complete",
+      "trajectory_failed_episodes": 0,
+      "trajectory_persisted_episodes": 2305
+    },
+    "reflection_cost": 1.422683,
+    "reflection_tokens": 347852,
+    "reflection_usage": {
+      "cost_data_coverage": 1.0,
+      "known_cost_usd": 1.422683,
+      "known_total_tokens": 347852,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": 1.422683,
+      "total_tokens": 347852
+    },
+    "training_usage": {
+      "cost_data_coverage": 1.0,
+      "episodes": 2305,
+      "has_missing_cost_data": false,
+      "known_cost_usd": 1.486397,
+      "known_total_tokens": 7124911,
+      "metrics_unavailable_episodes": 0,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": 1.486397,
+      "total_tokens": 7124911
+    }
+  },
+  "git_commit": "ec73c2ec0ab527302f5ff5f51d4e139154471aaf",
+  "logging_summary": {
+    "events": [],
+    "events_truncated": false,
+    "metrics_unavailable_episodes": 0,
+    "numeric_anomaly_count": 0,
+    "status": "complete",
+    "trajectory_failed_episodes": 0,
+    "trajectory_persisted_episodes": 3305
+  },
+  "max_metric_calls_override": null,
+  "model_id": "bedrock/nvidia.nemotron-nano-9b-v2",
+  "model_name": "Nemotron-Nano-9B",
+  "optimized_validation": {
+    "accuracy": 0.7233333333333334,
+    "correct": 217,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "result": {
+    "baseline_accuracy": 0.6966666666666667,
+    "baseline_fitness": 0.6705416666666667,
+    "best_program_index": 1,
+    "final_accuracy": 0.7233333333333334,
+    "final_fitness": 0.6962083333333333,
+    "optimized_instructions": "You are a math problem solver.\n\nYour task is to solve the given math problem completely and provide the final answer.\n\nCRITICAL REQUIREMENTS:\n1. You MUST end your response with \\boxed{...} containing the final answer on the last line\n2. The \\boxed{...} expression must be the LAST content in your response\n3. Keep your solution concise enough to ensure you reach the final answer\n4. Do not let your response get cut off before providing \\boxed{...}\n\nSOLUTION APPROACH:\n- You may wrap your reasoning in <think></think> tags if desired\n- Show your step-by-step work clearly\n- Verify your answer when possible by checking against the problem conditions\n- For problems with potential ambiguity, consider different interpretations and identify the correct one\n- Use algebraic methods, substitution, and systematic problem-solving\n\nFORMATTING:\n- Present numerical answers as simplified fractions or decimals as appropriate\n- For ratios, use fraction notation like \\dfrac{13}{2} or simplified forms\n- Ensure all mathematical notation is properly formatted\n\nRemember: Your response will be considered incomplete and receive a score of 0 if it does not end with \\boxed{...} as the final line."
+  },
+  "run_id": "orz57k-notool-20260501T230933Z",
+  "seed": 456,
+  "started_at": "2026-05-01T23:09:33.736055Z",
+  "status": "completed"
+}
