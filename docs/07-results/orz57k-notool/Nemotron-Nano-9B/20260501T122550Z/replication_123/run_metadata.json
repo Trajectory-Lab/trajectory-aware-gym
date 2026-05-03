@@ -1,0 +1,108 @@
+{
+  "baseline_eval": {
+    "accuracy": 0.728,
+    "attempted_success_rate": 0.728,
+    "completion_rate": 1.0,
+    "correct": 364,
+    "episodes": 500,
+    "episodes_attempted": 500,
+    "episodes_completed": 500,
+    "episodes_scorable": 500,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.728,
+    "successes": 364,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "baseline_validation": {
+    "accuracy": 0.6766666666666666,
+    "correct": 203,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "config_hash": "b816b43eb59e1b64b9dc2305781169c456346686e69cd104454997aa2bcf915d",
+  "elapsed_seconds": 8698.153,
+  "eval": {
+    "accuracy": 0.726,
+    "attempted_success_rate": 0.726,
+    "completion_rate": 1.0,
+    "correct": 363,
+    "episodes": 500,
+    "episodes_attempted": 500,
+    "episodes_completed": 500,
+    "episodes_scorable": 500,
+    "failed": 0,
+    "metrics_unavailable": 0,
+    "success_rate": 0.726,
+    "successes": 363,
+    "temperature_eval": 0.0,
+    "timed_out": 0
+  },
+  "experiment_run_id": "orz57k-notool-bedrock-nvidia-nemotron-nano-9b-v2-michael-seed123-20260501T1225Z",
+  "finished_at": "2026-05-01T14:50:48.787149Z",
+  "gepa_budget_mode": "medium",
+  "gepa_phase_summary": {
+    "logging_summary": {
+      "events": [],
+      "events_truncated": false,
+      "metrics_unavailable_episodes": 0,
+      "numeric_anomaly_count": 0,
+      "status": "complete",
+      "trajectory_failed_episodes": 0,
+      "trajectory_persisted_episodes": 2292
+    },
+    "reflection_cost": 1.301137,
+    "reflection_tokens": 320836,
+    "reflection_usage": {
+      "cost_data_coverage": 1.0,
+      "known_cost_usd": 1.301137,
+      "known_total_tokens": 320836,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": 1.301137,
+      "total_tokens": 320836
+    },
+    "training_usage": {
+      "cost_data_coverage": 1.0,
+      "episodes": 2292,
+      "has_missing_cost_data": false,
+      "known_cost_usd": 1.468669,
+      "known_total_tokens": 7032629,
+      "metrics_unavailable_episodes": 0,
+      "token_data_coverage": 1.0,
+      "total_cost_usd": 1.468669,
+      "total_tokens": 7032629
+    }
+  },
+  "git_commit": "ec73c2ec0ab527302f5ff5f51d4e139154471aaf",
+  "logging_summary": {
+    "events": [],
+    "events_truncated": false,
+    "metrics_unavailable_episodes": 0,
+    "numeric_anomaly_count": 0,
+    "status": "complete",
+    "trajectory_failed_episodes": 0,
+    "trajectory_persisted_episodes": 3292
+  },
+  "max_metric_calls_override": null,
+  "model_id": "bedrock/nvidia.nemotron-nano-9b-v2",
+  "model_name": "Nemotron-Nano-9B",
+  "optimized_validation": {
+    "accuracy": 0.7266666666666667,
+    "correct": 218,
+    "episodes": 300,
+    "scorable": 300
+  },
+  "result": {
+    "baseline_accuracy": 0.6766666666666666,
+    "baseline_fitness": 0.6512916666666667,
+    "best_program_index": 2,
+    "final_accuracy": 0.7266666666666667,
+    "final_fitness": 0.6994166666666667,
+    "optimized_instructions": "You are a math problem solver.\n\nCRITICAL REQUIREMENTS:\n1. You MUST end your response with \\boxed{...} containing the final answer\n2. The \\boxed{...} expression must be the LAST line of your response\n3. Keep your solution concise and focused on reaching the answer\n4. If your reasoning is getting long, summarize intermediate steps to ensure you have space to provide the final boxed answer\n\nSOLUTION STRATEGY:\n- Start by understanding what the problem asks for\n- Identify the key approach or theorem needed\n- Work through the solution systematically but concisely\n- Verify your answer makes sense\n- Always conclude with \\boxed{answer}\n\nFORMAT EXAMPLE:\n[Your reasoning and work]\n\nTherefore, the answer is:\n\\boxed{42}\n\nIMPORTANT: No matter what, you must include the \\boxed{} with your final answer as the last line. If you're running out of space in your response, skip to the final answer immediately rather than leaving the response without a boxed answer."
+  },
+  "run_id": "orz57k-notool-20260501T122550Z",
+  "seed": 123,
+  "started_at": "2026-05-01T12:25:50.634436Z",
+  "status": "completed"
+}
